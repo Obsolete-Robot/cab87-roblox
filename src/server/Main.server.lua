@@ -1,16 +1,7 @@
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 
 local Config = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Config"))
-
-local rng = Random.new()
-
-local function clearOld()
-	local old = Workspace:FindFirstChild("Cab87World")
-	if old then
-		old:Destroy()
-	end
-end
+local MapGenerator = require(script.Parent:WaitForChild("MapGenerator"))
 
 local function makePart(parent, props)
 	local part = Instance.new("Part")
@@ -22,60 +13,6 @@ local function makePart(parent, props)
 	end
 	part.Parent = parent
 	return part
-end
-
-local function buildCity(world)
-	local blockSpan = Config.cityBlocks * Config.blockSize
-	local worldSize = blockSpan * 2
-
-	makePart(world, {
-		Name = "Ground",
-		Size = Vector3.new(worldSize + 300, 2, worldSize + 300),
-		Position = Vector3.new(0, -1, 0),
-		Color = Color3.fromRGB(44, 92, 52),
-		Material = Enum.Material.Grass,
-	})
-
-	for i = -Config.cityBlocks, Config.cityBlocks do
-		local x = i * Config.blockSize
-		makePart(world, {
-			Name = "Road_NS",
-			Size = Vector3.new(Config.roadWidth, 1, worldSize + Config.blockSize),
-			Position = Vector3.new(x, 0.02, 0),
-			Color = Color3.fromRGB(30, 30, 35),
-			Material = Enum.Material.Asphalt,
-		})
-
-		local z = i * Config.blockSize
-		makePart(world, {
-			Name = "Road_EW",
-			Size = Vector3.new(worldSize + Config.blockSize, 1, Config.roadWidth),
-			Position = Vector3.new(0, 0.02, z),
-			Color = Color3.fromRGB(30, 30, 35),
-			Material = Enum.Material.Asphalt,
-		})
-	end
-
-	for gx = -Config.cityBlocks, Config.cityBlocks - 1 do
-		for gz = -Config.cityBlocks, Config.cityBlocks - 1 do
-			local center = Vector3.new((gx + 0.5) * Config.blockSize, 0, (gz + 0.5) * Config.blockSize)
-			local width = Config.blockSize - Config.roadWidth - Config.buildingInset
-			local depth = Config.blockSize - Config.roadWidth - Config.buildingInset
-			local height = rng:NextNumber(Config.buildingHeightMin, Config.buildingHeightMax)
-
-			makePart(world, {
-				Name = "Building",
-				Size = Vector3.new(width, height, depth),
-				Position = center + Vector3.new(0, height * 0.5, 0),
-				Color = Color3.fromRGB(
-					rng:NextInteger(80, 210),
-					rng:NextInteger(80, 210),
-					rng:NextInteger(80, 210)
-				),
-				Material = Enum.Material.Concrete,
-			})
-		end
-	end
 end
 
 local function createCab(world)
@@ -91,7 +28,7 @@ local function createCab(world)
 		Material = Enum.Material.SmoothPlastic,
 	})
 
-	local roof = makePart(car, {
+	makePart(car, {
 		Name = "Roof",
 		Size = Vector3.new(8, 1.5, 8),
 		Position = Config.carSpawn + Vector3.new(0, 2, -1),
@@ -111,7 +48,7 @@ local function createCab(world)
 	seat.TurnSpeed = 0
 	seat.Parent = car
 
-	local topSign = makePart(car, {
+	makePart(car, {
 		Name = "CabSign",
 		Size = Vector3.new(3.2, 0.8, 1.4),
 		Position = Config.carSpawn + Vector3.new(0, 3.4, -1),
@@ -141,16 +78,10 @@ local function createCab(world)
 	car.PrimaryPart = body
 	car:PivotTo(CFrame.new(Config.carSpawn))
 
-	-- Keep a list so we can move the full model efficiently.
-	local parts = {}
 	for _, item in ipairs(car:GetDescendants()) do
 		if item:IsA("BasePart") then
-			table.insert(parts, item)
+			item.Anchored = true
 		end
-	end
-
-	for _, part in ipairs(parts) do
-		part.Anchored = true
 	end
 
 	return car, seat
@@ -196,12 +127,6 @@ local function runCarController(car, seat)
 	end)
 end
 
-clearOld()
-
-local world = Instance.new("Model")
-world.Name = "Cab87World"
-world.Parent = Workspace
-
-buildCity(world)
+local world = MapGenerator.Generate()
 local car, seat = createCab(world)
 runCarController(car, seat)

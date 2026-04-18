@@ -26,6 +26,21 @@ Code-first Roblox starter for a **Crazy Taxi style** prototype using **Rojo + Lu
 
 You should spawn into a generated city and be able to drive the cab.
 
+## Regenerate map in Studio (no Play required)
+
+Open **View -> Command Bar** and run:
+
+```lua
+local g = require(game.ServerScriptService.cab87.MapGenerator)
+g.Regenerate({
+	seed = 12345,
+	cityBlocks = 8,
+	roadWidth = 34,
+})
+```
+
+Use `g.Clear()` if you just want to remove the generated world.
+
 ## Controls
 
 - Accelerate: `W` / `Up`
@@ -34,7 +49,8 @@ You should spawn into a generated city and be able to drive the cab.
 
 ## Project structure
 
-- `src/server/Main.server.lua` - world generation + cab simulation
+- `src/server/Main.server.lua` - runtime boot + cab simulation
+- `src/server/MapGenerator.lua` - editor/runtime map generation module
 - `src/client/Hud.client.lua` - basic on-screen controls hint
 - `src/shared/Config.lua` - tuning values
 
