@@ -17,6 +17,10 @@ local SAMPLE_STEP_STUDS = 8
 local ROAD_OVERLAP = 1.0
 local POINT_SNAP_OFFSET = 0.35
 
+local AUTO_REBUILD_DELAY = 0.12
+local autoRebuildEnabled = false
+local autoRebuildScheduled = false
+
 local function getOrCreateRoot()
 	local root = Workspace:FindFirstChild(ROOT_NAME)
 	if root and root:IsA("Model") then
@@ -541,9 +545,71 @@ local btnRemoveLast = makeButton("Remove Last Point")
 local btnSnap = makeButton("Snap Points To Terrain")
 local btnRebuild = makeButton("Rebuild Road (Mesh)")
 local btnClear = makeButton("Clear Road")
+local btnAutoRebuild = makeButton("Auto Rebuild: Off")
 
 local function refreshCurveModeButton()
 	btnCloseCurve.Text = isClosedCurve() and "Curve Mode: Closed" or "Curve Mode: Open"
+end
+
+local function refreshAutoRebuildButton()
+	btnAutoRebuild.Text = autoRebuildEnabled and "Auto Rebuild: On" or "Auto Rebuild: Off"
+end
+
+local pointWatchers = {}
+
+local function disconnectPointWatcher(point)
+	local conns = pointWatchers[point]
+	if not conns then
+		return
+	end
+	for _, conn in ipairs(conns) do
+		conn:Disconnect()
+	end
+	pointWatchers[point] = nil
+end
+
+local function scheduleAutoRebuild(reason)
+	if not autoRebuildEnabled then
+		return
+	end
+	if autoRebuildScheduled then
+		return
+	end
+	autoRebuildScheduled = true
+	task.delay(AUTO_REBUILD_DELAY, function()
+		autoRebuildScheduled = false
+		if not autoRebuildEnabled then
+			return
+		end
+		local segs, note = rebuildRoadMeshPreferred()
+		updateStatus(string.format("Auto rebuilt (%d spans). %s", segs, note or ""))
+		print(string.format("[cab87 roads] Auto rebuild (%s): %d spans", tostring(reason), segs))
+	end)
+end
+
+local function refreshPointWatchers()
+	local alive = {}
+	for _, p in ipairs(sortedPoints()) do
+		alive[p] = true
+		if not pointWatchers[p] then
+			pointWatchers[p] = {
+				p:GetPropertyChangedSignal("Position"):Connect(function()
+					scheduleAutoRebuild("point-moved")
+				end),
+				p.AncestryChanged:Connect(function(_, parent)
+					if parent == nil then
+						disconnectPointWatcher(p)
+					end
+				end),
+			}
+		end
+	end
+
+	for p in pairs(pointWatchers) do
+		if not alive[p] then
+			disconnectPointWatcher(p)
+		end
+	end
 end
 
 btnNew.MouseButton1Click:Connect(function()
@@ -674,6 +740,17 @@ btnClear.MouseButton1Click:Connect(function()
 	updateStatus("Cleared road geometry")
 end)
 
+btnAutoRebuild.MouseButton1Click:Connect(function()
+	autoRebuildEnabled = not autoRebuildEnabled
+	refreshAutoRebuildButton()
+	if autoRebuildEnabled then
+		scheduleAutoRebuild("toggle-on")
+		updateStatus("Auto rebuild enabled")
+	else
+		updateStatus("Auto rebuild disabled")
+	end
+end)
+
 toggleButton.Click:Connect(function()
 	widget.Enabled = not widget.Enabled
 end)
@@ -682,5 +759,19 @@ Selection.SelectionChanged:Connect(function()
 	updateStatus(nil)
 end)
 
+local pointsFolder = getOrCreatePointsFolder()
+pointsFolder.ChildAdded:Connect(function()
+	refreshPointWatchers()
+	scheduleAutoRebuild("point-added")
+	updateStatus(nil)
+end)
+pointsFolder.ChildRemoved:Connect(function()
+	refreshPointWatchers()
+	scheduleAutoRebuild("point-removed")
+	updateStatus(nil)
+end)
+
+refreshPointWatchers()
 refreshCurveModeButton()
+refreshAutoRebuildButton()
 updateStatus("Panel stays open while you iterate")

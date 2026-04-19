@@ -74,6 +74,7 @@ Road Editor panel actions:
 - Snap Points To Terrain
 - Rebuild Road (Mesh preferred, primitive fallback)
 - Clear Road
+- Auto Rebuild: On/Off (rebuilds as points move)
 
 When you click **Generate Map**, check Studio Output for seed + generator version.
 
