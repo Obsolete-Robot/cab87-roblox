@@ -62,6 +62,7 @@ Then restart Studio. You will get these tools:
 
 Road Editor panel actions:
 - New Spline
+- Curve Mode: Open/Closed (toggle)
 - Add Point (Camera Hit)
 - Add Point (From Selection)
 - Select Nearest Point (Camera)

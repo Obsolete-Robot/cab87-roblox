@@ -149,13 +149,23 @@ local function addControlPoint(pos)
 	return p
 end
 
+local function isClosedCurve()
+	local root = getOrCreateRoot()
+	return root:GetAttribute("ClosedCurve") == true
+end
+
+local function setClosedCurve(value)
+	local root = getOrCreateRoot()
+	root:SetAttribute("ClosedCurve", value and true or false)
+end
+
 local function catmullRom(p0, p1, p2, p3, t)
 	local t2 = t * t
 	local t3 = t2 * t
 	return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
 end
 
-local function sampleSpline(pointParts)
+local function sampleSpline(pointParts, closedCurve)
 	local positions = {}
 	for _, p in ipairs(pointParts) do
 		table.insert(positions, p.Position)
@@ -165,21 +175,42 @@ local function sampleSpline(pointParts)
 		return positions
 	end
 
-	local samples = {}
-	for i = 1, #positions - 1 do
-		local p0 = positions[math.max(1, i - 1)]
-		local p1 = positions[i]
-		local p2 = positions[i + 1]
-		local p3 = positions[math.min(#positions, i + 2)]
-
-		local segmentLen = (p2 - p1).Magnitude
-		local subdivisions = math.max(2, math.floor(segmentLen / SAMPLE_STEP_STUDS))
-		for s = 0, subdivisions - 1 do
-			local t = s / subdivisions
-			table.insert(samples, catmullRom(p0, p1, p2, p3, t))
-		end
+	if closedCurve and #positions < 3 then
+		closedCurve = false
 	end
-	table.insert(samples, positions[#positions])
+
+	local samples = {}
+	if closedCurve then
+		local count = #positions
+		for i = 1, count do
+			local p0 = positions[((i - 2) % count) + 1]
+			local p1 = positions[i]
+			local p2 = positions[(i % count) + 1]
+			local p3 = positions[((i + 1) % count) + 1]
+
+			local segmentLen = (p2 - p1).Magnitude
+			local subdivisions = math.max(2, math.floor(segmentLen / SAMPLE_STEP_STUDS))
+			for s = 0, subdivisions - 1 do
+				local t = s / subdivisions
+				table.insert(samples, catmullRom(p0, p1, p2, p3, t))
+			end
+		end
+	else
+		for i = 1, #positions - 1 do
+			local p0 = positions[math.max(1, i - 1)]
+			local p1 = positions[i]
+			local p2 = positions[i + 1]
+			local p3 = positions[math.min(#positions, i + 2)]
+
+			local segmentLen = (p2 - p1).Magnitude
+			local subdivisions = math.max(2, math.floor(segmentLen / SAMPLE_STEP_STUDS))
+			for s = 0, subdivisions - 1 do
+				local t = s / subdivisions
+				table.insert(samples, catmullRom(p0, p1, p2, p3, t))
+			end
+		end
+		table.insert(samples, positions[#positions])
+	end
 	return samples
 end
 
@@ -286,7 +317,7 @@ local function rebuildRoadMeshPreferred()
 		return 0, "Need at least 2 points"
 	end
 
-	local samples = sampleSpline(points)
+	local samples = sampleSpline(points, isClosedCurve())
 	local okMesh, info = buildMeshRoad(samples)
 	if okMesh then
 		print(string.format("[cab87 roads] Built mesh road from %d control points", #points))
@@ -488,7 +519,8 @@ status.Parent = root
 local function updateStatus(extra)
 	local points = #sortedPoints()
 	local segments = countSegments()
-	local base = string.format("Points: %d | Road parts: %d", points, segments)
+	local curveMode = isClosedCurve() and "Closed" or "Open"
+	local base = string.format("Points: %d | Road parts: %d | Curve: %s", points, segments, curveMode)
 	if extra and #extra > 0 then
 		status.Text = base .. "\n" .. extra
 	else
@@ -497,6 +529,7 @@ local function updateStatus(extra)
 end
 
 local btnNew = makeButton("New Spline")
+local btnCloseCurve = makeButton("Curve Mode: Open")
 local btnAddCamera = makeButton("Add Point (Camera Hit)")
 local btnAddSelected = makeButton("Add Point (From Selection)")
 local btnSelectNearest = makeButton("Select Nearest Point (Camera)")
@@ -509,12 +542,24 @@ local btnSnap = makeButton("Snap Points To Terrain")
 local btnRebuild = makeButton("Rebuild Road (Mesh)")
 local btnClear = makeButton("Clear Road")
 
+local function refreshCurveModeButton()
+	btnCloseCurve.Text = isClosedCurve() and "Curve Mode: Closed" or "Curve Mode: Open"
+end
+
 btnNew.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before new spline")
 	clearFolder(getOrCreatePointsFolder())
 	clearFolder(getOrCreateRoadModel())
+	setClosedCurve(false)
 	ChangeHistoryService:SetWaypoint("cab87 roads after new spline")
+	refreshCurveModeButton()
 	updateStatus("Started new spline")
+end)
+
+btnCloseCurve.MouseButton1Click:Connect(function()
+	setClosedCurve(not isClosedCurve())
+	refreshCurveModeButton()
+	updateStatus(isClosedCurve() and "Curve set to closed loop" or "Curve set to open")
 end)
 
 btnAddCamera.MouseButton1Click:Connect(function()
@@ -637,4 +682,5 @@ Selection.SelectionChanged:Connect(function()
 	updateStatus(nil)
 end)
 
+refreshCurveModeButton()
 updateStatus("Panel stays open while you iterate")
