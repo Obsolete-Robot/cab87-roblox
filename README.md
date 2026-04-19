@@ -65,6 +65,7 @@ Road Editor panel actions:
 - Prev Spline
 - Next Spline
 - Curve Mode: Open/Closed (toggle)
+- Road Width: per-spline numeric input with -4/+4 controls
 - Add Point (Camera Hit)
 - Add Point (From Selection)
 - Select Nearest Point (Camera)
@@ -75,6 +76,7 @@ Road Editor panel actions:
 - Remove Last Point
 - Snap Points To Terrain
 - Rebuild Road (Mesh preferred, primitive fallback)
+- Wireframe Mesh: On/Off
 - Clear Road
 - Auto Rebuild: On/Off (rebuilds as points move)
 
@@ -85,11 +87,15 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
 1. Click **New Spline**.
    - This creates a new spline and keeps existing splines intact.
    - Use **Prev Spline** / **Next Spline** to switch active spline.
+   - Set **Road Width** per spline before or after placing points.
 2. Use **Add Point** repeatedly to lay out a path.
 3. Click **Snap Points** to drop points to terrain.
 4. Click **Rebuild Road (Mesh)** to generate roads from **all splines** as one unified network (EditableMesh preferred, primitive fallback).
    - Nearby spline endpoints are welded.
-   - Crossings get automatic intersection caps.
+   - Crossings are inserted into both splines and meshed into the unified road surface.
+   - Crossings only become intersections when the curves are close in 3D space, so raised overpasses can pass above lower roads.
+   - The generated MeshPart is baked with `ApplyMesh` and the plugin restores it from spline data if a saved scene opens without road geometry.
+   - **Wireframe Mesh** can be toggled on to inspect generated mesh edges.
 5. Press Play and test traversal.
 
 ## Controls

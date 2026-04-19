@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local AuthoredRoadRuntime = require(script.Parent:WaitForChild("AuthoredRoadRuntime"))
 local MapGenerator = require(script.Parent:WaitForChild("MapGenerator"))
 
 local NORMAL_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(210, 210, 210))
@@ -249,7 +250,11 @@ local function collectWorldParts(world)
 
 	for _, item in ipairs(world:GetDescendants()) do
 		if item:IsA("BasePart") then
-			if item.Name == "Ground" or item.Name == "Road_NS" or item.Name == "Road_EW" then
+			if item:GetAttribute("DriveSurface") == true
+				or item.Name == "Ground"
+				or item.Name == "Road_NS"
+				or item.Name == "Road_EW"
+			then
 				table.insert(driveSurfaces, item)
 			elseif item.Name == "Building" then
 				table.insert(crashObstacles, item)
@@ -290,7 +295,9 @@ local function addDriftSmoke(wheel, emitters)
 	table.insert(emitters, emitter)
 end
 
-local function createCab(world)
+local function createCab(world, spawnPose)
+	local spawnPosition = (spawnPose and spawnPose.position) or Config.carSpawn
+	local spawnYaw = (spawnPose and spawnPose.yaw) or 0
 	local car = Instance.new("Model")
 	car.Name = "Cab87Taxi"
 	car.Parent = world
@@ -299,7 +306,7 @@ local function createCab(world)
 	local body = makePart(car, {
 		Name = "Body",
 		Size = Vector3.new(10, 2, 16),
-		Position = Config.carSpawn,
+		Position = spawnPosition,
 		Color = Color3.fromRGB(255, 206, 38),
 		Material = Enum.Material.SmoothPlastic,
 	})
@@ -307,7 +314,7 @@ local function createCab(world)
 	makePart(car, {
 		Name = "Roof",
 		Size = Vector3.new(8, 1.5, 8),
-		Position = Config.carSpawn + Vector3.new(0, 2, -1),
+		Position = spawnPosition + Vector3.new(0, 2, -1),
 		Color = Color3.fromRGB(255, 227, 120),
 		Material = Enum.Material.SmoothPlastic,
 	})
@@ -316,7 +323,7 @@ local function createCab(world)
 	seat.Name = "DriverSeat"
 	seat.Anchored = true
 	seat.Size = Vector3.new(3.5, 1, 4)
-	seat.CFrame = CFrame.new(Config.carSpawn + Vector3.new(0, 1.5, 1))
+	seat.CFrame = CFrame.new(spawnPosition + Vector3.new(0, 1.5, 1))
 		* CFrame.Angles(0, math.rad(180), 0)
 	seat.Transparency = 0.2
 	seat.Color = Color3.fromRGB(35, 35, 40)
@@ -353,7 +360,7 @@ local function createCab(world)
 	makePart(car, {
 		Name = "CabSign",
 		Size = Vector3.new(3.2, 0.8, 1.4),
-		Position = Config.carSpawn + Vector3.new(0, 3.4, -1),
+		Position = spawnPosition + Vector3.new(0, 3.4, -1),
 		Color = Color3.fromRGB(255, 245, 170),
 		Material = Enum.Material.Neon,
 	})
@@ -370,7 +377,7 @@ local function createCab(world)
 			Name = "Wheel" .. i,
 			Shape = Enum.PartType.Cylinder,
 			Size = Vector3.new(2.2, 1.4, 2.2),
-			Position = Config.carSpawn + offset,
+			Position = spawnPosition + offset,
 			Color = Color3.fromRGB(25, 25, 30),
 			Material = Enum.Material.SmoothPlastic,
 		})
@@ -382,7 +389,7 @@ local function createCab(world)
 	end
 
 	car.PrimaryPart = body
-	car:PivotTo(CFrame.new(Config.carSpawn))
+	car:PivotTo(CFrame.new(spawnPosition) * CFrame.Angles(0, spawnYaw, 0))
 
 	local serverPivot = Instance.new("CFrameValue")
 	serverPivot.Name = Config.carServerPivotValueName
@@ -405,9 +412,13 @@ local function createCab(world)
 	return car, seat, driftEmitters
 end
 
-local function runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles)
-	local position = Config.carSpawn
-	local yaw = 0
+local function runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
+	local defaultSpawnPose = spawnPose or {
+		position = Config.carSpawn,
+		yaw = 0,
+	}
+	local position = defaultSpawnPose.position
+	local yaw = defaultSpawnPose.yaw
 	local velocity = Vector3.zero
 	local verticalVelocity = 0
 	local grounded = true
@@ -652,6 +663,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 
 		if result then
 			return {
+				surfaceY = result.Position.Y,
 				height = result.Position.Y + Config.carRideHeight,
 				instance = result.Instance,
 				normal = result.Normal,
@@ -659,6 +671,53 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end
 
 		return nil
+	end
+
+	local function getGroundAnglesFromNormal(normal, currentYaw)
+		local normalY = math.max(normal.Y, 0.001)
+		local forward = yawToForward(currentYaw)
+		local right = yawToRight(currentYaw)
+		local maxPitch = math.rad(Config.carMaxPitchDegrees)
+		local maxRoll = math.rad(Config.carGroundMaxRollDegrees)
+
+		return math.clamp(math.atan2(normal:Dot(forward), normalY), -maxPitch, maxPitch),
+			math.clamp(math.atan2(-normal:Dot(right), normalY), -maxRoll, maxRoll)
+	end
+
+	local function getGroundTargetYForPose(groundProfile, targetPitch, targetRoll)
+		if not groundProfile then
+			return nil
+		end
+
+		local samples = groundProfile.samples
+		if not samples or #samples == 0 then
+			return nil
+		end
+
+		local rotation = CFrame.Angles(targetPitch, 0, targetRoll)
+		local targetY = -math.huge
+
+		for _, sample in ipairs(samples) do
+			local contactOffset = rotation:VectorToWorldSpace(Vector3.new(
+				sample.localX,
+				-Config.carRideHeight,
+				sample.localZ
+			))
+			targetY = math.max(targetY, sample.surfaceY - contactOffset.Y)
+		end
+
+		return targetY
+	end
+
+	local function getGroundTargetYWithCurrentPose(groundProfile, targetPitch, targetRoll)
+		local targetY = getGroundTargetYForPose(groundProfile, targetPitch, targetRoll)
+		local currentPoseY = getGroundTargetYForPose(groundProfile, visualPitch, visualRoll)
+
+		if targetY and currentPoseY then
+			return math.max(targetY, currentPoseY)
+		end
+
+		return targetY or currentPoseY
 	end
 
 	local function getGroundProfile(currentPosition, currentYaw)
@@ -677,6 +736,9 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		local rightTotal = 0
 		local rightCount = 0
 		local highestSample = nil
+		local normalTotal = Vector3.zero
+		local normalCount = 0
+		local samples = {}
 
 		local function addSample(localX, localZ)
 			local samplePosition = currentPosition + right * localX + forward * localZ
@@ -685,11 +747,25 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				return
 			end
 
+			table.insert(samples, {
+				localX = localX,
+				localZ = localZ,
+				surfaceY = sample.surfaceY,
+				height = sample.height,
+				instance = sample.instance,
+				normal = sample.normal,
+			})
+
 			local sampleHeight = sample.height
 			totalHeight += sampleHeight
 			contactCount += 1
 			if not highestSample or sampleHeight > highestSample.height then
 				highestSample = sample
+			end
+
+			if sample.normal.Y > 0.1 then
+				normalTotal += sample.normal
+				normalCount += 1
 			end
 
 			if localZ >= 0 then
@@ -718,6 +794,12 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			return nil
 		end
 
+		local normalPitch = 0
+		local normalRoll = 0
+		if normalCount > 0 and normalTotal.Magnitude > 0.001 then
+			normalPitch, normalRoll = getGroundAnglesFromNormal(normalTotal.Unit, currentYaw)
+		end
+
 		local targetPitch = 0
 		if frontCount > 0 and rearCount > 0 and halfLength > 0 then
 			local frontAverage = frontTotal / frontCount
@@ -728,6 +810,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				-maxPitch,
 				maxPitch
 			)
+		else
+			targetPitch = normalPitch
 		end
 
 		local targetRoll = 0
@@ -740,15 +824,22 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				-maxRoll,
 				maxRoll
 			)
+		else
+			targetRoll = normalRoll
 		end
 
-		return {
-			targetY = totalHeight / contactCount,
+		local profile = {
 			targetPitch = targetPitch,
 			targetRoll = targetRoll,
 			contacts = contactCount,
 			highestSample = highestSample,
+			samples = samples,
+			stepY = totalHeight / contactCount,
 		}
+		profile.targetY = getGroundTargetYForPose(profile, targetPitch, targetRoll)
+			or profile.stepY
+
+		return profile
 	end
 
 	local function getFallbackSurfaceTarget(currentPosition, currentYaw)
@@ -935,10 +1026,11 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	end
 
 	local function getFallbackResetPose()
-		local resetPosition = Config.carSpawn
+		local resetPosition = defaultSpawnPose.position
+		local resetYaw = defaultSpawnPose.yaw
 		return {
-			position = Vector3.new(resetPosition.X, getFallbackSurfaceTarget(resetPosition, 0), resetPosition.Z),
-			yaw = 0,
+			position = Vector3.new(resetPosition.X, getFallbackSurfaceTarget(resetPosition, resetYaw), resetPosition.Z),
+			yaw = resetYaw,
 		}
 	end
 
@@ -1178,12 +1270,14 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 
 		local previousY = position.Y
 		local groundProfile = getGroundProfile(position, yaw)
-		local targetY = groundProfile and groundProfile.targetY or previousY
-		local targetPitch = 0
-		local targetRoll = 0
+		local targetPitch = groundProfile and groundProfile.targetPitch or 0
+		local targetRoll = groundProfile and groundProfile.targetRoll or 0
+		local targetY = groundProfile and getGroundTargetYWithCurrentPose(groundProfile, targetPitch, targetRoll)
+			or previousY
+		local stepY = groundProfile and groundProfile.stepY or targetY
 
 		if grounded then
-			local stepUp = targetY - previousY
+			local stepUp = stepY - previousY
 			if not groundProfile or previousY - targetY > Config.carGroundSnapDistance then
 				pendingFallResetPose = getSafeFallResetPose()
 				grounded = false
@@ -1205,8 +1299,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				verticalVelocity = math.max(riseVelocity, 0)
 				airPitchVelocity = 0
 				airRollVelocity = 0
-				targetPitch = groundProfile.targetPitch
-				targetRoll = groundProfile.targetRoll
 				pendingFallResetPose = nil
 				recordSafeGroundPose(groundProfile)
 			end
@@ -1233,8 +1325,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				triggerLandingBounce(landingSpeed)
 				airPitchVelocity = 0
 				airRollVelocity = 0
-				targetPitch = groundProfile.targetPitch
-				targetRoll = groundProfile.targetRoll
 				pendingFallResetPose = nil
 				recordSafeGroundPose(groundProfile)
 
@@ -1359,8 +1449,23 @@ local cameraEventRemote = getOrCreateCameraEventRemote()
 local debugTuneRemote = getOrCreateDebugTuneRemote()
 runDebugTuning(debugTuneRemote)
 
-local world = MapGenerator.Generate()
-local driveSurfaces, crashObstacles = collectWorldParts(world)
-buildStuntFeatures(world, driveSurfaces)
-local car, seat, driftEmitters = createCab(world)
-runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles)
+local authoredRoadRoot = AuthoredRoadRuntime.getRoot()
+local world
+local driveSurfaces
+local crashObstacles
+local spawnPose
+
+if AuthoredRoadRuntime.hasRoadData(authoredRoadRoot) then
+	world, driveSurfaces, crashObstacles, spawnPose = AuthoredRoadRuntime.createWorld(authoredRoadRoot)
+else
+	world = MapGenerator.Generate()
+	driveSurfaces, crashObstacles = collectWorldParts(world)
+	buildStuntFeatures(world, driveSurfaces)
+	spawnPose = {
+		position = Config.carSpawn,
+		yaw = 0,
+	}
+end
+
+local car, seat, driftEmitters = createCab(world, spawnPose)
+runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
