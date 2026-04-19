@@ -1,24 +1,10 @@
--- Cab87 Studio plugin: spline-based road drafting for fast traversal iteration.
--- Install by copying this file into your Roblox Plugins folder:
+-- Cab87 Studio plugin: persistent spline road editor panel.
+-- Install to:
 --   %LOCALAPPDATA%\Roblox\Plugins\Cab87RoadCurveTools.plugin.lua
 
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local Selection = game:GetService("Selection")
 local Workspace = game:GetService("Workspace")
-
-local TOOLBAR_NAME = "cab87 roads"
-
-local toolbar = plugin:CreateToolbar(TOOLBAR_NAME)
-local newSplineButton = toolbar:CreateButton("New Spline", "Create/clear current road spline", "rbxasset://textures/StudioToolbox/PluginToolbar/icon_new.png")
-local addPointButton = toolbar:CreateButton("Add Point", "Add control point at camera ray hit", "rbxasset://textures/StudioToolbox/PluginToolbar/icon_add.png")
-local snapButton = toolbar:CreateButton("Snap Points", "Snap all points to terrain", "rbxasset://textures/StudioToolbox/PluginToolbar/icon_snap.png")
-local rebuildButton = toolbar:CreateButton("Rebuild Road", "Rebuild road geometry from spline", "rbxasset://textures/StudioToolbox/PluginToolbar/icon_build.png")
-local clearRoadButton = toolbar:CreateButton("Clear Road", "Delete generated road mesh", "rbxasset://textures/StudioToolbox/PluginToolbar/icon_delete.png")
-
-newSplineButton.ClickableWhenViewportHidden = true
-addPointButton.ClickableWhenViewportHidden = true
-snapButton.ClickableWhenViewportHidden = true
-rebuildButton.ClickableWhenViewportHidden = true
-clearRoadButton.ClickableWhenViewportHidden = true
 
 local ROOT_NAME = "Cab87RoadEditor"
 local POINTS_NAME = "RoadPoints"
@@ -87,6 +73,20 @@ end
 
 local function pointName(index)
 	return string.format("P%03d", index)
+end
+
+local function renumberPoints()
+	for i, p in ipairs(sortedPoints()) do
+		p.Name = pointName(i)
+	end
+end
+
+local function isControlPoint(inst)
+	if not inst or not inst:IsA("BasePart") then
+		return false
+	end
+	local folder = getOrCreatePointsFolder()
+	return inst.Parent == folder
 end
 
 local function raycastFromCamera(maxDistance)
@@ -163,7 +163,7 @@ local function rebuildRoadFromPoints()
 	local points = sortedPoints()
 	if #points < 2 then
 		warn("[cab87 roads] Need at least 2 control points")
-		return
+		return 0
 	end
 
 	local roadModel = getOrCreateRoadModel()
@@ -194,13 +194,14 @@ local function rebuildRoadFromPoints()
 	end
 
 	print(string.format("[cab87 roads] Built %d road segments from %d control points", segments, #points))
+	return segments
 end
 
 local function snapPointsToTerrain()
 	local points = sortedPoints()
 	if #points == 0 then
 		warn("[cab87 roads] No control points to snap")
-		return
+		return 0
 	end
 
 	local params = RaycastParams.new()
@@ -220,45 +221,217 @@ local function snapPointsToTerrain()
 	end
 
 	print(string.format("[cab87 roads] Snapped %d points", changed))
+	return changed
 end
 
-newSplineButton.Click:Connect(function()
+local function removeLastPoint()
+	local points = sortedPoints()
+	if #points == 0 then
+		return false
+	end
+	points[#points]:Destroy()
+	renumberPoints()
+	return true
+end
+
+local function removeSelectedPoint()
+	local selection = Selection:Get()
+	if #selection == 0 then
+		return false
+	end
+	local target = selection[1]
+	if not isControlPoint(target) then
+		return false
+	end
+	target:Destroy()
+	renumberPoints()
+	return true
+end
+
+local function countSegments()
+	local road = getOrCreateRoadModel()
+	local n = 0
+	for _, child in ipairs(road:GetChildren()) do
+		if child:IsA("BasePart") then
+			n += 1
+		end
+	end
+	return n
+end
+
+-- UI
+local toolbar = plugin:CreateToolbar("cab87 roads")
+local toggleButton = toolbar:CreateButton("Road Editor", "Toggle road editor panel", "rbxasset://textures/StudioToolbox/PluginToolbar/icon_advanced.png")
+toggleButton.ClickableWhenViewportHidden = true
+
+local widgetInfo = DockWidgetPluginGuiInfo.new(
+	Enum.InitialDockState.Right,
+	true,
+	true,
+	320,
+	420,
+	260,
+	300
+)
+
+local widget = plugin:CreateDockWidgetPluginGui("Cab87RoadCurveEditorWidget", widgetInfo)
+widget.Title = "Cab87 Road Editor"
+widget.Enabled = true
+
+local root = Instance.new("Frame")
+root.Size = UDim2.fromScale(1, 1)
+root.BackgroundTransparency = 1
+root.Parent = widget
+
+local pad = Instance.new("UIPadding")
+pad.PaddingLeft = UDim.new(0, 8)
+pad.PaddingRight = UDim.new(0, 8)
+pad.PaddingTop = UDim.new(0, 8)
+pad.PaddingBottom = UDim.new(0, 8)
+pad.Parent = root
+
+local list = Instance.new("UIListLayout")
+list.FillDirection = Enum.FillDirection.Vertical
+list.Padding = UDim.new(0, 6)
+list.Parent = root
+
+local function makeButton(text)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, 0, 0, 30)
+	b.BackgroundColor3 = Color3.fromRGB(42, 42, 48)
+	b.TextColor3 = Color3.fromRGB(240, 240, 240)
+	b.Font = Enum.Font.GothamSemibold
+	b.TextSize = 13
+	b.Text = text
+	b.AutoButtonColor = true
+	b.Parent = root
+	return b
+end
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 32)
+title.BackgroundTransparency = 1
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Spline track editor"
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.TextColor3 = Color3.fromRGB(255, 220, 120)
+title.Parent = root
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, 0, 0, 38)
+status.BackgroundTransparency = 1
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextYAlignment = Enum.TextYAlignment.Top
+status.TextWrapped = true
+status.Font = Enum.Font.Gotham
+status.TextSize = 12
+status.TextColor3 = Color3.fromRGB(200, 200, 205)
+status.Parent = root
+
+local function updateStatus(extra)
+	local points = #sortedPoints()
+	local segments = countSegments()
+	local base = string.format("Points: %d | Segments: %d", points, segments)
+	if extra and #extra > 0 then
+		status.Text = base .. "\n" .. extra
+	else
+		status.Text = base .. "\nAdd points from camera or selection, then rebuild."
+	end
+end
+
+local btnNew = makeButton("New Spline")
+local btnAddCamera = makeButton("Add Point (Camera Hit)")
+local btnAddSelected = makeButton("Add Point (From Selection)")
+local btnRemoveSel = makeButton("Remove Selected Point")
+local btnRemoveLast = makeButton("Remove Last Point")
+local btnSnap = makeButton("Snap Points To Terrain")
+local btnRebuild = makeButton("Rebuild Road")
+local btnClear = makeButton("Clear Road")
+
+btnNew.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before new spline")
-	local pointsFolder = getOrCreatePointsFolder()
-	local roadModel = getOrCreateRoadModel()
-	clearFolder(pointsFolder)
-	clearFolder(roadModel)
+	clearFolder(getOrCreatePointsFolder())
+	clearFolder(getOrCreateRoadModel())
 	ChangeHistoryService:SetWaypoint("cab87 roads after new spline")
-	print("[cab87 roads] New spline started")
+	updateStatus("Started new spline")
 end)
 
-addPointButton.Click:Connect(function()
+btnAddCamera.MouseButton1Click:Connect(function()
 	local pos = raycastFromCamera(4000)
 	if not pos then
-		warn("[cab87 roads] Could not determine add point position")
+		updateStatus("Could not raycast from camera")
 		return
 	end
-	ChangeHistoryService:SetWaypoint("cab87 roads before add point")
+	ChangeHistoryService:SetWaypoint("cab87 roads before add point camera")
 	local p = addControlPoint(pos)
-	ChangeHistoryService:SetWaypoint("cab87 roads after add point")
-	print("[cab87 roads] Added point " .. p.Name)
+	ChangeHistoryService:SetWaypoint("cab87 roads after add point camera")
+	Selection:Set({ p })
+	updateStatus("Added " .. p.Name)
 end)
 
-snapButton.Click:Connect(function()
+btnAddSelected.MouseButton1Click:Connect(function()
+	local sel = Selection:Get()
+	if #sel == 0 or not sel[1]:IsA("BasePart") then
+		updateStatus("Select a part first to add a point at its position")
+		return
+	end
+	ChangeHistoryService:SetWaypoint("cab87 roads before add point selection")
+	local p = addControlPoint(sel[1].Position)
+	ChangeHistoryService:SetWaypoint("cab87 roads after add point selection")
+	Selection:Set({ p })
+	updateStatus("Added " .. p.Name .. " from selection")
+end)
+
+btnRemoveSel.MouseButton1Click:Connect(function()
+	ChangeHistoryService:SetWaypoint("cab87 roads before remove selected")
+	local ok = removeSelectedPoint()
+	ChangeHistoryService:SetWaypoint("cab87 roads after remove selected")
+	if ok then
+		updateStatus("Removed selected point")
+	else
+		updateStatus("Select a control point to remove")
+	end
+end)
+
+btnRemoveLast.MouseButton1Click:Connect(function()
+	ChangeHistoryService:SetWaypoint("cab87 roads before remove last")
+	local ok = removeLastPoint()
+	ChangeHistoryService:SetWaypoint("cab87 roads after remove last")
+	if ok then
+		updateStatus("Removed last point")
+	else
+		updateStatus("No points to remove")
+	end
+end)
+
+btnSnap.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before snap")
-	snapPointsToTerrain()
+	local n = snapPointsToTerrain()
 	ChangeHistoryService:SetWaypoint("cab87 roads after snap")
+	updateStatus(string.format("Snapped %d points", n))
 end)
 
-rebuildButton.Click:Connect(function()
+btnRebuild.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before rebuild")
-	rebuildRoadFromPoints()
+	local n = rebuildRoadFromPoints()
 	ChangeHistoryService:SetWaypoint("cab87 roads after rebuild")
+	updateStatus(string.format("Rebuilt %d segments", n))
 end)
 
-clearRoadButton.Click:Connect(function()
+btnClear.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before clear")
 	clearFolder(getOrCreateRoadModel())
 	ChangeHistoryService:SetWaypoint("cab87 roads after clear")
-	print("[cab87 roads] Cleared road geometry")
+	updateStatus("Cleared road geometry")
 end)
+
+toggleButton.Click:Connect(function()
+	widget.Enabled = not widget.Enabled
+end)
+
+Selection.SelectionChanged:Connect(function()
+	updateStatus(nil)
+end)
+
+updateStatus("Panel stays open while you iterate")

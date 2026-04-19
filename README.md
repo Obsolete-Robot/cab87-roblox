@@ -52,17 +52,23 @@ Fast install on Windows:
 Manual install (if needed):
 - Copy plugin to `%LOCALAPPDATA%\\Roblox\\Plugins\\Cab87MapTools.plugin.lua`
 
-Then restart Studio. You will get these toolbars:
+Then restart Studio. You will get these tools:
 
-- **cab87**
+- **cab87** toolbar
   - **Generate Map**
   - **Clear Map**
-- **cab87 roads**
-  - **New Spline**
-  - **Add Point**
-  - **Snap Points**
-  - **Rebuild Road**
-  - **Clear Road**
+- **cab87 roads** toolbar
+  - **Road Editor** (opens a persistent docked panel)
+
+Road Editor panel actions:
+- New Spline
+- Add Point (Camera Hit)
+- Add Point (From Selection)
+- Remove Selected Point
+- Remove Last Point
+- Snap Points To Terrain
+- Rebuild Road
+- Clear Road
 
 When you click **Generate Map**, check Studio Output for seed + generator version.
 
