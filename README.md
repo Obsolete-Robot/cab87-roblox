@@ -56,6 +56,8 @@ Then restart Studio. You will get a **cab87** toolbar with:
 - **Generate Map**
 - **Clear Map**
 
+When you click **Generate Map**, check Studio Output for seed + generator version.
+
 ## Controls
 
 - Accelerate: `W` / `Up`

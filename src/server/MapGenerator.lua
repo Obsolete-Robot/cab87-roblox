@@ -52,7 +52,7 @@ end
 
 local function districtPalette(i, count)
 	local hue = ((i - 1) / math.max(count, 1)) % 1
-	return Color3.fromHSV(hue, 0.42, 0.88)
+	return Color3.fromHSV(hue, 0.45, 0.90)
 end
 
 local function districtCenters(cfg, rng, extent)
@@ -107,20 +107,32 @@ local function roadKey(axis, pos)
 	return axis .. ":" .. string.format("%.3f", pos)
 end
 
-local function addRoad(roads, axis, pos, extent)
+local function isTooClose(values, pos, minGap)
+	for _, v in ipairs(values) do
+		if math.abs(v - pos) < minGap then
+			return true
+		end
+	end
+	return false
+end
+
+local function addRoad(roads, axis, pos, extent, minGap)
 	if math.abs(pos) > extent + 0.001 then
-		return
+		return false
 	end
 	local key = roadKey(axis, pos)
 	if roads.lookup[key] then
-		return
+		return false
 	end
+
+	local bucket = axis == "v" and roads.vertical or roads.horizontal
+	if minGap and isTooClose(bucket, pos, minGap) then
+		return false
+	end
+
 	roads.lookup[key] = true
-	if axis == "v" then
-		table.insert(roads.vertical, pos)
-	else
-		table.insert(roads.horizontal, pos)
-	end
+	table.insert(bucket, pos)
+	return true
 end
 
 local function buildRoadNetwork(cfg, rng, extent)
@@ -134,6 +146,7 @@ local function buildRoadNetwork(cfg, rng, extent)
 	local ringBlocks = math.max(1, cfg.arterialRingRadiusBlocks or (cfg.cityBlocks - 2))
 	local ring = clamp(ringBlocks * block, block, extent)
 	local spineOffset = clamp((cfg.arterialSpineOffsetBlocks or 3) * block, block, extent - block)
+	local minGap = block * 0.6
 
 	-- Arterial skeleton first: central cross + offset spines + ring.
 	for _, x in ipairs({0, spineOffset, -spineOffset, ring, -ring}) do
@@ -143,18 +156,18 @@ local function buildRoadNetwork(cfg, rng, extent)
 		addRoad(roads, "h", z, extent)
 	end
 
-	-- Secondary roads add local loops/shortcuts while keeping arterials readable.
-	local every = math.max(1, cfg.secondaryRoadEveryBlocks or 2)
-	local chance = clamp(cfg.secondaryRoadChance or 0.55, 0, 1)
+	-- Secondary roads: fewer, less regular than V1 grid.
+	local every = math.max(1, cfg.secondaryRoadEveryBlocks or 3)
+	local chance = clamp(cfg.secondaryRoadChance or 0.35, 0, 1)
 	for i = -cfg.cityBlocks, cfg.cityBlocks do
 		if i % every == 0 then
 			local p = i * block
 			local nearArterial = (math.abs(math.abs(p) - ring) < 1) or (math.abs(math.abs(p) - spineOffset) < 1) or (math.abs(p) < 1)
 			if (not nearArterial) and rng:NextNumber() <= chance then
-				addRoad(roads, "v", p, extent)
+				addRoad(roads, "v", p, extent, minGap)
 			end
 			if (not nearArterial) and rng:NextNumber() <= chance then
-				addRoad(roads, "h", p, extent)
+				addRoad(roads, "h", p, extent, minGap)
 			end
 		end
 	end
@@ -189,6 +202,18 @@ local function placeRoadParts(parent, cfg, roads, extent)
 	end
 end
 
+local function withBounds(sortedRoads, extent)
+	local out = {-extent}
+	for _, v in ipairs(sortedRoads) do
+		if v > -extent and v < extent then
+			table.insert(out, v)
+		end
+	end
+	table.insert(out, extent)
+	table.sort(out)
+	return out
+end
+
 function MapGenerator.Clear()
 	local old = Workspace:FindFirstChild(WORLD_NAME)
 	if old then
@@ -205,6 +230,8 @@ function MapGenerator.Generate(overrides)
 
 	local world = Instance.new("Model")
 	world.Name = WORLD_NAME
+	world:SetAttribute("GeneratorVersion", "v2-chunk1.1")
+	world:SetAttribute("Seed", seed)
 	world.Parent = Workspace
 
 	local roadsFolder = Instance.new("Folder")
@@ -236,16 +263,27 @@ function MapGenerator.Generate(overrides)
 		districtColors[i] = districtPalette(i, #centers)
 	end
 
-	for gx = -cfg.cityBlocks, cfg.cityBlocks - 1 do
-		for gz = -cfg.cityBlocks, cfg.cityBlocks - 1 do
-			local center = Vector3.new((gx + 0.5) * cfg.blockSize, 0, (gz + 0.5) * cfg.blockSize)
-			local width = cfg.blockSize - cfg.roadWidth - cfg.buildingInset
-			local depth = cfg.blockSize - cfg.roadWidth - cfg.buildingInset
-			local height = rng:NextNumber(cfg.buildingHeightMin, cfg.buildingHeightMax)
+	local xBands = withBounds(roads.vertical, extent)
+	local zBands = withBounds(roads.horizontal, extent)
 
-			if width > 6 and depth > 6 then
+	for xi = 1, #xBands - 1 do
+		for zi = 1, #zBands - 1 do
+			local xA = xBands[xi]
+			local xB = xBands[xi + 1]
+			local zA = zBands[zi]
+			local zB = zBands[zi + 1]
+
+			local spanX = xB - xA
+			local spanZ = zB - zA
+			local width = spanX - cfg.roadWidth - cfg.buildingInset
+			local depth = spanZ - cfg.roadWidth - cfg.buildingInset
+
+			if width > 8 and depth > 8 then
+				local center = Vector3.new((xA + xB) * 0.5, 0, (zA + zB) * 0.5)
 				local districtId = nearestDistrict(center, centers)
 				local baseColor = districtColors[districtId]
+				local height = rng:NextNumber(cfg.buildingHeightMin, cfg.buildingHeightMax)
+
 				local part = makePart(buildingsFolder, {
 					Name = "Building",
 					Size = Vector3.new(width, height, depth),

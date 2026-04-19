@@ -15,8 +15,8 @@ local Config = {
 	districtJitter = 0.35,
 	arterialRingRadiusBlocks = 4,
 	arterialSpineOffsetBlocks = 3,
-	secondaryRoadEveryBlocks = 2,
-	secondaryRoadChance = 0.55,
+	secondaryRoadEveryBlocks = 3,
+	secondaryRoadChance = 0.35,
 
 	carRideHeight = carRideHeight,
 	carSpawn = Vector3.new(0, roadSurfaceY + carRideHeight, 0),

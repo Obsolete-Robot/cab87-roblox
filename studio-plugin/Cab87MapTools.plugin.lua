@@ -114,7 +114,9 @@ local function regenerateMap()
 		return
 	end
 
-	print(string.format("[cab87] Map regenerated (seed=%s)", tostring(overrides.seed)))
+	local world = workspace:FindFirstChild("Cab87World")
+	local version = world and world:GetAttribute("GeneratorVersion") or "unknown"
+	print(string.format("[cab87] Map regenerated (seed=%s, version=%s)", tostring(overrides.seed), tostring(version)))
 end
 
 local function clearMap()
