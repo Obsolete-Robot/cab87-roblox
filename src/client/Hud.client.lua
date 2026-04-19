@@ -250,6 +250,8 @@ end
 local cabVisualDebugProperties = {
 	carVisualResponsiveness = true,
 	carVisualSnapDistance = true,
+	carVisualInterpolationDelay = true,
+	carVisualMaxExtrapolationTime = true,
 	carPitchFollow = true,
 	carRollFollow = true,
 	carMaxPitchDegrees = true,
@@ -263,6 +265,7 @@ local cabVisualDebugProperties = {
 	carDriveLeanFollow = true,
 	carBoostWheelieDegrees = true,
 	carBoostWheelieDuration = true,
+	carBoostWheelieReturnDuration = true,
 	carBoostWheelieFollow = true,
 	carLandingBounceMinSpeed = true,
 	carLandingBounceMaxSpeed = true,

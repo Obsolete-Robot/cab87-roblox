@@ -427,6 +427,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local driftInputWasHeld = false
 	local boostTimer = 0
 	local boostWheelieTimer = 0
+	local boostWheelieReturnTimer = 0
+	local boostWheelieReturnStartPitch = 0
 	local elapsedTime = 0
 	local fallResetCooldown = 0
 	local pendingFallResetPose = nil
@@ -457,10 +459,23 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local function triggerBoostFeedback(player)
 		if Config.carBoostWheelieDuration > 0 and Config.carBoostWheelieDegrees > 0 then
 			boostWheelieTimer = math.max(boostWheelieTimer, Config.carBoostWheelieDuration)
+			boostWheelieReturnTimer = 0
+			boostWheelieReturnStartPitch = 0
 		end
 
 		if player and cameraEventRemote and Config.cameraBoostShakeIntensity > 0 then
 			cameraEventRemote:FireClient(player, "Shake", Config.cameraBoostShakeIntensity)
+		end
+	end
+
+	local function startBoostWheelieReturn()
+		boostWheelieTimer = 0
+		boostWheelieReturnStartPitch = visualBoostPitch
+		boostWheelieReturnTimer = math.max(Config.carBoostWheelieReturnDuration, 0)
+
+		if boostWheelieReturnTimer <= 0 or math.abs(boostWheelieReturnStartPitch) <= 0.001 then
+			boostWheelieReturnTimer = 0
+			boostWheelieReturnStartPitch = 0
 		end
 	end
 
@@ -944,6 +959,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		driftInputWasHeld = false
 		boostTimer = 0
 		boostWheelieTimer = 0
+		boostWheelieReturnTimer = 0
+		boostWheelieReturnStartPitch = 0
 		pendingFallResetPose = nil
 		fallResetCooldown = math.max(Config.carFallResetCooldown, 0)
 		safeGroundHistory = {
@@ -993,6 +1010,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			driftInputWasHeld = false
 			boostTimer = 0
 			boostWheelieTimer = 0
+			boostWheelieReturnTimer = 0
+			boostWheelieReturnStartPitch = 0
 			fallResetCooldown = 0
 			pendingFallResetPose = nil
 			safeGroundHistory = {}
@@ -1304,13 +1323,32 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 
 		local targetBoostPitch = 0
 		if grounded and boostWheelieTimer > 0 then
-			local wheelieDuration = math.max(Config.carBoostWheelieDuration, 0.001)
-			local wheelieProgress = 1 - math.clamp(boostWheelieTimer / wheelieDuration, 0, 1)
-			local wheelieAmount = 1 - Easing.OutBack(wheelieProgress)
-			targetBoostPitch = -math.rad(Config.carBoostWheelieDegrees) * wheelieAmount
+			targetBoostPitch = -math.rad(Config.carBoostWheelieDegrees)
 			boostWheelieTimer = math.max(boostWheelieTimer - dt, 0)
+
+			if boostWheelieTimer <= 0 then
+				startBoostWheelieReturn()
+			end
 		elseif boostWheelieTimer > 0 then
 			boostWheelieTimer = math.max(boostWheelieTimer - dt, 0)
+			if boostWheelieTimer <= 0 then
+				boostWheelieReturnTimer = 0
+				boostWheelieReturnStartPitch = 0
+			end
+		elseif grounded and boostWheelieReturnTimer > 0 then
+			local returnDuration = math.max(Config.carBoostWheelieReturnDuration, 0.001)
+			local returnProgress = 1 - math.clamp(boostWheelieReturnTimer / returnDuration, 0, 1)
+			local returnAlpha = Easing.OutBack(returnProgress)
+			targetBoostPitch = boostWheelieReturnStartPitch * (1 - returnAlpha)
+			boostWheelieReturnTimer = math.max(boostWheelieReturnTimer - dt, 0)
+
+			if boostWheelieReturnTimer <= 0 then
+				targetBoostPitch = 0
+				boostWheelieReturnStartPitch = 0
+			end
+		elseif boostWheelieReturnTimer > 0 then
+			boostWheelieReturnTimer = 0
+			boostWheelieReturnStartPitch = 0
 		end
 		if grounded then
 			if targetBoostPitch < 0 and math.abs(targetBoostPitch) > math.abs(visualBoostPitch) then
