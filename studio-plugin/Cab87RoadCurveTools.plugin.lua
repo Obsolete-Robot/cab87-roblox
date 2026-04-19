@@ -17,7 +17,7 @@ local ROAD_WIDTH_ATTR = "RoadWidth"
 
 local ROAD_WIDTH = 28
 local ROAD_MIN_WIDTH = 8
-local ROAD_MAX_WIDTH = 96
+local ROAD_MAX_WIDTH = 200
 local ROAD_WIDTH_STEP = 4
 local ROAD_THICKNESS = 1.2
 local SAMPLE_STEP_STUDS = 8
@@ -498,7 +498,7 @@ local function heightConnectTolerance(widthA, widthB)
 end
 
 local function positionsConnectIn3D(a, b, widthA, widthB)
-	return (a - b).Magnitude <= heightConnectTolerance(widthA, widthB)
+	return math.abs(a.Y - b.Y) <= heightConnectTolerance(widthA, widthB)
 end
 
 local function lerpNumber(a, b, alpha)
@@ -1042,7 +1042,7 @@ local function applyJunctionsToChains(chains, junctions)
 	end
 end
 
-local function buildUnifiedRoadMesh(chains, junctions, targetModel)
+local function buildRoadMeshComponent(chains, junctions, targetModel, meshName)
 	local state, err = newMeshState()
 	if not state then
 		return false, err
@@ -1057,7 +1057,7 @@ local function buildUnifiedRoadMesh(chains, junctions, targetModel)
 		addIntersectionDiskToMesh(state, junction)
 	end
 
-	local ok, meshPartOrErr = createNetworkMeshPart(state, targetModel, "RoadNetworkMesh")
+	local ok, meshPartOrErr = createNetworkMeshPart(state, targetModel, meshName)
 	if not ok then
 		return false, meshPartOrErr
 	end
@@ -1067,6 +1067,106 @@ local function buildUnifiedRoadMesh(chains, junctions, targetModel)
 		intersections = #junctions,
 		edges = state.edges,
 		meshPart = meshPartOrErr,
+	}
+end
+
+local function buildRoadComponents(chains, junctions)
+	local parent = {}
+	for _, chain in ipairs(chains) do
+		parent[chain] = chain
+	end
+
+	local function find(chain)
+		local root = parent[chain]
+		while root and parent[root] ~= root do
+			root = parent[root]
+		end
+		if root and parent[chain] ~= root then
+			parent[chain] = root
+		end
+		return root
+	end
+
+	local function union(a, b)
+		local rootA = find(a)
+		local rootB = find(b)
+		if rootA and rootB and rootA ~= rootB then
+			parent[rootB] = rootA
+		end
+	end
+
+	for _, junction in ipairs(junctions) do
+		local firstChain = nil
+		for chain in pairs(junction.chains or {}) do
+			if not firstChain then
+				firstChain = chain
+			else
+				union(firstChain, chain)
+			end
+		end
+	end
+
+	local componentsByRoot = {}
+	local components = {}
+	local componentByChain = {}
+
+	for _, chain in ipairs(chains) do
+		local root = find(chain)
+		local component = componentsByRoot[root]
+		if not component then
+			component = {
+				chains = {},
+				junctions = {},
+			}
+			componentsByRoot[root] = component
+			table.insert(components, component)
+		end
+		table.insert(component.chains, chain)
+		componentByChain[chain] = component
+	end
+
+	for _, junction in ipairs(junctions) do
+		local component = nil
+		for chain in pairs(junction.chains or {}) do
+			component = componentByChain[chain]
+			break
+		end
+		if component then
+			table.insert(component.junctions, junction)
+		end
+	end
+
+	return components
+end
+
+local function buildRoadNetworkMeshes(chains, junctions, targetModel)
+	local components = buildRoadComponents(chains, junctions)
+	local totalSpans = 0
+	local totalIntersections = 0
+	local allEdges = {}
+	local meshParts = {}
+
+	for i, component in ipairs(components) do
+		local meshName = #components == 1 and "RoadNetworkMesh" or string.format("RoadNetworkMesh_%03d", i)
+		local ok, infoOrErr = buildRoadMeshComponent(component.chains, component.junctions, targetModel, meshName)
+		if not ok then
+			return false, infoOrErr
+		end
+
+		totalSpans += infoOrErr.spans
+		totalIntersections += infoOrErr.intersections
+		table.insert(meshParts, infoOrErr.meshPart)
+		for _, edge in ipairs(infoOrErr.edges) do
+			table.insert(allEdges, edge)
+		end
+	end
+
+	return true, {
+		spans = totalSpans,
+		intersections = totalIntersections,
+		edges = allEdges,
+		meshParts = meshParts,
+		components = #components,
 	}
 end
 
@@ -1099,13 +1199,16 @@ local function rebuildRoadMeshPreferred()
 	local junctions = mergeJunctions(rawJunctions)
 	applyJunctionsToChains(chains, junctions)
 
-	local okMesh, meshInfo = buildUnifiedRoadMesh(chains, junctions, network)
+	local okMesh, meshInfo = buildRoadNetworkMeshes(chains, junctions, network)
 	local totalSpans = 0
 	local intersectionCount = #junctions
+	local meshCount = 0
 	local usedFallback = false
 
 	if okMesh then
 		totalSpans = meshInfo.spans
+		intersectionCount = meshInfo.intersections
+		meshCount = meshInfo.components
 		lastWireframeEdges = meshInfo.edges
 	else
 		usedFallback = true
@@ -1119,7 +1222,8 @@ local function rebuildRoadMeshPreferred()
 
 	local wireCount = refreshWireframe()
 	local wireNote = wireframeEnabled and string.format(", %d wire edges", wireCount) or ""
-	local note = string.format("Network rebuilt: %d splines, %d spans, %d intersections%s%s", #chains, totalSpans, intersectionCount, wireNote, usedFallback and " (primitive fallback used)" or "")
+	local meshNote = okMesh and string.format(", %d mesh parts", meshCount) or ""
+	local note = string.format("Network rebuilt: %d splines%s, %d spans, %d intersections%s%s", #chains, meshNote, totalSpans, intersectionCount, wireNote, usedFallback and " (primitive fallback used)" or "")
 	print("[cab87 roads] " .. note)
 	return totalSpans, note
 end
@@ -1242,6 +1346,22 @@ local function countSegments()
 		end
 	end
 	return n
+end
+
+local function shouldRestoreRoadMesh()
+	local road = getOrCreateNetworkModel()
+	local surfaceCount = 0
+	local hasGeneratedMeshPart = false
+	for _, child in ipairs(road:GetChildren()) do
+		if child:IsA("BasePart") then
+			surfaceCount += 1
+			if child:IsA("MeshPart") and child:GetAttribute("GeneratedBy") == "Cab87RoadEditor" then
+				hasGeneratedMeshPart = true
+			end
+		end
+	end
+
+	return surfaceCount == 0 or hasGeneratedMeshPart
 end
 
 -- UI
@@ -1728,7 +1848,7 @@ splinesFolder.DescendantRemoving:Connect(function(inst)
 end)
 
 local function restoreMissingRoadMesh()
-	if countSegments() > 0 then
+	if not shouldRestoreRoadMesh() then
 		return
 	end
 

@@ -94,7 +94,8 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
    - Nearby spline endpoints are welded.
    - Crossings are inserted into both splines and meshed into the unified road surface.
    - Crossings only become intersections when the curves are close in 3D space, so raised overpasses can pass above lower roads.
-   - The generated MeshPart is baked with `ApplyMesh` and the plugin restores it from spline data if a saved scene opens without road geometry.
+   - Disconnected road layers are baked into separate MeshParts, so overpasses are not forced into the same collision mesh as lower roads.
+   - Spline control points are the durable source of truth. The plugin rebuilds stale generated MeshParts on load; Play mode keeps server collision invisible and has each client rebuild the clean unified visual mesh from spline data.
    - **Wireframe Mesh** can be toggled on to inspect generated mesh edges.
 5. Press Play and test traversal.
 

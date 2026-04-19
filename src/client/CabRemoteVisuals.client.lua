@@ -18,9 +18,7 @@ local function getHumanoid()
 	return character:FindFirstChildOfClass("Humanoid")
 end
 
-local function getDrivenCab()
-	local humanoid = getHumanoid()
-	local seat = humanoid and humanoid.SeatPart
+local function getCabFromSeat(seat)
 	if not seat or not seat:IsA("VehicleSeat") or seat.Name ~= "DriverSeat" then
 		return nil
 	end
@@ -31,6 +29,29 @@ local function getDrivenCab()
 	end
 
 	return cab
+end
+
+local function findCabOccupiedBy(humanoid)
+	if not humanoid then
+		return nil
+	end
+
+	for _, descendant in ipairs(Workspace:GetDescendants()) do
+		if descendant:IsA("VehicleSeat")
+			and descendant.Name == "DriverSeat"
+			and descendant.Occupant == humanoid
+		then
+			return getCabFromSeat(descendant)
+		end
+	end
+
+	return nil
+end
+
+local function getDrivenCab()
+	local humanoid = getHumanoid()
+	local seat = humanoid and humanoid.SeatPart
+	return getCabFromSeat(seat) or findCabOccupiedBy(humanoid)
 end
 
 local function isCab(instance)

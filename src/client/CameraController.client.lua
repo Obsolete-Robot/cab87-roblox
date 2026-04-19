@@ -24,6 +24,8 @@ local shakeTimeRemaining = 0
 local shakeDuration = 0
 local shakeIntensity = 0
 local shakeSeed = 0
+local lostDrivenCabTime = 0
+local CAB_LOST_GRACE_SECONDS = 0.35
 
 local function getNumberConfig(key, fallback)
 	local value = Config[key]
@@ -47,9 +49,7 @@ local function getHumanoid()
 	return character:FindFirstChildOfClass("Humanoid")
 end
 
-local function getDrivenCab()
-	local humanoid = getHumanoid()
-	local seat = humanoid and humanoid.SeatPart
+local function getCabFromSeat(seat)
 	if not seat or not seat:IsA("VehicleSeat") or seat.Name ~= "DriverSeat" then
 		return nil
 	end
@@ -60,6 +60,29 @@ local function getDrivenCab()
 	end
 
 	return cab
+end
+
+local function findCabOccupiedBy(humanoid)
+	if not humanoid then
+		return nil
+	end
+
+	for _, descendant in ipairs(Workspace:GetDescendants()) do
+		if descendant:IsA("VehicleSeat")
+			and descendant.Name == "DriverSeat"
+			and descendant.Occupant == humanoid
+		then
+			return getCabFromSeat(descendant)
+		end
+	end
+
+	return nil
+end
+
+local function getDrivenCab()
+	local humanoid = getHumanoid()
+	local seat = humanoid and humanoid.SeatPart
+	return getCabFromSeat(seat) or findCabOccupiedBy(humanoid)
 end
 
 local function yawToForward(yaw)
@@ -205,6 +228,7 @@ local function restoreCamera()
 	reverseMovementTime = 0
 	shakeTimeRemaining = 0
 	shakeIntensity = 0
+	lostDrivenCabTime = 0
 end
 
 local function startCamera(cab)
@@ -230,6 +254,7 @@ local function startCamera(cab)
 	reverseMovementTime = 0
 	shakeTimeRemaining = 0
 	shakeIntensity = 0
+	lostDrivenCabTime = 0
 
 	camera.CameraType = Enum.CameraType.Scriptable
 	camera.FieldOfView = getNumberConfig("cameraMinFov", 70)
@@ -356,6 +381,15 @@ end)
 
 RunService:BindToRenderStep("Cab87CameraController", Enum.RenderPriority.Camera.Value + 1, function(dt)
 	local drivenCab = getDrivenCab()
+	if drivenCab then
+		lostDrivenCabTime = 0
+	elseif activeCab then
+		lostDrivenCabTime += dt
+		if lostDrivenCabTime < CAB_LOST_GRACE_SECONDS then
+			drivenCab = activeCab
+		end
+	end
+
 	if drivenCab ~= activeCab then
 		if activeCab then
 			restoreCamera()

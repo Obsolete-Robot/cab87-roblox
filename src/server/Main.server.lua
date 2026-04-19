@@ -464,6 +464,12 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	car:SetAttribute(Config.carVisualBoostPulseAttribute, boostVisualPulse)
 	car:SetAttribute(Config.carVisualLandingPulseAttribute, landingVisualPulse)
 	car:SetAttribute(Config.carVisualLandingSpeedAttribute, 0)
+	car:SetAttribute(Config.carSpeedAttribute, 0)
+	car:SetAttribute("Cab87LastResetReason", "")
+	car:SetAttribute("Cab87LastResetY", position.Y)
+	car:SetAttribute("Cab87GroundContacts", 0)
+	car:SetAttribute("Cab87Grounded", grounded)
+	car:SetAttribute("Cab87HasDriver", false)
 
 	local function triggerBoostFeedback(player)
 		if Config.carBoostWheelieDuration > 0 and Config.carBoostWheelieDegrees > 0 then
@@ -1081,6 +1087,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			},
 		}
 		setDriftSmokeState("off")
+		car:SetAttribute("Cab87LastResetReason", "Fall")
+		car:SetAttribute("Cab87LastResetY", position.Y)
 	end
 
 	RunService.Heartbeat:Connect(function(dt)
@@ -1103,6 +1111,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 
 		if seat.Occupant ~= lastOccupant then
 			lastOccupant = seat.Occupant
+			car:SetAttribute("Cab87HasDriver", seat.Occupant ~= nil)
 			grounded = true
 			verticalVelocity = 0
 			visualPitch = 0
@@ -1270,6 +1279,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 
 		local previousY = position.Y
 		local groundProfile = getGroundProfile(position, yaw)
+		car:SetAttribute("Cab87GroundContacts", groundProfile and groundProfile.contacts or 0)
+		car:SetAttribute("Cab87Grounded", grounded)
 		local targetPitch = groundProfile and groundProfile.targetPitch or 0
 		local targetRoll = groundProfile and groundProfile.targetRoll or 0
 		local targetY = groundProfile and getGroundTargetYWithCurrentPose(groundProfile, targetPitch, targetRoll)
@@ -1433,6 +1444,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end
 		car:SetAttribute(Config.carVisualDriftingAttribute, drifting)
 		car:SetAttribute(Config.carVisualDriftBoostReadyAttribute, driftBoostReady)
+		car:SetAttribute(Config.carSpeedAttribute, math.sqrt(velocity.X * velocity.X + velocity.Z * velocity.Z))
 
 		driftInputWasHeld = driftHeld
 
@@ -1455,9 +1467,7 @@ local driveSurfaces
 local crashObstacles
 local spawnPose
 
-if AuthoredRoadRuntime.hasRoadData(authoredRoadRoot) then
-	world, driveSurfaces, crashObstacles, spawnPose = AuthoredRoadRuntime.createWorld(authoredRoadRoot)
-else
+local function createGeneratedWorld()
 	world = MapGenerator.Generate()
 	driveSurfaces, crashObstacles = collectWorldParts(world)
 	buildStuntFeatures(world, driveSurfaces)
@@ -1465,6 +1475,31 @@ else
 		position = Config.carSpawn,
 		yaw = 0,
 	}
+end
+
+local okHasAuthoredRoad, hasAuthoredRoad = pcall(function()
+	return AuthoredRoadRuntime.hasRoadData(authoredRoadRoot)
+end)
+if not okHasAuthoredRoad then
+	warn("[cab87] Authored road data check failed; using generated map: " .. tostring(hasAuthoredRoad))
+	hasAuthoredRoad = false
+end
+
+if hasAuthoredRoad then
+	local okWorld, authoredWorld, authoredDriveSurfaces, authoredCrashObstacles, authoredSpawnPose = pcall(function()
+		return AuthoredRoadRuntime.createWorld(authoredRoadRoot)
+	end)
+	if okWorld and authoredWorld then
+		world = authoredWorld
+		driveSurfaces = authoredDriveSurfaces
+		crashObstacles = authoredCrashObstacles
+		spawnPose = authoredSpawnPose
+	else
+		warn("[cab87] Authored road world failed; using generated map so the taxi can spawn: " .. tostring(authoredWorld))
+		createGeneratedWorld()
+	end
+else
+	createGeneratedWorld()
 end
 
 local car, seat, driftEmitters = createCab(world, spawnPose)

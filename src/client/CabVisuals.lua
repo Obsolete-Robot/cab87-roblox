@@ -57,6 +57,20 @@ local function getAlpha(responsiveness, dt)
 	return 1 - math.exp(-responsiveness * dt)
 end
 
+local function stepDampedSpring(value, velocity, target, frequency, damping, dt)
+	if frequency <= 0 then
+		return target, 0
+	end
+
+	local angularFrequency = frequency * TAU
+	local acceleration = (target - value) * angularFrequency * angularFrequency
+		- velocity * (2 * damping * angularFrequency)
+	velocity += acceleration * dt
+	value += velocity * dt
+
+	return value, velocity
+end
+
 local function getSnapOrSmoothAlpha(responsiveness, dt)
 	if responsiveness <= 0 then
 		return 1
@@ -138,6 +152,13 @@ function CabVisual.new(cab, options)
 	self.visualBoostPitch = 0
 	self.visualBounceOffset = 0
 	self.visualBounceVelocity = 0
+	self.bodySpringPitch = 0
+	self.bodySpringPitchVelocity = 0
+	self.bodySpringRoll = 0
+	self.bodySpringRollVelocity = 0
+	self.bodySpringYaw = 0
+	self.bodySpringYawVelocity = 0
+	self.previousBodyVelocity = nil
 	self.boostWheelieTimer = 0
 	self.boostWheelieReturnTimer = 0
 	self.boostWheelieReturnStartPitch = 0
@@ -174,6 +195,13 @@ function CabVisual:reset(pivot)
 	self.visualBoostPitch = 0
 	self.visualBounceOffset = 0
 	self.visualBounceVelocity = 0
+	self.bodySpringPitch = 0
+	self.bodySpringPitchVelocity = 0
+	self.bodySpringRoll = 0
+	self.bodySpringRollVelocity = 0
+	self.bodySpringYaw = 0
+	self.bodySpringYawVelocity = 0
+	self.previousBodyVelocity = nil
 	self.boostWheelieTimer = 0
 	self.boostWheelieReturnTimer = 0
 	self.boostWheelieReturnStartPitch = 0
@@ -505,6 +533,64 @@ function CabVisual:updateLandingBounce(dt)
 	end
 end
 
+function CabVisual:resetBodySpring()
+	self.bodySpringPitch = 0
+	self.bodySpringPitchVelocity = 0
+	self.bodySpringRoll = 0
+	self.bodySpringRollVelocity = 0
+	self.bodySpringYaw = 0
+	self.bodySpringYawVelocity = 0
+	self.previousBodyVelocity = nil
+end
+
+function CabVisual:updateBodySpring(bufferedPivot, previousPosition, dt)
+	local maxPitch = math.rad(math.max(getNumberConfig("carBodySpringPitchDegrees", 0), 0))
+	local maxRoll = math.rad(math.max(getNumberConfig("carBodySpringRollDegrees", 0), 0))
+	local maxYaw = math.rad(math.max(getNumberConfig("carBodySpringYawDegrees", 0), 0))
+	if maxPitch <= 0 and maxRoll <= 0 and maxYaw <= 0 then
+		self:resetBodySpring()
+		return
+	end
+
+	local currentVelocity = (self.smoothedPosition - previousPosition) / math.max(dt, 0.001)
+	local previousVelocity = self.previousBodyVelocity or currentVelocity
+	self.previousBodyVelocity = currentVelocity
+
+	local acceleration = (currentVelocity - previousVelocity) / math.max(dt, 0.001)
+	local localAcceleration = bufferedPivot:VectorToObjectSpace(acceleration)
+	local fullTiltAccel = math.max(getNumberConfig("carBodySpringAccelForFullTilt", 95), 1)
+	local targetPitch = -math.clamp(localAcceleration.Z / fullTiltAccel, -1, 1) * maxPitch
+	local targetRoll = math.clamp(localAcceleration.X / fullTiltAccel, -1, 1) * maxRoll
+	local targetYaw = -math.clamp(localAcceleration.X / fullTiltAccel, -1, 1) * maxYaw
+	local frequency = math.max(getNumberConfig("carBodySpringFrequency", 2.6), 0)
+	local damping = math.max(getNumberConfig("carBodySpringDamping", 0.52), 0)
+
+	self.bodySpringPitch, self.bodySpringPitchVelocity = stepDampedSpring(
+		self.bodySpringPitch,
+		self.bodySpringPitchVelocity,
+		targetPitch,
+		frequency,
+		damping,
+		dt
+	)
+	self.bodySpringRoll, self.bodySpringRollVelocity = stepDampedSpring(
+		self.bodySpringRoll,
+		self.bodySpringRollVelocity,
+		targetRoll,
+		frequency,
+		damping,
+		dt
+	)
+	self.bodySpringYaw, self.bodySpringYawVelocity = stepDampedSpring(
+		self.bodySpringYaw,
+		self.bodySpringYawVelocity,
+		targetYaw,
+		frequency,
+		damping,
+		dt
+	)
+end
+
 function CabVisual:updateLean(bufferedPivot, previousPosition, dt)
 	local currentYaw = vectorToYaw(bufferedPivot.LookVector)
 	local yawRate = 0
@@ -552,6 +638,7 @@ end
 
 function CabVisual:updatePolish(bufferedPivot, previousPosition, dt)
 	self:updatePulses()
+	self:updateBodySpring(bufferedPivot, previousPosition, dt)
 	self:updateLean(bufferedPivot, previousPosition, dt)
 	self:updateBoostWheelie(dt)
 	self:updateLandingBounce(dt)
@@ -566,6 +653,7 @@ function CabVisual:getPolishedCFrame(bufferedPivot)
 
 	return CFrame.new(self.smoothedPosition + Vector3.new(0, self.visualBounceOffset, 0))
 		* getCFrameRotation(bufferedPivot)
+		* CFrame.Angles(self.bodySpringPitch, self.bodySpringYaw, self.bodySpringRoll)
 		* CFrame.Angles(0, 0, dynamicRoll)
 		* wheeliePivot
 end
@@ -586,6 +674,14 @@ function CabVisual:update(rawPivot, dt)
 	end
 
 	local bufferedPivot = self:getBufferedPivot(rawPivot)
+	if bufferedPivot.Position.X ~= bufferedPivot.Position.X
+		or bufferedPivot.Position.Y ~= bufferedPivot.Position.Y
+		or bufferedPivot.Position.Z ~= bufferedPivot.Position.Z
+	then
+		self:restoreSourceVisuals()
+		return nil
+	end
+
 	if not self.smoothedPosition then
 		self.smoothedPosition = bufferedPivot.Position
 	end
@@ -596,6 +692,8 @@ function CabVisual:update(rawPivot, dt)
 
 	if snapped then
 		self.smoothedPosition = bufferedPivot.Position
+		previousPosition = self.smoothedPosition
+		self:resetBodySpring()
 	else
 		self.smoothedPosition = self.smoothedPosition:Lerp(
 			bufferedPivot.Position,
