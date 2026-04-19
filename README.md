@@ -62,6 +62,8 @@ Then restart Studio. You will get these tools:
 
 Road Editor panel actions:
 - New Spline
+- Prev Spline
+- Next Spline
 - Curve Mode: Open/Closed (toggle)
 - Add Point (Camera Hit)
 - Add Point (From Selection)
@@ -81,6 +83,8 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
 ### Fast road-iteration workflow
 
 1. Click **New Spline**.
+   - This creates a new spline and keeps existing splines intact.
+   - Use **Prev Spline** / **Next Spline** to switch active spline.
 2. Use **Add Point** repeatedly to lay out a path.
 3. Click **Snap Points** to drop points to terrain.
 4. Click **Rebuild Road (Mesh)** to generate a smooth road ribbon (EditableMesh). If EditableMesh is unavailable, it falls back to primitive strips.

@@ -8,8 +8,10 @@ local Selection = game:GetService("Selection")
 local Workspace = game:GetService("Workspace")
 
 local ROOT_NAME = "Cab87RoadEditor"
+local SPLINES_NAME = "Splines"
 local POINTS_NAME = "RoadPoints"
 local MESH_NAME = "RoadMesh"
+local ACTIVE_SPLINE_ATTR = "ActiveSpline"
 
 local ROAD_WIDTH = 28
 local ROAD_THICKNESS = 1.2
@@ -32,28 +34,170 @@ local function getOrCreateRoot()
 	return root
 end
 
-local function getOrCreatePointsFolder()
+local function getOrCreateSplinesFolder()
 	local root = getOrCreateRoot()
-	local folder = root:FindFirstChild(POINTS_NAME)
+	local folder = root:FindFirstChild(SPLINES_NAME)
 	if folder and folder:IsA("Folder") then
 		return folder
 	end
 	folder = Instance.new("Folder")
-	folder.Name = POINTS_NAME
+	folder.Name = SPLINES_NAME
 	folder.Parent = root
 	return folder
 end
 
-local function getOrCreateRoadModel()
-	local root = getOrCreateRoot()
-	local model = root:FindFirstChild(MESH_NAME)
-	if model and model:IsA("Model") then
-		return model
+local function getSplineFromControlPoint(inst)
+	if not inst or not inst:IsA("BasePart") then
+		return nil
 	end
-	model = Instance.new("Model")
-	model.Name = MESH_NAME
-	model.Parent = root
-	return model
+	local pointsFolder = inst.Parent
+	if not pointsFolder or pointsFolder.Name ~= POINTS_NAME then
+		return nil
+	end
+	local spline = pointsFolder.Parent
+	if spline and spline:IsA("Model") and spline.Parent == getOrCreateSplinesFolder() then
+		return spline
+	end
+	return nil
+end
+
+local function ensureSplineChildren(spline)
+	local points = spline:FindFirstChild(POINTS_NAME)
+	if not (points and points:IsA("Folder")) then
+		points = Instance.new("Folder")
+		points.Name = POINTS_NAME
+		points.Parent = spline
+	end
+
+	local road = spline:FindFirstChild(MESH_NAME)
+	if not (road and road:IsA("Model")) then
+		road = Instance.new("Model")
+		road.Name = MESH_NAME
+		road.Parent = spline
+	end
+
+	if spline:GetAttribute("ClosedCurve") == nil then
+		spline:SetAttribute("ClosedCurve", false)
+	end
+
+	return points, road
+end
+
+local function sortedSplines()
+	local splines = {}
+	for _, child in ipairs(getOrCreateSplinesFolder():GetChildren()) do
+		if child:IsA("Model") then
+			table.insert(splines, child)
+		end
+	end
+	table.sort(splines, function(a, b)
+		return a.Name < b.Name
+	end)
+	return splines
+end
+
+local function nextSplineName()
+	local maxN = 0
+	for _, spline in ipairs(sortedSplines()) do
+		local n = tonumber(string.match(spline.Name, "^Spline(%d+)$"))
+		if n and n > maxN then
+			maxN = n
+		end
+	end
+	return string.format("Spline%03d", maxN + 1)
+end
+
+local function createSpline(name)
+	local spline = Instance.new("Model")
+	spline.Name = name or nextSplineName()
+	spline.Parent = getOrCreateSplinesFolder()
+	ensureSplineChildren(spline)
+	return spline
+end
+
+local function getActiveSpline()
+	local root = getOrCreateRoot()
+	local splinesFolder = getOrCreateSplinesFolder()
+
+	-- One-time migration from older single-spline layout.
+	if #splinesFolder:GetChildren() == 0 then
+		local legacyPoints = root:FindFirstChild(POINTS_NAME)
+		local legacyRoad = root:FindFirstChild(MESH_NAME)
+		if (legacyPoints and legacyPoints:IsA("Folder")) or (legacyRoad and legacyRoad:IsA("Model")) then
+			local migrated = createSpline("Spline001")
+			if legacyPoints and legacyPoints:IsA("Folder") then
+				legacyPoints.Parent = migrated
+			end
+			if legacyRoad and legacyRoad:IsA("Model") then
+				legacyRoad.Parent = migrated
+			end
+			ensureSplineChildren(migrated)
+			root:SetAttribute(ACTIVE_SPLINE_ATTR, migrated.Name)
+		end
+	end
+
+	local activeName = root:GetAttribute(ACTIVE_SPLINE_ATTR)
+	if activeName then
+		local s = splinesFolder:FindFirstChild(activeName)
+		if s and s:IsA("Model") then
+			ensureSplineChildren(s)
+			return s
+		end
+	end
+
+	local existing = sortedSplines()
+	local spline = existing[1] or createSpline()
+	root:SetAttribute(ACTIVE_SPLINE_ATTR, spline.Name)
+	return spline
+end
+
+local function setActiveSpline(spline)
+	if not (spline and spline:IsA("Model")) then
+		return nil
+	end
+	if spline.Parent ~= getOrCreateSplinesFolder() then
+		return nil
+	end
+	getOrCreateRoot():SetAttribute(ACTIVE_SPLINE_ATTR, spline.Name)
+	ensureSplineChildren(spline)
+	return spline
+end
+
+local function createAndActivateSpline()
+	local spline = createSpline()
+	setActiveSpline(spline)
+	return spline
+end
+
+local function cycleActiveSpline(direction)
+	local splines = sortedSplines()
+	if #splines == 0 then
+		local created = createAndActivateSpline()
+		return created
+	end
+
+	local active = getActiveSpline()
+	local idx = 1
+	for i, s in ipairs(splines) do
+		if s == active then
+			idx = i
+			break
+		end
+	end
+
+	local nextIdx = ((idx - 1 + direction) % #splines) + 1
+	setActiveSpline(splines[nextIdx])
+	return splines[nextIdx]
+end
+
+local function getOrCreatePointsFolder()
+	local points = ensureSplineChildren(getActiveSpline())
+	return points
+end
+
+local function getOrCreateRoadModel()
+	local _, road = ensureSplineChildren(getActiveSpline())
+	return road
 end
 
 local function clearFolder(folder)
@@ -87,10 +231,7 @@ local function renumberPoints()
 end
 
 local function isControlPoint(inst)
-	if not inst or not inst:IsA("BasePart") then
-		return false
-	end
-	return inst.Parent == getOrCreatePointsFolder()
+	return getSplineFromControlPoint(inst) ~= nil
 end
 
 local function raycastFromCamera(maxDistance)
@@ -154,13 +295,13 @@ local function addControlPoint(pos)
 end
 
 local function isClosedCurve()
-	local root = getOrCreateRoot()
-	return root:GetAttribute("ClosedCurve") == true
+	local spline = getActiveSpline()
+	return spline:GetAttribute("ClosedCurve") == true
 end
 
 local function setClosedCurve(value)
-	local root = getOrCreateRoot()
-	root:SetAttribute("ClosedCurve", value and true or false)
+	local spline = getActiveSpline()
+	spline:SetAttribute("ClosedCurve", value and true or false)
 end
 
 local function catmullRom(p0, p1, p2, p3, t)
@@ -375,9 +516,11 @@ local function removeSelectedPoint()
 		return false
 	end
 	local target = selection[1]
-	if not isControlPoint(target) then
+	local spline = getSplineFromControlPoint(target)
+	if not spline then
 		return false
 	end
+	setActiveSpline(spline)
 	target:Destroy()
 	renumberPoints()
 	return true
@@ -389,9 +532,11 @@ local function selectedPointWithIndex()
 		return nil, nil, sortedPoints()
 	end
 	local target = selection[1]
-	if not isControlPoint(target) then
+	local spline = getSplineFromControlPoint(target)
+	if not spline then
 		return nil, nil, sortedPoints()
 	end
+	setActiveSpline(spline)
 	local points = sortedPoints()
 	for i, p in ipairs(points) do
 		if p == target then
@@ -524,7 +669,9 @@ local function updateStatus(extra)
 	local points = #sortedPoints()
 	local segments = countSegments()
 	local curveMode = isClosedCurve() and "Closed" or "Open"
-	local base = string.format("Points: %d | Road parts: %d | Curve: %s", points, segments, curveMode)
+	local active = getActiveSpline()
+	local splineCount = #sortedSplines()
+	local base = string.format("Spline: %s (%d total) | Points: %d | Road parts: %d | Curve: %s", active.Name, splineCount, points, segments, curveMode)
 	if extra and #extra > 0 then
 		status.Text = base .. "\n" .. extra
 	else
@@ -533,6 +680,8 @@ local function updateStatus(extra)
 end
 
 local btnNew = makeButton("New Spline")
+local btnPrevSpline = makeButton("Prev Spline")
+local btnNextSpline = makeButton("Next Spline")
 local btnCloseCurve = makeButton("Curve Mode: Open")
 local btnAddCamera = makeButton("Add Point (Camera Hit)")
 local btnAddSelected = makeButton("Add Point (From Selection)")
@@ -614,12 +763,25 @@ end
 
 btnNew.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before new spline")
-	clearFolder(getOrCreatePointsFolder())
-	clearFolder(getOrCreateRoadModel())
-	setClosedCurve(false)
+	local spline = createAndActivateSpline()
 	ChangeHistoryService:SetWaypoint("cab87 roads after new spline")
 	refreshCurveModeButton()
-	updateStatus("Started new spline")
+	refreshPointWatchers()
+	updateStatus("Started " .. spline.Name)
+end)
+
+btnPrevSpline.MouseButton1Click:Connect(function()
+	local spline = cycleActiveSpline(-1)
+	refreshCurveModeButton()
+	refreshPointWatchers()
+	updateStatus("Active spline: " .. spline.Name)
+end)
+
+btnNextSpline.MouseButton1Click:Connect(function()
+	local spline = cycleActiveSpline(1)
+	refreshCurveModeButton()
+	refreshPointWatchers()
+	updateStatus("Active spline: " .. spline.Name)
 end)
 
 btnCloseCurve.MouseButton1Click:Connect(function()
@@ -638,6 +800,8 @@ btnAddCamera.MouseButton1Click:Connect(function()
 	local p = addControlPoint(pos)
 	ChangeHistoryService:SetWaypoint("cab87 roads after add point camera")
 	Selection:Set({ p })
+	refreshPointWatchers()
+	scheduleAutoRebuild("point-added")
 	updateStatus("Added " .. p.Name)
 end)
 
@@ -651,6 +815,8 @@ btnAddSelected.MouseButton1Click:Connect(function()
 	local p = addControlPoint(sel[1].Position)
 	ChangeHistoryService:SetWaypoint("cab87 roads after add point selection")
 	Selection:Set({ p })
+	refreshPointWatchers()
+	scheduleAutoRebuild("point-added")
 	updateStatus("Added " .. p.Name .. " from selection")
 end)
 
@@ -702,6 +868,8 @@ btnRemoveSel.MouseButton1Click:Connect(function()
 	local ok = removeSelectedPoint()
 	ChangeHistoryService:SetWaypoint("cab87 roads after remove selected")
 	if ok then
+		refreshPointWatchers()
+		scheduleAutoRebuild("point-removed")
 		updateStatus("Removed selected point")
 	else
 		updateStatus("Select a control point to remove")
@@ -713,6 +881,8 @@ btnRemoveLast.MouseButton1Click:Connect(function()
 	local ok = removeLastPoint()
 	ChangeHistoryService:SetWaypoint("cab87 roads after remove last")
 	if ok then
+		refreshPointWatchers()
+		scheduleAutoRebuild("point-removed")
 		updateStatus("Removed last point")
 	else
 		updateStatus("No points to remove")
@@ -756,19 +926,32 @@ toggleButton.Click:Connect(function()
 end)
 
 Selection.SelectionChanged:Connect(function()
+	local sel = Selection:Get()
+	if #sel > 0 then
+		local spline = getSplineFromControlPoint(sel[1])
+		if spline then
+			setActiveSpline(spline)
+			refreshCurveModeButton()
+			refreshPointWatchers()
+		end
+	end
 	updateStatus(nil)
 end)
 
-local pointsFolder = getOrCreatePointsFolder()
-pointsFolder.ChildAdded:Connect(function()
-	refreshPointWatchers()
-	scheduleAutoRebuild("point-added")
-	updateStatus(nil)
+local splinesFolder = getOrCreateSplinesFolder()
+splinesFolder.DescendantAdded:Connect(function(inst)
+	if isControlPoint(inst) then
+		refreshPointWatchers()
+		scheduleAutoRebuild("point-added")
+		updateStatus(nil)
+	end
 end)
-pointsFolder.ChildRemoved:Connect(function()
-	refreshPointWatchers()
-	scheduleAutoRebuild("point-removed")
-	updateStatus(nil)
+splinesFolder.DescendantRemoving:Connect(function(inst)
+	if isControlPoint(inst) then
+		refreshPointWatchers()
+		scheduleAutoRebuild("point-removed")
+		updateStatus(nil)
+	end
 end)
 
 refreshPointWatchers()
