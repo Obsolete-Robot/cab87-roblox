@@ -465,6 +465,21 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end
 	end
 
+	local function triggerCrashFeedback(player, impactSpeed)
+		if not player or not cameraEventRemote or crashShakeCooldown > 0 then
+			return
+		end
+
+		local minShakeSpeed = Config.cameraCrashShakeMinSpeed
+		local maxShakeSpeed = math.max(Config.cameraCrashShakeMaxSpeed, minShakeSpeed + 0.001)
+		local intensity = math.clamp((impactSpeed - minShakeSpeed) / (maxShakeSpeed - minShakeSpeed), 0, 1)
+
+		if intensity > 0 then
+			cameraEventRemote:FireClient(player, "Crash", math.max(intensity, 0.22))
+			crashShakeCooldown = math.max(Config.cameraCrashShakeCooldown, 0)
+		end
+	end
+
 	local function hideCharacterVisualInstance(instance, state)
 		if state.instances[instance] then
 			return
@@ -618,6 +633,15 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		return Vector3.new(limited.X, vector.Y, limited.Z)
 	end
 
+	local function getHorizontalUnit(vector)
+		local horizontal = Vector3.new(vector.X, 0, vector.Z)
+		if horizontal.Magnitude <= 0.001 then
+			return nil
+		end
+
+		return horizontal.Unit
+	end
+
 	local function getSurfaceSample(samplePosition)
 		local origin = samplePosition + Vector3.new(0, Config.carGroundProbeHeight, 0)
 		local result = Workspace:Raycast(
@@ -627,7 +651,11 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		)
 
 		if result then
-			return result.Position.Y + Config.carRideHeight
+			return {
+				height = result.Position.Y + Config.carRideHeight,
+				instance = result.Instance,
+				normal = result.Normal,
+			}
 		end
 
 		return nil
@@ -648,16 +676,21 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		local leftCount = 0
 		local rightTotal = 0
 		local rightCount = 0
+		local highestSample = nil
 
 		local function addSample(localX, localZ)
 			local samplePosition = currentPosition + right * localX + forward * localZ
-			local sampleHeight = getSurfaceSample(Vector3.new(samplePosition.X, currentPosition.Y, samplePosition.Z))
-			if not sampleHeight then
+			local sample = getSurfaceSample(Vector3.new(samplePosition.X, currentPosition.Y, samplePosition.Z))
+			if not sample then
 				return
 			end
 
+			local sampleHeight = sample.height
 			totalHeight += sampleHeight
 			contactCount += 1
+			if not highestSample or sampleHeight > highestSample.height then
+				highestSample = sample
+			end
 
 			if localZ >= 0 then
 				frontTotal += sampleHeight
@@ -714,6 +747,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			targetPitch = targetPitch,
 			targetRoll = targetRoll,
 			contacts = contactCount,
+			highestSample = highestSample,
 		}
 	end
 
@@ -747,6 +781,35 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end
 
 		return scrapeDirection * deflectedSpeed * Config.carWallScrapeSpeedRetain, scrapeDirection
+	end
+
+	local function getGroundStepCollisionNormal(groundProfile, currentVelocity, currentYaw)
+		local velocityDirection = getHorizontalUnit(currentVelocity)
+		local sample = groundProfile and groundProfile.highestSample
+		local instance = sample and sample.instance
+
+		if instance and instance.Name == "JumpRamp" then
+			local rampForward = getHorizontalUnit(instance.CFrame.LookVector)
+			if rampForward and velocityDirection then
+				local approachDot = velocityDirection:Dot(rampForward)
+				if math.abs(approachDot) > 0.35 then
+					return if approachDot < 0 then rampForward else -rampForward
+				end
+			end
+		end
+
+		return velocityDirection and -velocityDirection or -yawToForward(currentYaw)
+	end
+
+	local function getGroundStepCrashVelocity(currentVelocity, normal)
+		local intoWall = currentVelocity:Dot(normal)
+		if intoWall >= 0 then
+			return currentVelocity
+		end
+
+		local tangentVelocity = currentVelocity - normal * intoWall
+		return tangentVelocity * Config.carCrashSlideRetain
+			+ normal * (-intoWall * Config.carCrashBounce)
 	end
 
 	local function resolveBuildingCollision(previousPosition, proposedPosition, currentVelocity)
@@ -1109,15 +1172,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			yaw = moveAngleToward(yaw, targetYaw, Config.carWallScrapeYawRate * dt)
 		end
 
-		if crashed and driver and cameraEventRemote and crashShakeCooldown <= 0 then
-			local minShakeSpeed = Config.cameraCrashShakeMinSpeed
-			local maxShakeSpeed = math.max(Config.cameraCrashShakeMaxSpeed, minShakeSpeed + 0.001)
-			local intensity = math.clamp((impactSpeed - minShakeSpeed) / (maxShakeSpeed - minShakeSpeed), 0, 1)
-
-			if intensity > 0 then
-				cameraEventRemote:FireClient(driver, "Crash", math.max(intensity, 0.22))
-				crashShakeCooldown = math.max(Config.cameraCrashShakeCooldown, 0)
-			end
+		if crashed then
+			triggerCrashFeedback(driver, impactSpeed)
 		end
 
 		local previousY = position.Y
@@ -1127,12 +1183,22 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		local targetRoll = 0
 
 		if grounded then
+			local stepUp = targetY - previousY
 			if not groundProfile or previousY - targetY > Config.carGroundSnapDistance then
 				pendingFallResetPose = getSafeFallResetPose()
 				grounded = false
 				verticalVelocity = math.max(verticalVelocity, 8)
 				targetPitch = visualPitch
 				targetRoll = visualRoll
+			elseif stepUp > Config.carGroundMaxStepUp then
+				local normal = getGroundStepCollisionNormal(groundProfile, velocity, yaw)
+				position = previousPosition
+				velocity = getGroundStepCrashVelocity(velocity, normal)
+				verticalVelocity = 0
+				boostTimer = 0
+				targetPitch = visualPitch
+				targetRoll = visualRoll
+				triggerCrashFeedback(driver, impactSpeed)
 			else
 				position = Vector3.new(position.X, targetY, position.Z)
 				local riseVelocity = (position.Y - previousY) / dt
