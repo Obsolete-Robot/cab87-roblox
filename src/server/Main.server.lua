@@ -415,6 +415,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local visualRoll = 0
 	local visualDriftRoll = 0
 	local visualBoostPitch = 0
+	local airPitchVelocity = 0
+	local airRollVelocity = 0
 	local reverseHoldTime = 0
 	local driftChargeTime = 0
 	local driftBoostReady = false
@@ -749,6 +751,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			visualRoll = 0
 			visualDriftRoll = 0
 			visualBoostPitch = 0
+			airPitchVelocity = 0
+			airRollVelocity = 0
 			reverseHoldTime = 0
 			driftChargeTime = 0
 			driftBoostReady = false
@@ -916,15 +920,29 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			if not groundProfile or previousY - targetY > Config.carGroundSnapDistance then
 				grounded = false
 				verticalVelocity = math.max(verticalVelocity, 8)
+				targetPitch = visualPitch
+				targetRoll = visualRoll
 			else
 				position = Vector3.new(position.X, targetY, position.Z)
 				local riseVelocity = (position.Y - previousY) / dt
 				verticalVelocity = math.max(riseVelocity, 0)
+				airPitchVelocity = 0
+				airRollVelocity = 0
 				targetPitch = groundProfile.targetPitch
 				targetRoll = groundProfile.targetRoll
 			end
 		else
 			local gravity = if verticalVelocity > 0 then Config.carGravityUp else Config.carGravityDown
+			local maxPitch = math.rad(Config.carMaxPitchDegrees)
+			local pitchGravityAlpha = if maxPitch > 0
+				then math.clamp(visualPitch / maxPitch, -1, 1)
+				else 0
+			if pitchGravityAlpha < 0 then
+				gravity *= 1 + (Config.carAirPitchUpGravityMultiplier - 1) * -pitchGravityAlpha
+			elseif pitchGravityAlpha > 0 then
+				gravity *= 1 + (Config.carAirPitchDownGravityMultiplier - 1) * pitchGravityAlpha
+			end
+
 			verticalVelocity -= gravity * dt
 			position = Vector3.new(position.X, position.Y + verticalVelocity * dt, position.Z)
 
@@ -933,6 +951,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				position = Vector3.new(position.X, targetY, position.Z)
 				verticalVelocity = 0
 				grounded = true
+				airPitchVelocity = 0
+				airRollVelocity = 0
 				targetPitch = groundProfile.targetPitch
 				targetRoll = groundProfile.targetRoll
 
@@ -966,25 +986,24 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 					end
 				end
 			else
-				local maxPitch = math.rad(Config.carMaxPitchDegrees)
 				local maxRoll = math.rad(Config.carGroundMaxRollDegrees)
-				targetPitch = math.clamp(
-					throttle * math.rad(Config.carAirPitchInputDegrees),
-					-maxPitch,
-					maxPitch
-				)
-				targetRoll = math.clamp(
-					steer * math.rad(Config.carAirRollInputDegrees),
-					-maxRoll,
-					maxRoll
-				)
+				local airResponse = math.clamp(Config.carAirRotationFollow * dt, 0, 1)
+				local targetPitchVelocity = -throttle * math.rad(Config.carAirPitchInputDegrees)
+				local targetRollVelocity = steer * math.rad(Config.carAirRollInputDegrees)
+				airPitchVelocity += (targetPitchVelocity - airPitchVelocity) * airResponse
+				airRollVelocity += (targetRollVelocity - airRollVelocity) * airResponse
+				targetPitch = math.clamp(visualPitch + airPitchVelocity * dt, -maxPitch, maxPitch)
+				targetRoll = math.clamp(visualRoll + airRollVelocity * dt, -maxRoll, maxRoll)
 			end
 		end
 
-		local pitchFollow = if grounded then Config.carPitchFollow else Config.carAirRotationFollow
-		local rollFollow = if grounded then Config.carRollFollow else Config.carAirRotationFollow
-		visualPitch += (targetPitch - visualPitch) * math.clamp(pitchFollow * dt, 0, 1)
-		visualRoll += (targetRoll - visualRoll) * math.clamp(rollFollow * dt, 0, 1)
+		if grounded then
+			visualPitch += (targetPitch - visualPitch) * math.clamp(Config.carPitchFollow * dt, 0, 1)
+			visualRoll += (targetRoll - visualRoll) * math.clamp(Config.carRollFollow * dt, 0, 1)
+		else
+			visualPitch = targetPitch
+			visualRoll = targetRoll
+		end
 		local targetDriftRoll = 0
 		if drifting and math.abs(steer) > 0.01 then
 			local fullLeanSpeed = math.max(Config.carDriftLeanFullSpeed, Config.carDriftMinSpeed + 0.001)
