@@ -1,4 +1,5 @@
 local Players = game:GetService("Players")
+local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -238,6 +239,14 @@ local function formatDebugValue(value, property)
 	return string.format("%.3f", value)
 end
 
+local function getDebugPropertyTab(property)
+	if string.sub(property.key, 1, 6) == "camera" then
+		return "Camera"
+	end
+
+	return "Cab"
+end
+
 local function createDebugPanel()
 	if not isDebugPanelAvailable() then
 		return
@@ -264,9 +273,22 @@ local function createDebugPanel()
 		return
 	end
 
+	local tabNames = { "Cab", "Camera" }
+	local propertiesByTab = {
+		Cab = {},
+		Camera = {},
+	}
+
+	for _, property in ipairs(properties) do
+		table.insert(propertiesByTab[getDebugPropertyTab(property)], property)
+	end
+
 	local debugValues = {}
 	local rowsByKey = {}
 	local activeSlider = nil
+	local activeTab = if #propertiesByTab.Cab > 0 then "Cab" else "Camera"
+	local scrollsByTab = {}
+	local tabButtons = {}
 
 	local toggle = Instance.new("TextButton")
 	toggle.Name = "DebugToggle"
@@ -305,23 +327,40 @@ local function createDebugPanel()
 	title.Name = "Title"
 	title.BackgroundTransparency = 1
 	title.Position = UDim2.fromOffset(12, 10)
-	title.Size = UDim2.new(1, -128, 0, 28)
+	title.Size = UDim2.new(1, -216, 0, 28)
 	title.Font = Enum.Font.GothamBold
-	title.Text = "Cab Tuning"
+	title.Text = "Debug Tuning"
 	title.TextColor3 = Color3.fromRGB(245, 245, 245)
 	title.TextSize = 18
 	title.TextXAlignment = Enum.TextXAlignment.Left
 	title.Parent = panel
 
+	local copyButton = Instance.new("TextButton")
+	copyButton.Name = "CopyTab"
+	copyButton.AnchorPoint = Vector2.new(1, 0)
+	copyButton.Position = UDim2.new(1, -104, 0, 10)
+	copyButton.Size = UDim2.fromOffset(86, 28)
+	copyButton.BackgroundColor3 = Color3.fromRGB(45, 49, 56)
+	copyButton.BorderSizePixel = 0
+	copyButton.Font = Enum.Font.GothamBold
+	copyButton.Text = "Copy"
+	copyButton.TextColor3 = Color3.fromRGB(245, 245, 245)
+	copyButton.TextSize = 13
+	copyButton.Parent = panel
+
+	local copyCorner = Instance.new("UICorner")
+	copyCorner.CornerRadius = UDim.new(0, 6)
+	copyCorner.Parent = copyButton
+
 	local resetAll = Instance.new("TextButton")
 	resetAll.Name = "ResetAll"
 	resetAll.AnchorPoint = Vector2.new(1, 0)
 	resetAll.Position = UDim2.new(1, -12, 0, 10)
-	resetAll.Size = UDim2.fromOffset(92, 28)
+	resetAll.Size = UDim2.fromOffset(80, 28)
 	resetAll.BackgroundColor3 = Color3.fromRGB(45, 49, 56)
 	resetAll.BorderSizePixel = 0
 	resetAll.Font = Enum.Font.GothamBold
-	resetAll.Text = "Reset All"
+	resetAll.Text = "Reset"
 	resetAll.TextColor3 = Color3.fromRGB(245, 245, 245)
 	resetAll.TextSize = 13
 	resetAll.Parent = panel
@@ -330,21 +369,120 @@ local function createDebugPanel()
 	resetAllCorner.CornerRadius = UDim.new(0, 6)
 	resetAllCorner.Parent = resetAll
 
-	local scroll = Instance.new("ScrollingFrame")
-	scroll.Name = "TuningRows"
-	scroll.Position = UDim2.fromOffset(10, 48)
-	scroll.Size = UDim2.new(1, -20, 1, -58)
-	scroll.BackgroundTransparency = 1
-	scroll.BorderSizePixel = 0
-	scroll.ScrollBarThickness = 6
-	scroll.CanvasSize = UDim2.fromOffset(0, 0)
-	scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	scroll.Parent = panel
+	local tabBar = Instance.new("Frame")
+	tabBar.Name = "Tabs"
+	tabBar.Position = UDim2.fromOffset(10, 48)
+	tabBar.Size = UDim2.new(1, -20, 0, 30)
+	tabBar.BackgroundTransparency = 1
+	tabBar.Parent = panel
 
-	local list = Instance.new("UIListLayout")
-	list.Padding = UDim.new(0, 8)
-	list.SortOrder = Enum.SortOrder.LayoutOrder
-	list.Parent = scroll
+	local tabLayout = Instance.new("UIListLayout")
+	tabLayout.FillDirection = Enum.FillDirection.Horizontal
+	tabLayout.Padding = UDim.new(0, 8)
+	tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	tabLayout.Parent = tabBar
+
+	local copyBox = Instance.new("TextBox")
+	copyBox.Name = "CopyText"
+	copyBox.Position = UDim2.new(0, 10, 1, -106)
+	copyBox.Size = UDim2.new(1, -20, 0, 96)
+	copyBox.BackgroundColor3 = Color3.fromRGB(22, 24, 28)
+	copyBox.BorderSizePixel = 0
+	copyBox.ClearTextOnFocus = false
+	copyBox.Font = Enum.Font.Code
+	copyBox.MultiLine = true
+	copyBox.Text = ""
+	copyBox.TextColor3 = Color3.fromRGB(235, 236, 238)
+	copyBox.TextEditable = true
+	copyBox.TextSize = 12
+	copyBox.TextXAlignment = Enum.TextXAlignment.Left
+	copyBox.TextYAlignment = Enum.TextYAlignment.Top
+	copyBox.Visible = false
+	copyBox.Parent = panel
+
+	local copyBoxCorner = Instance.new("UICorner")
+	copyBoxCorner.CornerRadius = UDim.new(0, 6)
+	copyBoxCorner.Parent = copyBox
+
+	local function setCopyBoxVisible(visible)
+		copyBox.Visible = visible
+		local bottomOffset = if visible then 204 else 98
+		for _, scroll in pairs(scrollsByTab) do
+			scroll.Size = UDim2.new(1, -20, 1, -bottomOffset)
+		end
+	end
+
+	for _, tabName in ipairs(tabNames) do
+		local scroll = Instance.new("ScrollingFrame")
+		scroll.Name = tabName .. "TuningRows"
+		scroll.Position = UDim2.fromOffset(10, 88)
+		scroll.Size = UDim2.new(1, -20, 1, -98)
+		scroll.BackgroundTransparency = 1
+		scroll.BorderSizePixel = 0
+		scroll.ScrollBarThickness = 6
+		scroll.CanvasSize = UDim2.fromOffset(0, 0)
+		scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		scroll.Visible = tabName == activeTab
+		scroll.Parent = panel
+		scrollsByTab[tabName] = scroll
+
+		local list = Instance.new("UIListLayout")
+		list.Padding = UDim.new(0, 8)
+		list.SortOrder = Enum.SortOrder.LayoutOrder
+		list.Parent = scroll
+	end
+
+	local function setActiveTab(tabName)
+		activeTab = tabName
+		copyButton.Text = "Copy " .. activeTab
+		setCopyBoxVisible(false)
+
+		for _, scroll in pairs(scrollsByTab) do
+			scroll.Visible = false
+		end
+
+		local activeScroll = scrollsByTab[activeTab]
+		if activeScroll then
+			activeScroll.Visible = true
+		end
+
+		for buttonTabName, tabButton in pairs(tabButtons) do
+			local isActive = buttonTabName == activeTab
+			tabButton.BackgroundColor3 = if isActive
+				then Color3.fromRGB(255, 206, 38)
+				else Color3.fromRGB(45, 49, 56)
+			tabButton.TextColor3 = if isActive
+				then Color3.fromRGB(20, 20, 24)
+				else Color3.fromRGB(245, 245, 245)
+		end
+	end
+
+	for index, tabName in ipairs(tabNames) do
+		if #propertiesByTab[tabName] > 0 then
+			local tabButton = Instance.new("TextButton")
+			tabButton.Name = tabName .. "Tab"
+			tabButton.LayoutOrder = index
+			tabButton.Size = UDim2.new(0.5, -4, 1, 0)
+			tabButton.BackgroundColor3 = Color3.fromRGB(45, 49, 56)
+			tabButton.BorderSizePixel = 0
+			tabButton.Font = Enum.Font.GothamBold
+			tabButton.Text = tabName
+			tabButton.TextColor3 = Color3.fromRGB(245, 245, 245)
+			tabButton.TextSize = 13
+			tabButton.Parent = tabBar
+			tabButtons[tabName] = tabButton
+
+			local tabCorner = Instance.new("UICorner")
+			tabCorner.CornerRadius = UDim.new(0, 6)
+			tabCorner.Parent = tabButton
+
+			tabButton.MouseButton1Click:Connect(function()
+				setActiveTab(tabName)
+			end)
+		end
+	end
+
+	setActiveTab(activeTab)
 
 	local function updateRow(rowState)
 		local property = rowState.property
@@ -386,6 +524,52 @@ local function createDebugPanel()
 		updateRow(rowState)
 	end
 
+	local function buildTabCopyText(tabName)
+		local lines = { string.format("-- Cab87 %s tuning", tabName) }
+		for _, property in ipairs(propertiesByTab[tabName] or {}) do
+			local value = debugValues[property.key]
+			if type(value) ~= "number" then
+				value = normalizeDebugValue(Config[property.key], property) or property.min or 0
+			end
+
+			table.insert(lines, string.format("%s = %s,", property.key, formatDebugValue(value, property)))
+		end
+
+		return table.concat(lines, "\n")
+	end
+
+	local function trySetClipboard(text)
+		local ok = pcall(function()
+			GuiService:SetClipboard(text)
+		end)
+
+		return ok
+	end
+
+	local copyStatusVersion = 0
+	local function showCopyStatus(text)
+		copyStatusVersion += 1
+		local version = copyStatusVersion
+		copyButton.Text = text
+
+		task.delay(1.4, function()
+			if copyButton.Parent and copyStatusVersion == version then
+				copyButton.Text = "Copy " .. activeTab
+			end
+		end)
+	end
+
+	local function selectCopyText(text)
+		copyBox.Text = text
+		setCopyBoxVisible(true)
+		copyBox:CaptureFocus()
+
+		task.defer(function()
+			copyBox.SelectionStart = 1
+			copyBox.CursorPosition = #copyBox.Text + 1
+		end)
+	end
+
 	local function requestDebugValue(property, value)
 		local normalizedValue = normalizeDebugValue(value, property)
 		if normalizedValue == nil then
@@ -413,14 +597,14 @@ local function createDebugPanel()
 		updateSlider(rowState, input.Position.X)
 	end
 
-	local function buildRow(property, index)
+	local function buildRow(property, index, parent)
 		local row = Instance.new("Frame")
 		row.Name = property.key
 		row.LayoutOrder = index
 		row.Size = UDim2.new(1, -8, 0, 68)
 		row.BackgroundColor3 = Color3.fromRGB(30, 33, 38)
 		row.BorderSizePixel = 0
-		row.Parent = scroll
+		row.Parent = parent
 
 		local rowCorner = Instance.new("UICorner")
 		rowCorner.CornerRadius = UDim.new(0, 6)
@@ -554,12 +738,28 @@ local function createDebugPanel()
 		end)
 	end
 
-	for index, property in ipairs(properties) do
-		buildRow(property, index)
+	for _, tabName in ipairs(tabNames) do
+		local scroll = scrollsByTab[tabName]
+		for index, property in ipairs(propertiesByTab[tabName]) do
+			buildRow(property, index, scroll)
+		end
 	end
 
 	toggle.MouseButton1Click:Connect(function()
 		panel.Visible = not panel.Visible
+	end)
+
+	copyButton.MouseButton1Click:Connect(function()
+		local copyText = buildTabCopyText(activeTab)
+		copyBox.Text = copyText
+
+		if trySetClipboard(copyText) then
+			setCopyBoxVisible(false)
+			showCopyStatus("Copied")
+		else
+			selectCopyText(copyText)
+			showCopyStatus("Selected")
+		end
 	end)
 
 	resetAll.MouseButton1Click:Connect(function()

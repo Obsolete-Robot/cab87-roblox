@@ -14,12 +14,12 @@ local previousCameraType = nil
 local previousCameraSubject = nil
 local previousFieldOfView = nil
 local smoothedCabPosition = nil
+local visualCabCFrame = nil
 local cameraPosition = nil
 local cameraFocus = nil
 local cameraYaw = 0
-local currentDistance = 0
-local currentFov = 70
 local smoothedSpeed = 0
+local reverseMovementTime = 0
 local shakeTimeRemaining = 0
 local shakeDuration = 0
 local shakeIntensity = 0
@@ -84,6 +84,24 @@ local function getCabForward(pivot)
 	return horizontal.Unit
 end
 
+local function getCabServerPivotValue(cab)
+	local pivotValue = cab:FindFirstChild(Config.carServerPivotValueName)
+	if pivotValue and pivotValue:IsA("CFrameValue") then
+		return pivotValue
+	end
+
+	return nil
+end
+
+local function getCabTargetPivot(cab)
+	local pivotValue = getCabServerPivotValue(cab)
+	if pivotValue then
+		return pivotValue.Value
+	end
+
+	return cab:GetPivot()
+end
+
 local function getAlpha(responsiveness, dt)
 	if responsiveness <= 0 then
 		return 0
@@ -100,10 +118,20 @@ local function getSnapOrSmoothAlpha(responsiveness, dt)
 	return getAlpha(responsiveness, dt)
 end
 
-local function getSpeedAlpha(speed)
-	local minSpeed = getNumberConfig("cameraSpeedMin", 25)
-	local maxSpeed = math.max(getNumberConfig("cameraSpeedMax", 170), minSpeed + 0.001)
-	return math.clamp((speed - minSpeed) / (maxSpeed - minSpeed), 0, 1)
+local function easeInOutQuad(alpha)
+	alpha = math.clamp(alpha, 0, 1)
+	if alpha < 0.5 then
+		return 2 * alpha * alpha
+	end
+
+	local inverse = -2 * alpha + 2
+	return 1 - inverse * inverse * 0.5
+end
+
+local function getSpeedBlend(speed)
+	local minSpeed = getNumberConfig("cameraMinSpeed", 25)
+	local maxSpeed = math.max(getNumberConfig("cameraMaxSpeed", 170), minSpeed + 0.001)
+	return easeInOutQuad((speed - minSpeed) / (maxSpeed - minSpeed))
 end
 
 local function lerpNumber(fromValue, toValue, alpha)
@@ -165,6 +193,7 @@ end
 local function restoreCamera()
 	local camera = getCurrentCamera()
 	local humanoid = getHumanoid()
+	local cab = activeCab
 
 	if camera then
 		camera.CameraType = previousCameraType or Enum.CameraType.Custom
@@ -180,14 +209,20 @@ local function restoreCamera()
 		end
 	end
 
+	if cab and cab.Parent then
+		cab:PivotTo(getCabTargetPivot(cab))
+	end
+
 	activeCab = nil
 	previousCameraType = nil
 	previousCameraSubject = nil
 	previousFieldOfView = nil
 	smoothedCabPosition = nil
+	visualCabCFrame = nil
 	cameraPosition = nil
 	cameraFocus = nil
 	smoothedSpeed = 0
+	reverseMovementTime = 0
 	shakeTimeRemaining = 0
 	shakeIntensity = 0
 end
@@ -198,7 +233,7 @@ local function startCamera(cab)
 		return
 	end
 
-	local pivot = cab:GetPivot()
+	local pivot = getCabTargetPivot(cab)
 	local cabPosition = pivot.Position
 	local cabForward = getCabForward(pivot)
 
@@ -207,17 +242,36 @@ local function startCamera(cab)
 	previousCameraSubject = camera.CameraSubject
 	previousFieldOfView = camera.FieldOfView
 	smoothedCabPosition = cabPosition
+	visualCabCFrame = pivot
 	cameraPosition = nil
 	cameraFocus = nil
 	cameraYaw = vectorToYaw(cabForward)
-	currentDistance = getNumberConfig("cameraBaseDistance", 34)
-	currentFov = getNumberConfig("cameraBaseFov", 70)
 	smoothedSpeed = 0
+	reverseMovementTime = 0
 	shakeTimeRemaining = 0
 	shakeIntensity = 0
 
 	camera.CameraType = Enum.CameraType.Scriptable
-	camera.FieldOfView = currentFov
+	camera.FieldOfView = getNumberConfig("cameraMinFov", 70)
+end
+
+local function updateCabVisual(cab, targetPivot, dt)
+	if not visualCabCFrame then
+		visualCabCFrame = targetPivot
+	end
+
+	local snapDistance = getNumberConfig("carVisualSnapDistance", 45)
+	local distance = (targetPivot.Position - visualCabCFrame.Position).Magnitude
+	if distance > snapDistance then
+		visualCabCFrame = targetPivot
+	else
+		visualCabCFrame = visualCabCFrame:Lerp(
+			targetPivot,
+			getSnapOrSmoothAlpha(getNumberConfig("carVisualResponsiveness", 26), dt)
+		)
+	end
+
+	cab:PivotTo(visualCabCFrame)
 end
 
 local function updateActiveCamera(dt)
@@ -232,7 +286,9 @@ local function updateActiveCamera(dt)
 		return
 	end
 
-	local pivot = activeCab:GetPivot()
+	local pivot = getCabTargetPivot(activeCab)
+	updateCabVisual(activeCab, pivot, dt)
+
 	local replicatedCabPosition = pivot.Position
 
 	if not smoothedCabPosition then
@@ -255,42 +311,51 @@ local function updateActiveCamera(dt)
 	local cabForward = getCabForward(pivot)
 	local targetForward = cabForward
 	if rawSpeed >= getNumberConfig("cameraMovementDirectionMinSpeed", 6) and horizontalDelta.Magnitude > 0.001 then
-		targetForward = horizontalDelta.Unit
+		local movementForward = horizontalDelta.Unit
+		local movingBackward = movementForward:Dot(cabForward) < -0.35
+
+		if movingBackward then
+			reverseMovementTime += dt
+
+			if reverseMovementTime >= getNumberConfig("cameraReverseLookDelay", 0.6) then
+				targetForward = movementForward
+			end
+		else
+			reverseMovementTime = 0
+			targetForward = movementForward
+		end
+	else
+		reverseMovementTime = 0
 	end
 
 	local targetYaw = vectorToYaw(targetForward)
 	cameraYaw += shortestAngle(cameraYaw, targetYaw) * getAlpha(getNumberConfig("cameraYawResponsiveness", 4), dt)
 
 	local forward = yawToForward(cameraYaw)
-	local speedBlend = getSpeedAlpha(smoothedSpeed)
-	local baseDistance = getNumberConfig("cameraBaseDistance", 34)
-	local fastDistance = getNumberConfig("cameraFastDistance", 48)
-	local targetDistance = lerpNumber(baseDistance, fastDistance, speedBlend)
+	local speedBlend = getSpeedBlend(smoothedSpeed)
+	local targetDistance = lerpNumber(
+		getNumberConfig("cameraMinDistance", 34),
+		getNumberConfig("cameraMaxDistance", 48),
+		speedBlend
+	)
 	local targetFov = lerpNumber(
-		getNumberConfig("cameraBaseFov", 70),
-		getNumberConfig("cameraFastFov", 86),
+		getNumberConfig("cameraMinFov", 70),
+		getNumberConfig("cameraMaxFov", 86),
+		speedBlend
+	)
+	local targetHeight = lerpNumber(
+		getNumberConfig("cameraMinHeight", 13),
+		getNumberConfig("cameraMaxHeight", 13),
 		speedBlend
 	)
 
-	currentDistance = lerpNumber(
-		currentDistance,
-		targetDistance,
-		getAlpha(getNumberConfig("cameraDistanceResponsiveness", 7), dt)
-	)
-	currentFov = lerpNumber(
-		currentFov,
-		targetFov,
-		getAlpha(getNumberConfig("cameraFovResponsiveness", 6), dt)
-	)
-
 	local lookAhead = getNumberConfig("cameraLookAheadDistance", 8)
-		+ getNumberConfig("cameraSpeedLookAheadDistance", 16) * speedBlend
 	local desiredFocus = smoothedCabPosition
 		+ UP * getNumberConfig("cameraLookHeight", 4.5)
 		+ forward * lookAhead
 	local desiredPosition = smoothedCabPosition
-		+ UP * getNumberConfig("cameraHeight", 13)
-		- forward * currentDistance
+		+ UP * targetHeight
+		- forward * targetDistance
 
 	local positionAlpha = getAlpha(getNumberConfig("cameraPositionResponsiveness", 9), dt)
 	if not cameraPosition then
@@ -306,7 +371,7 @@ local function updateActiveCamera(dt)
 	end
 
 	camera.CameraType = Enum.CameraType.Scriptable
-	camera.FieldOfView = currentFov
+	camera.FieldOfView = targetFov
 
 	local baseCFrame = CFrame.lookAt(cameraPosition, cameraFocus, UP)
 	camera.CFrame = getShakeCFrame(dt, baseCFrame)
@@ -316,7 +381,7 @@ task.spawn(function()
 	local cameraEventRemote = ReplicatedStorage:WaitForChild(Config.cameraEventRemoteName, 10)
 	if cameraEventRemote and cameraEventRemote:IsA("RemoteEvent") then
 		cameraEventRemote.OnClientEvent:Connect(function(action, intensity)
-			if action == "Crash" and activeCab then
+			if (action == "Crash" or action == "Land" or action == "Shake") and activeCab then
 				triggerCrashShake(intensity)
 			end
 		end)

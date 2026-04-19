@@ -384,6 +384,11 @@ local function createCab(world)
 	car.PrimaryPart = body
 	car:PivotTo(CFrame.new(Config.carSpawn))
 
+	local serverPivot = Instance.new("CFrameValue")
+	serverPivot.Name = Config.carServerPivotValueName
+	serverPivot.Value = car:GetPivot()
+	serverPivot.Parent = car
+
 	local parts = {}
 	for _, item in ipairs(car:GetDescendants()) do
 		if item:IsA("BasePart") then
@@ -409,11 +414,13 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local visualPitch = 0
 	local visualRoll = 0
 	local visualDriftRoll = 0
+	local visualBoostPitch = 0
 	local reverseHoldTime = 0
 	local driftChargeTime = 0
 	local driftBoostReady = false
 	local driftInputWasHeld = false
 	local boostTimer = 0
+	local boostWheelieTimer = 0
 	local driverInput = {}
 	local smokeState = "off"
 	local lastOccupant = nil
@@ -422,6 +429,28 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
 	raycastParams.FilterDescendantsInstances = driveSurfaces
+
+	local serverPivotValue = car:FindFirstChild(Config.carServerPivotValueName)
+	if serverPivotValue and not serverPivotValue:IsA("CFrameValue") then
+		serverPivotValue:Destroy()
+		serverPivotValue = nil
+	end
+
+	if not serverPivotValue then
+		serverPivotValue = Instance.new("CFrameValue")
+		serverPivotValue.Name = Config.carServerPivotValueName
+		serverPivotValue.Parent = car
+	end
+
+	local function triggerBoostFeedback(player)
+		if Config.carBoostWheelieDuration > 0 and Config.carBoostWheelieDegrees > 0 then
+			boostWheelieTimer = math.max(boostWheelieTimer, Config.carBoostWheelieDuration)
+		end
+
+		if player and cameraEventRemote and Config.cameraBoostShakeIntensity > 0 then
+			cameraEventRemote:FireClient(player, "Shake", Config.cameraBoostShakeIntensity)
+		end
+	end
 
 	driveInputRemote.OnServerEvent:Connect(function(player, action, throttle, steer, drift)
 		local character = player.Character
@@ -592,6 +621,29 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		return Config.roadSurfaceY + Config.carRideHeight
 	end
 
+	local function getWallScrapeVelocity(tangentVelocity, normal, speed)
+		local tangentSpeed = tangentVelocity.Magnitude
+		if tangentSpeed <= 0.001 then
+			return Vector3.zero, nil
+		end
+
+		local deflectAngle = math.rad(Config.carWallScrapeDeflectAngleDegrees)
+		local tangentDirection = tangentVelocity.Unit
+		local scrapeDirection = tangentDirection * math.cos(deflectAngle) + normal * math.sin(deflectAngle)
+		if scrapeDirection.Magnitude <= 0.001 then
+			scrapeDirection = tangentDirection
+		else
+			scrapeDirection = scrapeDirection.Unit
+		end
+
+		local deflectedSpeed = tangentSpeed
+		if deflectAngle > 0 then
+			deflectedSpeed = math.min(speed, tangentSpeed / math.max(math.cos(deflectAngle), 0.001))
+		end
+
+		return scrapeDirection * deflectedSpeed * Config.carWallScrapeSpeedRetain, scrapeDirection
+	end
+
 	local function resolveBuildingCollision(previousPosition, proposedPosition, currentVelocity)
 		local resolved = proposedPosition
 		local resolvedVelocity = currentVelocity
@@ -634,8 +686,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 							and normalImpact <= maxScrapeImpact
 
 						if canScrape then
-							resolvedVelocity = tangentVelocity * Config.carWallScrapeSpeedRetain
-							scrapeDirection = tangentVelocity.Unit
+							resolvedVelocity, scrapeDirection = getWallScrapeVelocity(tangentVelocity, normal, speed)
 						else
 							hardCrashed = true
 							resolvedVelocity = tangentVelocity * Config.carCrashSlideRetain
@@ -643,7 +694,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 						end
 					else
 						if tangentSpeed > Config.carWallScrapeMinSpeed then
-							scrapeDirection = tangentVelocity.Unit
+							_, scrapeDirection = getWallScrapeVelocity(tangentVelocity, normal, speed)
 						end
 					end
 				end
@@ -697,11 +748,13 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			visualPitch = 0
 			visualRoll = 0
 			visualDriftRoll = 0
+			visualBoostPitch = 0
 			reverseHoldTime = 0
 			driftChargeTime = 0
 			driftBoostReady = false
 			driftInputWasHeld = false
 			boostTimer = 0
+			boostWheelieTimer = 0
 
 			if seat.Occupant then
 				velocity = Vector3.zero
@@ -710,13 +763,15 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end
 
 		local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
-		local driftHeld = driver ~= nil and input ~= nil and input.drift == true
-		local releasedDrift = driftInputWasHeld and not driftHeld
+		local canDrive = grounded
+		local driftHeld = canDrive and driver ~= nil and input ~= nil and input.drift == true
+		local releasedDrift = canDrive and driftInputWasHeld and not driftHeld
 		local boostTriggered = false
 
 		if releasedDrift and driftBoostReady then
 			boostTimer = math.max(boostTimer, Config.carDriftBoostDuration)
 			boostTriggered = true
+			triggerBoostFeedback(driver)
 		end
 
 		if not driftHeld then
@@ -724,91 +779,104 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			driftBoostReady = false
 		end
 
-		local drifting = driftHeld
+		local drifting = canDrive and driftHeld
 			and horizontalSpeed > Config.carDriftMinSpeed
-		local accel = drifting and Config.carAccel * Config.carDriftAccelMultiplier or Config.carAccel
-		local waitingToReverse = false
-		local boostMaxSpeed = math.max(Config.carMaxForward, Config.carDriftBoostMaxSpeed)
 
-		if drifting then
-			driftChargeTime += dt
-			local withinBoostWindow = Config.carDriftBoostWindow <= 0
-				or driftChargeTime <= Config.carDriftBoostChargeTime + Config.carDriftBoostWindow
-			driftBoostReady = driftChargeTime >= Config.carDriftBoostChargeTime
-				and withinBoostWindow
-		elseif driftHeld then
-			driftChargeTime = 0
-			driftBoostReady = false
-		end
+		if canDrive then
+			local accel = drifting and Config.carAccel * Config.carDriftAccelMultiplier or Config.carAccel
+			local waitingToReverse = false
+			local boostMaxSpeed = math.max(Config.carMaxForward, Config.carDriftBoostMaxSpeed)
 
-		if throttle > 0 then
-			reverseHoldTime = 0
-			forwardSpeed = math.min(forwardSpeed + accel * throttle * dt, boostTimer > 0 and boostMaxSpeed or Config.carMaxForward)
-		elseif throttle < 0 then
-			if forwardSpeed > Config.carReverseStopSpeed then
+			if drifting then
+				driftChargeTime += dt
+				local withinBoostWindow = Config.carDriftBoostWindow <= 0
+					or driftChargeTime <= Config.carDriftBoostChargeTime + Config.carDriftBoostWindow
+				driftBoostReady = driftChargeTime >= Config.carDriftBoostChargeTime
+					and withinBoostWindow
+			elseif driftHeld then
+				driftChargeTime = 0
+				driftBoostReady = false
+			end
+
+			if throttle > 0 then
 				reverseHoldTime = 0
-				forwardSpeed = math.max(forwardSpeed + Config.carBrake * throttle * dt, 0)
-			else
-				reverseHoldTime += dt
-
-				if forwardSpeed > -Config.carReverseStopSpeed
-					and reverseHoldTime < Config.carReverseDelay
-				then
-					waitingToReverse = true
-					forwardSpeed = 0
-					lateralSpeed = dampToZero(lateralSpeed, Config.carBrake * dt)
+				forwardSpeed = math.min(forwardSpeed + accel * throttle * dt, boostTimer > 0 and boostMaxSpeed or Config.carMaxForward)
+			elseif throttle < 0 then
+				if forwardSpeed > Config.carReverseStopSpeed then
+					reverseHoldTime = 0
+					forwardSpeed = math.max(forwardSpeed + Config.carBrake * throttle * dt, 0)
 				else
-					forwardSpeed = math.max(forwardSpeed + accel * throttle * dt, -Config.carMaxReverse)
+					reverseHoldTime += dt
+
+					if forwardSpeed > -Config.carReverseStopSpeed
+						and reverseHoldTime < Config.carReverseDelay
+					then
+						waitingToReverse = true
+						forwardSpeed = 0
+						lateralSpeed = dampToZero(lateralSpeed, Config.carBrake * dt)
+					else
+						forwardSpeed = math.max(forwardSpeed + accel * throttle * dt, -Config.carMaxReverse)
+					end
 				end
+			else
+				reverseHoldTime = 0
+				forwardSpeed = dampToZero(forwardSpeed, Config.carDrag * dt)
+			end
+
+			if drifting then
+				forwardSpeed = dampToZero(forwardSpeed, Config.carDriftDrag * dt)
+				lateralSpeed += steer * Config.carDriftSlideForce * dt
+			end
+
+			if boostTriggered then
+				forwardSpeed = math.min(math.max(forwardSpeed, 0) + Config.carDriftBoostImpulse, boostMaxSpeed)
+			end
+
+			if boostTimer > 0 then
+				forwardSpeed = math.min(forwardSpeed + Config.carDriftBoostAccel * dt, boostMaxSpeed)
+				boostTimer = math.max(boostTimer - dt, 0)
+			end
+
+			local grip = drifting and Config.carDriftGrip or Config.carGrip
+			lateralSpeed *= math.exp(-grip * dt)
+			local preTurnVelocity = forward * forwardSpeed + right * lateralSpeed
+			if drifting then
+				preTurnVelocity = dampVectorMagnitude(preTurnVelocity, Config.carDriftDecel * dt)
+			end
+
+			local turnSpeed = if drifting then horizontalSpeed else math.abs(forwardSpeed)
+			if turnSpeed > Config.carMinTurnSpeed and math.abs(steer) > 0.01 then
+				local maxTurnSpeed = math.max(Config.carMaxForward, Config.carMinTurnSpeed + 0.001)
+				local turnSpeedAlpha = math.clamp(
+					(turnSpeed - Config.carMinTurnSpeed) / (maxTurnSpeed - Config.carMinTurnSpeed),
+					0,
+					1
+				)
+				local turnScale = Config.carTurnSpeedAtMinSpeed
+					+ (Config.carTurnSpeedAtMaxSpeed - Config.carTurnSpeedAtMinSpeed) * turnSpeedAlpha
+				local driftRotationSensitivity = drifting and Config.carDriftRotationSensitivity or 1
+				yaw -= steer * Config.carTurnRate * turnScale * driftRotationSensitivity * dt
+			end
+
+			forward = yawToForward(yaw)
+			right = yawToRight(yaw)
+
+			if waitingToReverse or drifting then
+				velocity = preTurnVelocity
+			else
+				local speed = preTurnVelocity.Magnitude
+				local directionSign = if forwardSpeed < -1 then -1 else 1
+				local targetVelocity = forward * speed * directionSign
+				local gripBlend = 1 - math.exp(-Config.carGrip * dt)
+				velocity = preTurnVelocity:Lerp(targetVelocity, gripBlend)
+			end
+
+			if boostTimer > 0 or boostTriggered then
+				velocity = limitHorizontalSpeed(velocity, boostMaxSpeed)
 			end
 		else
 			reverseHoldTime = 0
-			forwardSpeed = dampToZero(forwardSpeed, Config.carDrag * dt)
-		end
-
-		if drifting then
-			forwardSpeed = dampToZero(forwardSpeed, Config.carDriftDrag * dt)
-			lateralSpeed += steer * Config.carDriftSlideForce * dt
-		end
-
-		if boostTriggered then
-			forwardSpeed = math.min(math.max(forwardSpeed, 0) + Config.carDriftBoostImpulse, boostMaxSpeed)
-		end
-
-		if boostTimer > 0 then
-			forwardSpeed = math.min(forwardSpeed + Config.carDriftBoostAccel * dt, boostMaxSpeed)
 			boostTimer = math.max(boostTimer - dt, 0)
-		end
-
-		local grip = drifting and Config.carDriftGrip or Config.carGrip
-		lateralSpeed *= math.exp(-grip * dt)
-		local preTurnVelocity = forward * forwardSpeed + right * lateralSpeed
-		if drifting then
-			preTurnVelocity = dampVectorMagnitude(preTurnVelocity, Config.carDriftDecel * dt)
-		end
-
-		local turnSpeed = if drifting then horizontalSpeed else math.abs(forwardSpeed)
-		if turnSpeed > Config.carMinTurnSpeed and math.abs(steer) > 0.01 then
-			local turnScale = math.clamp(turnSpeed / Config.carMaxForward, 0.25, 1)
-			local driftRotationSensitivity = drifting and Config.carDriftRotationSensitivity or 1
-			yaw -= steer * Config.carTurnRate * turnScale * driftRotationSensitivity * dt
-		end
-
-		forward = yawToForward(yaw)
-		right = yawToRight(yaw)
-
-		if waitingToReverse or drifting then
-			velocity = preTurnVelocity
-		else
-			local speed = preTurnVelocity.Magnitude
-			local directionSign = if forwardSpeed < -1 then -1 else 1
-			local targetVelocity = forward * speed * directionSign
-			local gripBlend = 1 - math.exp(-Config.carGrip * dt)
-			velocity = preTurnVelocity:Lerp(targetVelocity, gripBlend)
-		end
-
-		if boostTimer > 0 or boostTriggered then
-			velocity = limitHorizontalSpeed(velocity, boostMaxSpeed)
 		end
 
 		horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
@@ -861,23 +929,62 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			position = Vector3.new(position.X, position.Y + verticalVelocity * dt, position.Z)
 
 			if groundProfile and position.Y <= targetY and verticalVelocity <= 0 then
+				local landingSpeed = -verticalVelocity
 				position = Vector3.new(position.X, targetY, position.Z)
 				verticalVelocity = 0
 				grounded = true
 				targetPitch = groundProfile.targetPitch
 				targetRoll = groundProfile.targetRoll
+
+				local maxBoostAlignment = math.rad(Config.carLandingBoostAlignDegrees)
+				local pitchError = math.abs(visualPitch - targetPitch)
+				local rollError = math.abs((visualRoll + visualDriftRoll) - targetRoll)
+				if Config.carLandingBoostImpulse > 0
+					and pitchError <= maxBoostAlignment
+					and rollError <= maxBoostAlignment
+				then
+					local landingBoostMaxSpeed = math.max(Config.carMaxForward, Config.carLandingBoostMaxSpeed)
+					velocity = limitHorizontalSpeed(
+						velocity + forward * Config.carLandingBoostImpulse,
+						landingBoostMaxSpeed
+					)
+					triggerBoostFeedback(driver)
+				end
+
+				if driver and cameraEventRemote and crashShakeCooldown <= 0 then
+					local minLandingSpeed = Config.cameraLandingShakeMinSpeed
+					local maxLandingSpeed = math.max(Config.cameraLandingShakeMaxSpeed, minLandingSpeed + 0.001)
+					local intensity = math.clamp(
+						(landingSpeed - minLandingSpeed) / (maxLandingSpeed - minLandingSpeed),
+						0,
+						1
+					)
+
+					if intensity > 0 then
+						cameraEventRemote:FireClient(driver, "Land", math.max(intensity, 0.18))
+						crashShakeCooldown = math.max(Config.cameraCrashShakeCooldown, 0)
+					end
+				end
 			else
 				local maxPitch = math.rad(Config.carMaxPitchDegrees)
+				local maxRoll = math.rad(Config.carGroundMaxRollDegrees)
 				targetPitch = math.clamp(
-					-verticalVelocity / Config.carAirPitchScale,
+					throttle * math.rad(Config.carAirPitchInputDegrees),
 					-maxPitch,
 					maxPitch
+				)
+				targetRoll = math.clamp(
+					steer * math.rad(Config.carAirRollInputDegrees),
+					-maxRoll,
+					maxRoll
 				)
 			end
 		end
 
-		visualPitch += (targetPitch - visualPitch) * math.clamp(Config.carPitchFollow * dt, 0, 1)
-		visualRoll += (targetRoll - visualRoll) * math.clamp(Config.carRollFollow * dt, 0, 1)
+		local pitchFollow = if grounded then Config.carPitchFollow else Config.carAirRotationFollow
+		local rollFollow = if grounded then Config.carRollFollow else Config.carAirRotationFollow
+		visualPitch += (targetPitch - visualPitch) * math.clamp(pitchFollow * dt, 0, 1)
+		visualRoll += (targetRoll - visualRoll) * math.clamp(rollFollow * dt, 0, 1)
 		local targetDriftRoll = 0
 		if drifting and math.abs(steer) > 0.01 then
 			local fullLeanSpeed = math.max(Config.carDriftLeanFullSpeed, Config.carDriftMinSpeed + 0.001)
@@ -890,6 +997,15 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end
 		visualDriftRoll += (targetDriftRoll - visualDriftRoll) * math.clamp(Config.carDriftLeanFollow * dt, 0, 1)
 
+		local targetBoostPitch = 0
+		if boostWheelieTimer > 0 then
+			local wheelieDuration = math.max(Config.carBoostWheelieDuration, 0.001)
+			local wheelieAlpha = math.clamp(boostWheelieTimer / wheelieDuration, 0, 1)
+			targetBoostPitch = -math.rad(Config.carBoostWheelieDegrees) * wheelieAlpha
+			boostWheelieTimer = math.max(boostWheelieTimer - dt, 0)
+		end
+		visualBoostPitch += (targetBoostPitch - visualBoostPitch) * math.clamp(Config.carBoostWheelieFollow * dt, 0, 1)
+
 		if drifting then
 			setDriftSmokeState(driftBoostReady and "boost" or "normal")
 		else
@@ -898,7 +1014,11 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 
 		driftInputWasHeld = driftHeld
 
-		car:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(visualPitch, 0, visualRoll + visualDriftRoll))
+		local targetPivot = CFrame.new(position)
+			* CFrame.Angles(0, yaw, 0)
+			* CFrame.Angles(visualPitch + visualBoostPitch, 0, visualRoll + visualDriftRoll)
+		serverPivotValue.Value = targetPivot
+		car:PivotTo(targetPivot)
 	end)
 end
 
