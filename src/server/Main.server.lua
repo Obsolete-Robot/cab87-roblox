@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Easing = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Easing"))
 local MapGenerator = require(script.Parent:WaitForChild("MapGenerator"))
 
 local NORMAL_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(210, 210, 210))
@@ -413,8 +414,11 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local grounded = true
 	local visualPitch = 0
 	local visualRoll = 0
+	local visualDriveRoll = 0
 	local visualDriftRoll = 0
 	local visualBoostPitch = 0
+	local visualBounceOffset = 0
+	local visualBounceVelocity = 0
 	local airPitchVelocity = 0
 	local airRollVelocity = 0
 	local reverseHoldTime = 0
@@ -423,14 +427,20 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local driftInputWasHeld = false
 	local boostTimer = 0
 	local boostWheelieTimer = 0
+	local elapsedTime = 0
+	local fallResetCooldown = 0
+	local pendingFallResetPose = nil
+	local safeGroundHistory = {}
 	local driverInput = {}
 	local smokeState = "off"
 	local lastOccupant = nil
+	local hiddenCharacterState = nil
 	local crashShakeCooldown = 0
 
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
 	raycastParams.FilterDescendantsInstances = driveSurfaces
+	local wheeliePivotOffset = Vector3.new(0, -Config.carRideHeight, -5.6)
 
 	local serverPivotValue = car:FindFirstChild(Config.carServerPivotValueName)
 	if serverPivotValue and not serverPivotValue:IsA("CFrameValue") then
@@ -454,7 +464,89 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end
 	end
 
-	driveInputRemote.OnServerEvent:Connect(function(player, action, throttle, steer, drift)
+	local function hideCharacterVisualInstance(instance, state)
+		if state.instances[instance] then
+			return
+		end
+
+		if instance:IsA("BasePart") or instance:IsA("Decal") or instance:IsA("Texture") then
+			state.instances[instance] = {
+				transparency = instance.Transparency,
+			}
+			instance.Transparency = 1
+		elseif instance:IsA("ParticleEmitter")
+			or instance:IsA("Trail")
+			or instance:IsA("Beam")
+			or instance:IsA("BillboardGui")
+			or instance:IsA("SurfaceGui")
+		then
+			state.instances[instance] = {
+				enabled = instance.Enabled,
+			}
+			instance.Enabled = false
+		end
+	end
+
+	local function restoreHiddenCharacter()
+		if not hiddenCharacterState then
+			return
+		end
+
+		if hiddenCharacterState.descendantAddedConnection then
+			hiddenCharacterState.descendantAddedConnection:Disconnect()
+		end
+
+		for instance, originalState in pairs(hiddenCharacterState.instances) do
+			if instance.Parent then
+				if originalState.transparency ~= nil then
+					instance.Transparency = originalState.transparency
+				end
+
+				if originalState.enabled ~= nil then
+					instance.Enabled = originalState.enabled
+				end
+			end
+		end
+
+		local humanoid = hiddenCharacterState.humanoid
+		if humanoid and humanoid.Parent then
+			humanoid.DisplayDistanceType = hiddenCharacterState.displayDistanceType
+			humanoid.HealthDisplayType = hiddenCharacterState.healthDisplayType
+		end
+
+		hiddenCharacterState = nil
+	end
+
+	local function hideDriverCharacter(humanoid)
+		restoreHiddenCharacter()
+
+		local character = humanoid and humanoid.Parent
+		if not character then
+			return
+		end
+
+		local state = {
+			humanoid = humanoid,
+			displayDistanceType = humanoid.DisplayDistanceType,
+			healthDisplayType = humanoid.HealthDisplayType,
+			instances = {},
+			descendantAddedConnection = nil,
+		}
+		hiddenCharacterState = state
+
+		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+
+		for _, descendant in ipairs(character:GetDescendants()) do
+			hideCharacterVisualInstance(descendant, state)
+		end
+
+		state.descendantAddedConnection = character.DescendantAdded:Connect(function(descendant)
+			hideCharacterVisualInstance(descendant, state)
+		end)
+	end
+
+	driveInputRemote.OnServerEvent:Connect(function(player, action, throttle, steer, drift, airPitch)
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if humanoid ~= seat.Occupant then
@@ -466,16 +558,22 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				return
 			end
 
+			if type(airPitch) ~= "number" then
+				airPitch = 0
+			end
+
 			driverInput[player] = {
 				throttle = math.clamp(throttle, -1, 1),
 				steer = math.clamp(steer, -1, 1),
 				drift = drift,
+				airPitch = math.clamp(airPitch, -1, 1),
 			}
 		elseif action == "Drift" and type(throttle) == "boolean" then
 			local input = driverInput[player] or {
 				throttle = 0,
 				steer = 0,
 				drift = false,
+				airPitch = 0,
 			}
 			input.drift = throttle
 			driverInput[player] = input
@@ -483,8 +581,12 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	end)
 
 	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
-		if not seat.Occupant then
+		local occupant = seat.Occupant
+		if occupant then
+			hideDriverCharacter(occupant)
+		else
 			driverInput = {}
+			restoreHiddenCharacter()
 		end
 	end)
 
@@ -728,8 +830,136 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end
 	end
 
+	local function triggerLandingBounce(landingSpeed)
+		local maxOffset = math.max(Config.carLandingBounceMaxOffset, 0)
+		local impulse = math.max(Config.carLandingBounceImpulse, 0)
+		if maxOffset <= 0 or impulse <= 0 then
+			return
+		end
+
+		local minSpeed = math.max(Config.carLandingBounceMinSpeed, 0)
+		local maxSpeed = math.max(Config.carLandingBounceMaxSpeed, minSpeed + 0.001)
+		local bounceAlpha = math.clamp((landingSpeed - minSpeed) / (maxSpeed - minSpeed), 0, 1)
+		if bounceAlpha <= 0 then
+			return
+		end
+
+		visualBounceVelocity = math.min(visualBounceVelocity, -impulse * bounceAlpha)
+	end
+
+	local function updateLandingBounce(dt)
+		local spring = math.max(Config.carLandingBounceSpring, 0)
+		local damping = math.max(Config.carLandingBounceDamping, 0)
+		local maxOffset = math.max(Config.carLandingBounceMaxOffset, 0)
+		if not grounded or maxOffset <= 0 or spring <= 0 then
+			visualBounceOffset = 0
+			visualBounceVelocity = 0
+			return
+		end
+
+		visualBounceVelocity += (-visualBounceOffset * spring - visualBounceVelocity * damping) * dt
+		visualBounceOffset += visualBounceVelocity * dt
+
+		if visualBounceOffset < -maxOffset then
+			visualBounceOffset = -maxOffset
+			visualBounceVelocity = math.max(visualBounceVelocity, 0)
+		elseif visualBounceOffset > maxOffset then
+			visualBounceOffset = maxOffset
+			visualBounceVelocity = math.min(visualBounceVelocity, 0)
+		end
+
+		if math.abs(visualBounceOffset) < 0.001 and math.abs(visualBounceVelocity) < 0.001 then
+			visualBounceOffset = 0
+			visualBounceVelocity = 0
+		end
+	end
+
+	local function trimSafeGroundHistory()
+		local historyWindow = math.max(Config.carFallResetLookbackTime + 2, 3)
+		local oldestAllowedTime = elapsedTime - historyWindow
+		while #safeGroundHistory > 0 and safeGroundHistory[1].time < oldestAllowedTime do
+			table.remove(safeGroundHistory, 1)
+		end
+	end
+
+	local function recordSafeGroundPose(groundProfile)
+		if not groundProfile or groundProfile.contacts < Config.carFallResetMinGroundContacts then
+			return
+		end
+
+		table.insert(safeGroundHistory, {
+			time = elapsedTime,
+			position = position,
+			yaw = yaw,
+		})
+		trimSafeGroundHistory()
+	end
+
+	local function getFallbackResetPose()
+		local resetPosition = Config.carSpawn
+		return {
+			position = Vector3.new(resetPosition.X, getFallbackSurfaceTarget(resetPosition, 0), resetPosition.Z),
+			yaw = 0,
+		}
+	end
+
+	local function getSafeFallResetPose()
+		local targetTime = elapsedTime - Config.carFallResetLookbackTime
+		local selectedPose = nil
+
+		for index = #safeGroundHistory, 1, -1 do
+			local pose = safeGroundHistory[index]
+			if pose.time <= targetTime then
+				selectedPose = pose
+				break
+			end
+		end
+
+		return selectedPose or safeGroundHistory[1] or safeGroundHistory[#safeGroundHistory] or getFallbackResetPose()
+	end
+
+	local function resetCabAfterFall()
+		local resetPose = pendingFallResetPose or getSafeFallResetPose()
+		local resetYaw = resetPose.yaw + math.rad(Config.carFallResetTurnaroundDegrees)
+		local resetPosition = resetPose.position
+		local resetY = getFallbackSurfaceTarget(resetPosition, resetYaw)
+
+		position = Vector3.new(resetPosition.X, resetY, resetPosition.Z)
+		yaw = resetYaw
+		velocity = Vector3.zero
+		verticalVelocity = 0
+		grounded = true
+		visualPitch = 0
+		visualRoll = 0
+		visualDriveRoll = 0
+		visualDriftRoll = 0
+		visualBoostPitch = 0
+		visualBounceOffset = 0
+		visualBounceVelocity = 0
+		airPitchVelocity = 0
+		airRollVelocity = 0
+		reverseHoldTime = 0
+		driftChargeTime = 0
+		driftBoostReady = false
+		driftInputWasHeld = false
+		boostTimer = 0
+		boostWheelieTimer = 0
+		pendingFallResetPose = nil
+		fallResetCooldown = math.max(Config.carFallResetCooldown, 0)
+		safeGroundHistory = {
+			{
+				time = elapsedTime,
+				position = position,
+				yaw = yaw,
+			},
+		}
+		setDriftSmokeState("off")
+	end
+
 	RunService.Heartbeat:Connect(function(dt)
 		dt = math.min(dt, Config.carMaxDeltaTime)
+		elapsedTime += dt
+		fallResetCooldown = math.max(fallResetCooldown - dt, 0)
 		crashShakeCooldown = math.max(crashShakeCooldown - dt, 0)
 
 		local forward = yawToForward(yaw)
@@ -742,6 +972,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		local input = driver and driverInput[driver]
 		local throttle = input and input.throttle or seat.ThrottleFloat
 		local steer = input and input.steer or seat.SteerFloat
+		local airPitchInput = input and input.airPitch or 0
 
 		if seat.Occupant ~= lastOccupant then
 			lastOccupant = seat.Occupant
@@ -749,8 +980,11 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			verticalVelocity = 0
 			visualPitch = 0
 			visualRoll = 0
+			visualDriveRoll = 0
 			visualDriftRoll = 0
 			visualBoostPitch = 0
+			visualBounceOffset = 0
+			visualBounceVelocity = 0
 			airPitchVelocity = 0
 			airRollVelocity = 0
 			reverseHoldTime = 0
@@ -759,10 +993,18 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			driftInputWasHeld = false
 			boostTimer = 0
 			boostWheelieTimer = 0
+			fallResetCooldown = 0
+			pendingFallResetPose = nil
+			safeGroundHistory = {}
 
 			if seat.Occupant then
 				velocity = Vector3.zero
 				position = Vector3.new(position.X, getFallbackSurfaceTarget(position, yaw), position.Z)
+				table.insert(safeGroundHistory, {
+					time = elapsedTime,
+					position = position,
+					yaw = yaw,
+				})
 			end
 		end
 
@@ -918,6 +1160,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 
 		if grounded then
 			if not groundProfile or previousY - targetY > Config.carGroundSnapDistance then
+				pendingFallResetPose = getSafeFallResetPose()
 				grounded = false
 				verticalVelocity = math.max(verticalVelocity, 8)
 				targetPitch = visualPitch
@@ -930,6 +1173,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				airRollVelocity = 0
 				targetPitch = groundProfile.targetPitch
 				targetRoll = groundProfile.targetRoll
+				pendingFallResetPose = nil
+				recordSafeGroundPose(groundProfile)
 			end
 		else
 			local gravity = if verticalVelocity > 0 then Config.carGravityUp else Config.carGravityDown
@@ -951,14 +1196,17 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 				position = Vector3.new(position.X, targetY, position.Z)
 				verticalVelocity = 0
 				grounded = true
+				triggerLandingBounce(landingSpeed)
 				airPitchVelocity = 0
 				airRollVelocity = 0
 				targetPitch = groundProfile.targetPitch
 				targetRoll = groundProfile.targetRoll
+				pendingFallResetPose = nil
+				recordSafeGroundPose(groundProfile)
 
 				local maxBoostAlignment = math.rad(Config.carLandingBoostAlignDegrees)
 				local pitchError = math.abs(visualPitch - targetPitch)
-				local rollError = math.abs((visualRoll + visualDriftRoll) - targetRoll)
+				local rollError = math.abs((visualRoll + visualDriveRoll + visualDriftRoll) - targetRoll)
 				if Config.carLandingBoostImpulse > 0
 					and pitchError <= maxBoostAlignment
 					and rollError <= maxBoostAlignment
@@ -988,13 +1236,30 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			else
 				local maxRoll = math.rad(Config.carGroundMaxRollDegrees)
 				local airResponse = math.clamp(Config.carAirRotationFollow * dt, 0, 1)
-				local targetPitchVelocity = -throttle * math.rad(Config.carAirPitchInputDegrees)
+				local targetPitchVelocity = airPitchInput * math.rad(Config.carAirPitchInputDegrees)
 				local targetRollVelocity = steer * math.rad(Config.carAirRollInputDegrees)
-				airPitchVelocity += (targetPitchVelocity - airPitchVelocity) * airResponse
-				airRollVelocity += (targetRollVelocity - airRollVelocity) * airResponse
+				if math.abs(airPitchInput) > 0.01 then
+					airPitchVelocity += (targetPitchVelocity - airPitchVelocity) * airResponse
+				else
+					airPitchVelocity = 0
+				end
+				if math.abs(steer) > 0.01 then
+					airRollVelocity += (targetRollVelocity - airRollVelocity) * airResponse
+				else
+					airRollVelocity = 0
+				end
 				targetPitch = math.clamp(visualPitch + airPitchVelocity * dt, -maxPitch, maxPitch)
 				targetRoll = math.clamp(visualRoll + airRollVelocity * dt, -maxRoll, maxRoll)
 			end
+		end
+
+		if fallResetCooldown <= 0 and position.Y < Config.carFallResetY then
+			resetCabAfterFall()
+			horizontalSpeed = 0
+			driftHeld = false
+			drifting = false
+			targetPitch = 0
+			targetRoll = 0
 		end
 
 		if grounded then
@@ -1004,8 +1269,25 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			visualPitch = targetPitch
 			visualRoll = targetRoll
 		end
+
+		local targetDriveRoll = 0
+		if grounded and canDrive and not drifting and math.abs(steer) > 0.01 then
+			local fullLeanSpeed = math.max(Config.carDriveLeanFullSpeed, Config.carDriveLeanMinSpeed + 0.001)
+			local leanSpeedAlpha = math.clamp(
+				(horizontalSpeed - Config.carDriveLeanMinSpeed) / (fullLeanSpeed - Config.carDriveLeanMinSpeed),
+				0,
+				1
+			)
+			targetDriveRoll = steer * math.rad(Config.carDriveLeanDegrees) * leanSpeedAlpha
+		end
+		if grounded then
+			visualDriveRoll += (targetDriveRoll - visualDriveRoll) * math.clamp(Config.carDriveLeanFollow * dt, 0, 1)
+		else
+			visualDriveRoll = 0
+		end
+
 		local targetDriftRoll = 0
-		if drifting and math.abs(steer) > 0.01 then
+		if grounded and drifting and math.abs(steer) > 0.01 then
 			local fullLeanSpeed = math.max(Config.carDriftLeanFullSpeed, Config.carDriftMinSpeed + 0.001)
 			local leanSpeedAlpha = math.clamp(
 				(horizontalSpeed - Config.carDriftMinSpeed) / (fullLeanSpeed - Config.carDriftMinSpeed),
@@ -1014,16 +1296,33 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			)
 			targetDriftRoll = steer * math.rad(Config.carDriftLeanDegrees) * leanSpeedAlpha
 		end
-		visualDriftRoll += (targetDriftRoll - visualDriftRoll) * math.clamp(Config.carDriftLeanFollow * dt, 0, 1)
+		if grounded then
+			visualDriftRoll += (targetDriftRoll - visualDriftRoll) * math.clamp(Config.carDriftLeanFollow * dt, 0, 1)
+		else
+			visualDriftRoll = 0
+		end
 
 		local targetBoostPitch = 0
-		if boostWheelieTimer > 0 then
+		if grounded and boostWheelieTimer > 0 then
 			local wheelieDuration = math.max(Config.carBoostWheelieDuration, 0.001)
-			local wheelieAlpha = math.clamp(boostWheelieTimer / wheelieDuration, 0, 1)
-			targetBoostPitch = -math.rad(Config.carBoostWheelieDegrees) * wheelieAlpha
+			local wheelieProgress = 1 - math.clamp(boostWheelieTimer / wheelieDuration, 0, 1)
+			local wheelieAmount = 1 - Easing.OutBack(wheelieProgress)
+			targetBoostPitch = -math.rad(Config.carBoostWheelieDegrees) * wheelieAmount
+			boostWheelieTimer = math.max(boostWheelieTimer - dt, 0)
+		elseif boostWheelieTimer > 0 then
 			boostWheelieTimer = math.max(boostWheelieTimer - dt, 0)
 		end
-		visualBoostPitch += (targetBoostPitch - visualBoostPitch) * math.clamp(Config.carBoostWheelieFollow * dt, 0, 1)
+		if grounded then
+			if targetBoostPitch < 0 and math.abs(targetBoostPitch) > math.abs(visualBoostPitch) then
+				visualBoostPitch += (targetBoostPitch - visualBoostPitch)
+					* math.clamp(Config.carBoostWheelieFollow * dt, 0, 1)
+			else
+				visualBoostPitch = targetBoostPitch
+			end
+		else
+			visualBoostPitch = 0
+		end
+		updateLandingBounce(dt)
 
 		if drifting then
 			setDriftSmokeState(driftBoostReady and "boost" or "normal")
@@ -1033,9 +1332,14 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 
 		driftInputWasHeld = driftHeld
 
-		local targetPivot = CFrame.new(position)
+		local bodyRoll = visualRoll + visualDriveRoll + visualDriftRoll
+		local wheeliePivot = CFrame.new(wheeliePivotOffset)
+			* CFrame.Angles(visualBoostPitch, 0, 0)
+			* CFrame.new(wheeliePivotOffset * -1)
+		local targetPivot = CFrame.new(position + Vector3.new(0, visualBounceOffset, 0))
 			* CFrame.Angles(0, yaw, 0)
-			* CFrame.Angles(visualPitch + visualBoostPitch, 0, visualRoll + visualDriftRoll)
+			* CFrame.Angles(visualPitch, 0, bodyRoll)
+			* wheeliePivot
 		serverPivotValue.Value = targetPivot
 		car:PivotTo(targetPivot)
 	end)

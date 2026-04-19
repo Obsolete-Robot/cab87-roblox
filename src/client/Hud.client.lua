@@ -10,12 +10,14 @@ local driveInputRemote = ReplicatedStorage:WaitForChild(Config.driveInputRemoteN
 
 local keyDown = {}
 local gamepadSteer = 0
+local gamepadAirPitch = 0
 local gamepadAccel = 0
 local gamepadBrake = 0
 local gamepadDriftButtons = {}
 local lastSentThrottle = nil
 local lastSentSteer = nil
 local lastSentDrift = nil
+local lastSentAirPitch = nil
 local sendAccumulator = 0
 local forceSendAccumulator = 0
 
@@ -73,19 +75,22 @@ end
 local function getDriveState()
 	local keyboardThrottle = getKeyboardAxis(Enum.KeyCode.W, Enum.KeyCode.Up, Enum.KeyCode.S, Enum.KeyCode.Down)
 	local keyboardSteer = getKeyboardAxis(Enum.KeyCode.D, Enum.KeyCode.Right, Enum.KeyCode.A, Enum.KeyCode.Left)
+	local keyboardAirPitch = getKeyboardAxis(Enum.KeyCode.Up, Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Down)
 	local gamepadThrottle = gamepadAccel - gamepadBrake
 	local throttle = math.clamp(keyboardThrottle + gamepadThrottle, -1, 1)
 	local steer = math.abs(gamepadSteer) > 0 and gamepadSteer or keyboardSteer
+	local airPitch = if math.abs(gamepadAirPitch) > 0 then gamepadAirPitch else keyboardAirPitch
 
-	return throttle, math.clamp(steer, -1, 1), isDriftHeld()
+	return throttle, math.clamp(steer, -1, 1), isDriftHeld(), math.clamp(airPitch, -1, 1)
 end
 
 local function sendDriveState(force)
-	local throttle, steer, drift = getDriveState()
+	local throttle, steer, drift, airPitch = getDriveState()
 	if not force
 		and throttle == lastSentThrottle
 		and steer == lastSentSteer
 		and drift == lastSentDrift
+		and airPitch == lastSentAirPitch
 	then
 		return
 	end
@@ -93,7 +98,8 @@ local function sendDriveState(force)
 	lastSentThrottle = throttle
 	lastSentSteer = steer
 	lastSentDrift = drift
-	driveInputRemote:FireServer("Drive", throttle, steer, drift)
+	lastSentAirPitch = airPitch
+	driveInputRemote:FireServer("Drive", throttle, steer, drift, airPitch)
 end
 
 local function setGamepadDriftButton(keyCode, isHeld)
@@ -105,6 +111,7 @@ end
 local function updateGamepadAnalog(input)
 	if input.KeyCode == Enum.KeyCode.Thumbstick1 then
 		gamepadSteer = deadzone(input.Position.X)
+		gamepadAirPitch = deadzone(input.Position.Y)
 	elseif input.KeyCode == Enum.KeyCode.ButtonR2 then
 		gamepadAccel = math.clamp(math.abs(input.Position.Z), 0, 1)
 	elseif input.KeyCode == Enum.KeyCode.ButtonL2 then
@@ -140,6 +147,7 @@ UserInputService.InputEnded:Connect(function(input)
 
 		if input.KeyCode == Enum.KeyCode.Thumbstick1 then
 			gamepadSteer = 0
+			gamepadAirPitch = 0
 		elseif input.KeyCode == Enum.KeyCode.ButtonR2 then
 			gamepadAccel = 0
 		elseif input.KeyCode == Enum.KeyCode.ButtonL2 then
@@ -239,9 +247,38 @@ local function formatDebugValue(value, property)
 	return string.format("%.3f", value)
 end
 
+local cabVisualDebugProperties = {
+	carVisualResponsiveness = true,
+	carVisualSnapDistance = true,
+	carPitchFollow = true,
+	carRollFollow = true,
+	carMaxPitchDegrees = true,
+	carGroundMaxRollDegrees = true,
+	carDriftLeanDegrees = true,
+	carDriftLeanFullSpeed = true,
+	carDriftLeanFollow = true,
+	carDriveLeanDegrees = true,
+	carDriveLeanMinSpeed = true,
+	carDriveLeanFullSpeed = true,
+	carDriveLeanFollow = true,
+	carBoostWheelieDegrees = true,
+	carBoostWheelieDuration = true,
+	carBoostWheelieFollow = true,
+	carLandingBounceMinSpeed = true,
+	carLandingBounceMaxSpeed = true,
+	carLandingBounceImpulse = true,
+	carLandingBounceSpring = true,
+	carLandingBounceDamping = true,
+	carLandingBounceMaxOffset = true,
+}
+
 local function getDebugPropertyTab(property)
 	if string.sub(property.key, 1, 6) == "camera" then
 		return "Camera"
+	end
+
+	if cabVisualDebugProperties[property.key] then
+		return "Visual"
 	end
 
 	return "Cab"
@@ -273,9 +310,10 @@ local function createDebugPanel()
 		return
 	end
 
-	local tabNames = { "Cab", "Camera" }
+	local tabNames = { "Cab", "Visual", "Camera" }
 	local propertiesByTab = {
 		Cab = {},
+		Visual = {},
 		Camera = {},
 	}
 
@@ -289,6 +327,18 @@ local function createDebugPanel()
 	local activeTab = if #propertiesByTab.Cab > 0 then "Cab" else "Camera"
 	local scrollsByTab = {}
 	local tabButtons = {}
+	local tabPadding = 8
+	local visibleTabCount = 0
+
+	for _, tabName in ipairs(tabNames) do
+		if #propertiesByTab[tabName] > 0 then
+			visibleTabCount += 1
+		end
+	end
+
+	if #propertiesByTab.Cab == 0 and #propertiesByTab.Visual > 0 then
+		activeTab = "Visual"
+	end
 
 	local toggle = Instance.new("TextButton")
 	toggle.Name = "DebugToggle"
@@ -378,7 +428,7 @@ local function createDebugPanel()
 
 	local tabLayout = Instance.new("UIListLayout")
 	tabLayout.FillDirection = Enum.FillDirection.Horizontal
-	tabLayout.Padding = UDim.new(0, 8)
+	tabLayout.Padding = UDim.new(0, tabPadding)
 	tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	tabLayout.Parent = tabBar
 
@@ -420,8 +470,10 @@ local function createDebugPanel()
 		scroll.BackgroundTransparency = 1
 		scroll.BorderSizePixel = 0
 		scroll.ScrollBarThickness = 6
+		scroll.ScrollBarImageColor3 = Color3.fromRGB(255, 206, 38)
+		scroll.ScrollBarImageTransparency = 0.12
+		scroll.ScrollingDirection = Enum.ScrollingDirection.Y
 		scroll.CanvasSize = UDim2.fromOffset(0, 0)
-		scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 		scroll.Visible = tabName == activeTab
 		scroll.Parent = panel
 		scrollsByTab[tabName] = scroll
@@ -430,6 +482,13 @@ local function createDebugPanel()
 		list.Padding = UDim.new(0, 8)
 		list.SortOrder = Enum.SortOrder.LayoutOrder
 		list.Parent = scroll
+
+		local function updateCanvasSize()
+			scroll.CanvasSize = UDim2.fromOffset(0, list.AbsoluteContentSize.Y + 8)
+		end
+
+		list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
+		task.defer(updateCanvasSize)
 	end
 
 	local function setActiveTab(tabName)
@@ -462,7 +521,12 @@ local function createDebugPanel()
 			local tabButton = Instance.new("TextButton")
 			tabButton.Name = tabName .. "Tab"
 			tabButton.LayoutOrder = index
-			tabButton.Size = UDim2.new(0.5, -4, 1, 0)
+			tabButton.Size = UDim2.new(
+				1 / visibleTabCount,
+				-tabPadding * (visibleTabCount - 1) / visibleTabCount,
+				1,
+				0
+			)
 			tabButton.BackgroundColor3 = Color3.fromRGB(45, 49, 56)
 			tabButton.BorderSizePixel = 0
 			tabButton.Font = Enum.Font.GothamBold
