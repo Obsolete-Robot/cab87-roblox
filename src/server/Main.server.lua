@@ -6,12 +6,28 @@ local Workspace = game:GetService("Workspace")
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 local MapGenerator = require(script.Parent:WaitForChild("MapGenerator"))
 
+local NORMAL_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(210, 210, 210))
+local BOOST_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(65, 185, 255))
+
 local function yawToForward(yaw)
 	return Vector3.new(math.sin(yaw), 0, math.cos(yaw))
 end
 
 local function yawToRight(yaw)
 	return Vector3.new(math.cos(yaw), 0, -math.sin(yaw))
+end
+
+local function vectorToYaw(vector)
+	return math.atan2(vector.X, vector.Z)
+end
+
+local function getAngleDelta(fromAngle, toAngle)
+	return math.atan2(math.sin(toAngle - fromAngle), math.cos(toAngle - fromAngle))
+end
+
+local function moveAngleToward(fromAngle, toAngle, maxDelta)
+	local delta = getAngleDelta(fromAngle, toAngle)
+	return fromAngle + math.clamp(delta, -maxDelta, maxDelta)
 end
 
 local function getOrCreateDriveInputRemote()
@@ -28,6 +44,136 @@ local function getOrCreateDriveInputRemote()
 	end
 
 	return remote
+end
+
+local function getOrCreateCameraEventRemote()
+	local remote = ReplicatedStorage:FindFirstChild(Config.cameraEventRemoteName)
+	if remote and not remote:IsA("RemoteEvent") then
+		remote:Destroy()
+		remote = nil
+	end
+
+	if not remote then
+		remote = Instance.new("RemoteEvent")
+		remote.Name = Config.cameraEventRemoteName
+		remote.Parent = ReplicatedStorage
+	end
+
+	return remote
+end
+
+local function isDebugTuningEnabled()
+	return Config.debugPanelEnabled == true
+		and (not Config.debugPanelStudioOnly or RunService:IsStudio())
+end
+
+local function getOrCreateDebugTuneRemote()
+	if not isDebugTuningEnabled() then
+		return nil
+	end
+
+	local remote = ReplicatedStorage:FindFirstChild(Config.debugTuneRemoteName)
+	if remote and not remote:IsA("RemoteEvent") then
+		remote:Destroy()
+		remote = nil
+	end
+
+	if not remote then
+		remote = Instance.new("RemoteEvent")
+		remote.Name = Config.debugTuneRemoteName
+		remote.Parent = ReplicatedStorage
+	end
+
+	return remote
+end
+
+local function normalizeTuningValue(value, property)
+	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+		return nil
+	end
+
+	local minValue = property.min
+	local maxValue = property.max
+	if type(minValue) ~= "number" or type(maxValue) ~= "number" then
+		return nil
+	end
+
+	if maxValue < minValue then
+		maxValue = minValue
+	end
+
+	value = math.clamp(value, minValue, maxValue)
+
+	if type(property.step) == "number" and property.step > 0 then
+		value = minValue + math.floor((value - minValue) / property.step + 0.5) * property.step
+		value = math.clamp(value, minValue, maxValue)
+	end
+
+	return value
+end
+
+local function runDebugTuning(debugTuneRemote)
+	if not debugTuneRemote then
+		return
+	end
+
+	local propertiesByKey = {}
+	local defaultValues = {}
+
+	for _, property in ipairs(Config.debugTuningProperties or {}) do
+		if type(property) == "table" and type(property.key) == "string" then
+			local currentValue = Config[property.key]
+			if type(currentValue) == "number" and normalizeTuningValue(currentValue, property) ~= nil then
+				propertiesByKey[property.key] = property
+				defaultValues[property.key] = currentValue
+			end
+		end
+	end
+
+	local function getSnapshot()
+		local snapshot = {}
+		for key in pairs(propertiesByKey) do
+			snapshot[key] = Config[key]
+		end
+		return snapshot
+	end
+
+	debugTuneRemote.OnServerEvent:Connect(function(_player, action, key, value)
+		if action == "Snapshot" then
+			debugTuneRemote:FireClient(_player, "Snapshot", getSnapshot())
+			return
+		end
+
+		if action == "ResetAll" then
+			for resetKey, defaultValue in pairs(defaultValues) do
+				Config[resetKey] = defaultValue
+			end
+			debugTuneRemote:FireAllClients("Snapshot", getSnapshot())
+			return
+		end
+
+		if type(key) ~= "string" then
+			return
+		end
+
+		local property = propertiesByKey[key]
+		if not property then
+			return
+		end
+
+		if action == "Reset" then
+			Config[key] = defaultValues[key]
+			debugTuneRemote:FireAllClients("Set", key, Config[key])
+		elseif action == "Set" then
+			local normalizedValue = normalizeTuningValue(value, property)
+			if normalizedValue == nil then
+				return
+			end
+
+			Config[key] = normalizedValue
+			debugTuneRemote:FireAllClients("Set", key, normalizedValue)
+		end
+	end)
 end
 
 local function makePart(parent, props)
@@ -130,7 +276,7 @@ local function addDriftSmoke(wheel, emitters)
 	emitter.SpreadAngle = Vector2.new(40, 40)
 	emitter.Drag = 5
 	emitter.EmissionDirection = Enum.NormalId.Bottom
-	emitter.Color = ColorSequence.new(Color3.fromRGB(210, 210, 210))
+	emitter.Color = NORMAL_DRIFT_SMOKE_COLOR
 	emitter.Transparency = NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 0.25),
 		NumberSequenceKeypoint.new(1, 1),
@@ -254,16 +400,24 @@ local function createCab(world)
 	return car, seat, driftEmitters
 end
 
-local function runCarController(car, seat, driftEmitters, driveInputRemote, driveSurfaces, crashObstacles)
+local function runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles)
 	local position = Config.carSpawn
 	local yaw = 0
 	local velocity = Vector3.zero
 	local verticalVelocity = 0
 	local grounded = true
 	local visualPitch = 0
+	local visualRoll = 0
+	local visualDriftRoll = 0
+	local reverseHoldTime = 0
+	local driftChargeTime = 0
+	local driftBoostReady = false
+	local driftInputWasHeld = false
+	local boostTimer = 0
 	local driverInput = {}
-	local smokeEnabled = false
+	local smokeState = "off"
 	local lastOccupant = nil
+	local crashShakeCooldown = 0
 
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
@@ -310,8 +464,28 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, driv
 		return value - math.sign(value) * amount
 	end
 
-	local function getSurfaceTarget(currentPosition)
-		local origin = currentPosition + Vector3.new(0, Config.carGroundProbeHeight, 0)
+	local function dampVectorMagnitude(vector, amount)
+		local magnitude = vector.Magnitude
+		if magnitude <= amount then
+			return Vector3.zero
+		end
+
+		return vector.Unit * (magnitude - amount)
+	end
+
+	local function limitHorizontalSpeed(vector, maxSpeed)
+		local horizontal = Vector3.new(vector.X, 0, vector.Z)
+		local speed = horizontal.Magnitude
+		if speed <= maxSpeed then
+			return vector
+		end
+
+		local limited = horizontal.Unit * maxSpeed
+		return Vector3.new(limited.X, vector.Y, limited.Z)
+	end
+
+	local function getSurfaceSample(samplePosition)
+		local origin = samplePosition + Vector3.new(0, Config.carGroundProbeHeight, 0)
 		local result = Workspace:Raycast(
 			origin,
 			Vector3.new(0, -Config.carGroundProbeDepth, 0),
@@ -322,13 +496,107 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, driv
 			return result.Position.Y + Config.carRideHeight
 		end
 
+		return nil
+	end
+
+	local function getGroundProfile(currentPosition, currentYaw)
+		local forward = yawToForward(currentYaw)
+		local right = yawToRight(currentYaw)
+		local halfWidth = Config.carGroundProbeHalfWidth
+		local halfLength = Config.carGroundProbeHalfLength
+		local totalHeight = 0
+		local contactCount = 0
+		local frontTotal = 0
+		local frontCount = 0
+		local rearTotal = 0
+		local rearCount = 0
+		local leftTotal = 0
+		local leftCount = 0
+		local rightTotal = 0
+		local rightCount = 0
+
+		local function addSample(localX, localZ)
+			local samplePosition = currentPosition + right * localX + forward * localZ
+			local sampleHeight = getSurfaceSample(Vector3.new(samplePosition.X, currentPosition.Y, samplePosition.Z))
+			if not sampleHeight then
+				return
+			end
+
+			totalHeight += sampleHeight
+			contactCount += 1
+
+			if localZ >= 0 then
+				frontTotal += sampleHeight
+				frontCount += 1
+			else
+				rearTotal += sampleHeight
+				rearCount += 1
+			end
+
+			if localX >= 0 then
+				rightTotal += sampleHeight
+				rightCount += 1
+			else
+				leftTotal += sampleHeight
+				leftCount += 1
+			end
+		end
+
+		addSample(halfWidth, halfLength)
+		addSample(-halfWidth, halfLength)
+		addSample(halfWidth, -halfLength)
+		addSample(-halfWidth, -halfLength)
+
+		if contactCount == 0 then
+			return nil
+		end
+
+		local targetPitch = 0
+		if frontCount > 0 and rearCount > 0 and halfLength > 0 then
+			local frontAverage = frontTotal / frontCount
+			local rearAverage = rearTotal / rearCount
+			local maxPitch = math.rad(Config.carMaxPitchDegrees)
+			targetPitch = math.clamp(
+				-math.atan2(frontAverage - rearAverage, halfLength * 2),
+				-maxPitch,
+				maxPitch
+			)
+		end
+
+		local targetRoll = 0
+		if rightCount > 0 and leftCount > 0 and halfWidth > 0 then
+			local rightAverage = rightTotal / rightCount
+			local leftAverage = leftTotal / leftCount
+			local maxRoll = math.rad(Config.carGroundMaxRollDegrees)
+			targetRoll = math.clamp(
+				math.atan2(rightAverage - leftAverage, halfWidth * 2),
+				-maxRoll,
+				maxRoll
+			)
+		end
+
+		return {
+			targetY = totalHeight / contactCount,
+			targetPitch = targetPitch,
+			targetRoll = targetRoll,
+			contacts = contactCount,
+		}
+	end
+
+	local function getFallbackSurfaceTarget(currentPosition, currentYaw)
+		local groundProfile = getGroundProfile(currentPosition, currentYaw)
+		if groundProfile then
+			return groundProfile.targetY
+		end
+
 		return Config.roadSurfaceY + Config.carRideHeight
 	end
 
 	local function resolveBuildingCollision(previousPosition, proposedPosition, currentVelocity)
 		local resolved = proposedPosition
 		local resolvedVelocity = currentVelocity
-		local crashed = false
+		local hardCrashed = false
+		local scrapeDirection = nil
 
 		for _, obstacle in ipairs(crashObstacles) do
 			local obstacleTop = obstacle.Position.Y + obstacle.Size.Y * 0.5
@@ -339,8 +607,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, driv
 				local deltaZ = resolved.Z - obstacle.Position.Z
 
 				if math.abs(deltaX) < halfX and math.abs(deltaZ) < halfZ then
-					crashed = true
-
 					local pushX = halfX - math.abs(deltaX)
 					local pushZ = halfZ - math.abs(deltaZ)
 					local normal
@@ -356,37 +622,62 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, driv
 					end
 
 					local intoWall = resolvedVelocity:Dot(normal)
+					local tangentVelocity = resolvedVelocity - normal * intoWall
+					local tangentSpeed = tangentVelocity.Magnitude
+					local speed = resolvedVelocity.Magnitude
+					local maxScrapeImpact = speed * math.sin(math.rad(Config.carWallScrapeMaxAngleDegrees))
+
 					if intoWall < 0 then
-						local tangentVelocity = resolvedVelocity - normal * intoWall
-						resolvedVelocity = tangentVelocity * Config.carCrashSlideRetain
-							+ normal * (-intoWall * Config.carCrashBounce)
+						local normalImpact = -intoWall
+						local canScrape = speed >= Config.carWallScrapeMinSpeed
+							and tangentSpeed > 0.001
+							and normalImpact <= maxScrapeImpact
+
+						if canScrape then
+							resolvedVelocity = tangentVelocity * Config.carWallScrapeSpeedRetain
+							scrapeDirection = tangentVelocity.Unit
+						else
+							hardCrashed = true
+							resolvedVelocity = tangentVelocity * Config.carCrashSlideRetain
+								+ normal * (normalImpact * Config.carCrashBounce)
+						end
 					else
-						resolvedVelocity *= Config.carCrashSlideRetain
+						if tangentSpeed > Config.carWallScrapeMinSpeed then
+							scrapeDirection = tangentVelocity.Unit
+						end
 					end
 				end
 			end
 		end
 
-		if crashed then
+		if hardCrashed or scrapeDirection then
 			resolved = Vector3.new(resolved.X, math.max(resolved.Y, previousPosition.Y), resolved.Z)
 		end
 
-		return resolved, resolvedVelocity, crashed
+		return resolved, resolvedVelocity, hardCrashed, scrapeDirection
 	end
 
-	local function setDriftSmokeEnabled(enabled)
-		if smokeEnabled == enabled then
+	local function setDriftSmokeState(nextState)
+		if smokeState == nextState then
 			return
 		end
 
-		smokeEnabled = enabled
+		smokeState = nextState
 		for _, emitter in ipairs(driftEmitters) do
-			emitter.Enabled = enabled
+			emitter.Enabled = nextState ~= "off"
+			if nextState == "boost" then
+				emitter.Color = BOOST_DRIFT_SMOKE_COLOR
+				emitter.Rate = 145
+			else
+				emitter.Color = NORMAL_DRIFT_SMOKE_COLOR
+				emitter.Rate = 95
+			end
 		end
 	end
 
 	RunService.Heartbeat:Connect(function(dt)
 		dt = math.min(dt, Config.carMaxDeltaTime)
+		crashShakeCooldown = math.max(crashShakeCooldown - dt, 0)
 
 		local forward = yawToForward(yaw)
 		local right = yawToRight(yaw)
@@ -404,51 +695,109 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, driv
 			grounded = true
 			verticalVelocity = 0
 			visualPitch = 0
+			visualRoll = 0
+			visualDriftRoll = 0
+			reverseHoldTime = 0
+			driftChargeTime = 0
+			driftBoostReady = false
+			driftInputWasHeld = false
+			boostTimer = 0
 
 			if seat.Occupant then
 				velocity = Vector3.zero
-				position = Vector3.new(position.X, getSurfaceTarget(position), position.Z)
+				position = Vector3.new(position.X, getFallbackSurfaceTarget(position, yaw), position.Z)
 			end
-		end
-
-		if throttle > 0 then
-			forwardSpeed = math.min(forwardSpeed + Config.carAccel * throttle * dt, Config.carMaxForward)
-		elseif throttle < 0 then
-			if forwardSpeed > 0 then
-				forwardSpeed = math.max(forwardSpeed + Config.carBrake * throttle * dt, 0)
-			else
-				forwardSpeed = math.max(forwardSpeed + Config.carAccel * throttle * dt, -Config.carMaxReverse)
-			end
-		else
-			forwardSpeed = dampToZero(forwardSpeed, Config.carDrag * dt)
 		end
 
 		local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
-		local drifting = driver ~= nil
-			and input ~= nil
-			and input.drift == true
+		local driftHeld = driver ~= nil and input ~= nil and input.drift == true
+		local releasedDrift = driftInputWasHeld and not driftHeld
+		local boostTriggered = false
+
+		if releasedDrift and driftBoostReady then
+			boostTimer = math.max(boostTimer, Config.carDriftBoostDuration)
+			boostTriggered = true
+		end
+
+		if not driftHeld then
+			driftChargeTime = 0
+			driftBoostReady = false
+		end
+
+		local drifting = driftHeld
 			and horizontalSpeed > Config.carDriftMinSpeed
+		local accel = drifting and Config.carAccel * Config.carDriftAccelMultiplier or Config.carAccel
+		local waitingToReverse = false
+		local boostMaxSpeed = math.max(Config.carMaxForward, Config.carDriftBoostMaxSpeed)
+
+		if drifting then
+			driftChargeTime += dt
+			local withinBoostWindow = Config.carDriftBoostWindow <= 0
+				or driftChargeTime <= Config.carDriftBoostChargeTime + Config.carDriftBoostWindow
+			driftBoostReady = driftChargeTime >= Config.carDriftBoostChargeTime
+				and withinBoostWindow
+		elseif driftHeld then
+			driftChargeTime = 0
+			driftBoostReady = false
+		end
+
+		if throttle > 0 then
+			reverseHoldTime = 0
+			forwardSpeed = math.min(forwardSpeed + accel * throttle * dt, boostTimer > 0 and boostMaxSpeed or Config.carMaxForward)
+		elseif throttle < 0 then
+			if forwardSpeed > Config.carReverseStopSpeed then
+				reverseHoldTime = 0
+				forwardSpeed = math.max(forwardSpeed + Config.carBrake * throttle * dt, 0)
+			else
+				reverseHoldTime += dt
+
+				if forwardSpeed > -Config.carReverseStopSpeed
+					and reverseHoldTime < Config.carReverseDelay
+				then
+					waitingToReverse = true
+					forwardSpeed = 0
+					lateralSpeed = dampToZero(lateralSpeed, Config.carBrake * dt)
+				else
+					forwardSpeed = math.max(forwardSpeed + accel * throttle * dt, -Config.carMaxReverse)
+				end
+			end
+		else
+			reverseHoldTime = 0
+			forwardSpeed = dampToZero(forwardSpeed, Config.carDrag * dt)
+		end
 
 		if drifting then
 			forwardSpeed = dampToZero(forwardSpeed, Config.carDriftDrag * dt)
 			lateralSpeed += steer * Config.carDriftSlideForce * dt
 		end
 
+		if boostTriggered then
+			forwardSpeed = math.min(math.max(forwardSpeed, 0) + Config.carDriftBoostImpulse, boostMaxSpeed)
+		end
+
+		if boostTimer > 0 then
+			forwardSpeed = math.min(forwardSpeed + Config.carDriftBoostAccel * dt, boostMaxSpeed)
+			boostTimer = math.max(boostTimer - dt, 0)
+		end
+
 		local grip = drifting and Config.carDriftGrip or Config.carGrip
 		lateralSpeed *= math.exp(-grip * dt)
 		local preTurnVelocity = forward * forwardSpeed + right * lateralSpeed
+		if drifting then
+			preTurnVelocity = dampVectorMagnitude(preTurnVelocity, Config.carDriftDecel * dt)
+		end
 
 		local turnSpeed = if drifting then horizontalSpeed else math.abs(forwardSpeed)
 		if turnSpeed > Config.carMinTurnSpeed and math.abs(steer) > 0.01 then
 			local turnScale = math.clamp(turnSpeed / Config.carMaxForward, 0.25, 1)
-			local driftTurnMultiplier = drifting and Config.carDriftTurnMultiplier or 1
-			yaw -= steer * Config.carTurnRate * turnScale * driftTurnMultiplier * dt
+			local driftRotationSensitivity = drifting and Config.carDriftRotationSensitivity or 1
+			yaw -= steer * Config.carTurnRate * turnScale * driftRotationSensitivity * dt
 		end
 
 		forward = yawToForward(yaw)
 		right = yawToRight(yaw)
 
-		if drifting then
+		if waitingToReverse or drifting then
 			velocity = preTurnVelocity
 		else
 			local speed = preTurnVelocity.Magnitude
@@ -458,58 +807,108 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, driv
 			velocity = preTurnVelocity:Lerp(targetVelocity, gripBlend)
 		end
 
+		if boostTimer > 0 or boostTriggered then
+			velocity = limitHorizontalSpeed(velocity, boostMaxSpeed)
+		end
+
 		horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
 		local previousPosition = position
 		position += Vector3.new(velocity.X, 0, velocity.Z) * dt
-		position, velocity = resolveBuildingCollision(previousPosition, position, velocity)
+		local impactSpeed = horizontalSpeed
+		local crashed
+		local wallScrapeDirection
+		position, velocity, crashed, wallScrapeDirection = resolveBuildingCollision(previousPosition, position, velocity)
+
+		if wallScrapeDirection then
+			local targetYaw = vectorToYaw(wallScrapeDirection)
+			if math.cos(getAngleDelta(yaw, targetYaw)) < 0 then
+				targetYaw += math.pi
+			end
+			yaw = moveAngleToward(yaw, targetYaw, Config.carWallScrapeYawRate * dt)
+		end
+
+		if crashed and driver and cameraEventRemote and crashShakeCooldown <= 0 then
+			local minShakeSpeed = Config.cameraCrashShakeMinSpeed
+			local maxShakeSpeed = math.max(Config.cameraCrashShakeMaxSpeed, minShakeSpeed + 0.001)
+			local intensity = math.clamp((impactSpeed - minShakeSpeed) / (maxShakeSpeed - minShakeSpeed), 0, 1)
+
+			if intensity > 0 then
+				cameraEventRemote:FireClient(driver, "Crash", math.max(intensity, 0.22))
+				crashShakeCooldown = math.max(Config.cameraCrashShakeCooldown, 0)
+			end
+		end
 
 		local previousY = position.Y
-		local targetY = getSurfaceTarget(position)
+		local groundProfile = getGroundProfile(position, yaw)
+		local targetY = groundProfile and groundProfile.targetY or previousY
 		local targetPitch = 0
+		local targetRoll = 0
 
 		if grounded then
-			if previousY - targetY > Config.carGroundSnapDistance then
+			if not groundProfile or previousY - targetY > Config.carGroundSnapDistance then
 				grounded = false
 				verticalVelocity = math.max(verticalVelocity, 8)
 			else
 				position = Vector3.new(position.X, targetY, position.Z)
 				local riseVelocity = (position.Y - previousY) / dt
 				verticalVelocity = math.max(riseVelocity, 0)
-
-				local speedForPitch = math.max(horizontalSpeed, 1)
-				targetPitch = math.clamp(
-					-math.atan2(riseVelocity, speedForPitch),
-					-Config.carMaxPitch,
-					Config.carMaxPitch
-				)
+				targetPitch = groundProfile.targetPitch
+				targetRoll = groundProfile.targetRoll
 			end
 		else
-			verticalVelocity -= Config.carGravity * dt
+			local gravity = if verticalVelocity > 0 then Config.carGravityUp else Config.carGravityDown
+			verticalVelocity -= gravity * dt
 			position = Vector3.new(position.X, position.Y + verticalVelocity * dt, position.Z)
 
-			if position.Y <= targetY and verticalVelocity <= 0 then
+			if groundProfile and position.Y <= targetY and verticalVelocity <= 0 then
 				position = Vector3.new(position.X, targetY, position.Z)
 				verticalVelocity = 0
 				grounded = true
+				targetPitch = groundProfile.targetPitch
+				targetRoll = groundProfile.targetRoll
 			else
+				local maxPitch = math.rad(Config.carMaxPitchDegrees)
 				targetPitch = math.clamp(
 					-verticalVelocity / Config.carAirPitchScale,
-					-Config.carMaxPitch,
-					Config.carMaxPitch
+					-maxPitch,
+					maxPitch
 				)
 			end
 		end
 
 		visualPitch += (targetPitch - visualPitch) * math.clamp(Config.carPitchFollow * dt, 0, 1)
-		setDriftSmokeEnabled(drifting)
+		visualRoll += (targetRoll - visualRoll) * math.clamp(Config.carRollFollow * dt, 0, 1)
+		local targetDriftRoll = 0
+		if drifting and math.abs(steer) > 0.01 then
+			local fullLeanSpeed = math.max(Config.carDriftLeanFullSpeed, Config.carDriftMinSpeed + 0.001)
+			local leanSpeedAlpha = math.clamp(
+				(horizontalSpeed - Config.carDriftMinSpeed) / (fullLeanSpeed - Config.carDriftMinSpeed),
+				0,
+				1
+			)
+			targetDriftRoll = steer * math.rad(Config.carDriftLeanDegrees) * leanSpeedAlpha
+		end
+		visualDriftRoll += (targetDriftRoll - visualDriftRoll) * math.clamp(Config.carDriftLeanFollow * dt, 0, 1)
 
-		car:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(visualPitch, 0, 0))
+		if drifting then
+			setDriftSmokeState(driftBoostReady and "boost" or "normal")
+		else
+			setDriftSmokeState("off")
+		end
+
+		driftInputWasHeld = driftHeld
+
+		car:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(visualPitch, 0, visualRoll + visualDriftRoll))
 	end)
 end
 
 local driveInputRemote = getOrCreateDriveInputRemote()
+local cameraEventRemote = getOrCreateCameraEventRemote()
+local debugTuneRemote = getOrCreateDebugTuneRemote()
+runDebugTuning(debugTuneRemote)
+
 local world = MapGenerator.Generate()
 local driveSurfaces, crashObstacles = collectWorldParts(world)
 buildStuntFeatures(world, driveSurfaces)
 local car, seat, driftEmitters = createCab(world)
-runCarController(car, seat, driftEmitters, driveInputRemote, driveSurfaces, crashObstacles)
+runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles)
