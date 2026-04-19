@@ -375,6 +375,9 @@ local function sampleSpline(pointParts, closedCurve)
 				table.insert(samples, catmullRom(p0, p1, p2, p3, t))
 			end
 		end
+		if #samples > 1 then
+			table.insert(samples, samples[1])
+		end
 	else
 		for i = 1, #positions - 1 do
 			local p0 = positions[math.max(1, i - 1)]
@@ -995,6 +998,7 @@ end)
 btnCloseCurve.MouseButton1Click:Connect(function()
 	setClosedCurve(not isClosedCurve())
 	refreshCurveModeButton()
+	scheduleAutoRebuild("curve-mode-toggled")
 	updateStatus(isClosedCurve() and "Curve set to closed loop" or "Curve set to open")
 end)
 
