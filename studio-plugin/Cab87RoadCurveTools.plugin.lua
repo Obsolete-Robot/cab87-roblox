@@ -11,6 +11,7 @@ local ROOT_NAME = "Cab87RoadEditor"
 local SPLINES_NAME = "Splines"
 local POINTS_NAME = "RoadPoints"
 local MESH_NAME = "RoadMesh"
+local NETWORK_NAME = "RoadNetwork"
 local ACTIVE_SPLINE_ATTR = "ActiveSpline"
 
 local ROAD_WIDTH = 28
@@ -18,6 +19,7 @@ local ROAD_THICKNESS = 1.2
 local SAMPLE_STEP_STUDS = 8
 local ROAD_OVERLAP = 1.0
 local POINT_SNAP_OFFSET = 0.35
+local ENDPOINT_WELD_DISTANCE = 22
 
 local AUTO_REBUILD_DELAY = 0.12
 local autoRebuildEnabled = false
@@ -200,6 +202,18 @@ local function getOrCreateRoadModel()
 	return road
 end
 
+local function getOrCreateNetworkModel()
+	local root = getOrCreateRoot()
+	local model = root:FindFirstChild(NETWORK_NAME)
+	if model and model:IsA("Model") then
+		return model
+	end
+	model = Instance.new("Model")
+	model.Name = NETWORK_NAME
+	model.Parent = root
+	return model
+end
+
 local function clearFolder(folder)
 	for _, child in ipairs(folder:GetChildren()) do
 		child:Destroy()
@@ -210,6 +224,23 @@ local function sortedPoints()
 	local folder = getOrCreatePointsFolder()
 	local points = {}
 	for _, child in ipairs(folder:GetChildren()) do
+		if child:IsA("BasePart") then
+			table.insert(points, child)
+		end
+	end
+	table.sort(points, function(a, b)
+		return a.Name < b.Name
+	end)
+	return points
+end
+
+local function sortedPointsInSpline(spline)
+	local pointsFolder = spline:FindFirstChild(POINTS_NAME)
+	if not (pointsFolder and pointsFolder:IsA("Folder")) then
+		return {}
+	end
+	local points = {}
+	for _, child in ipairs(pointsFolder:GetChildren()) do
 		if child:IsA("BasePart") then
 			table.insert(points, child)
 		end
@@ -294,9 +325,13 @@ local function addControlPoint(pos)
 	return p
 end
 
+local function isClosedSpline(spline)
+	return spline and spline:GetAttribute("ClosedCurve") == true
+end
+
 local function isClosedCurve()
 	local spline = getActiveSpline()
-	return spline:GetAttribute("ClosedCurve") == true
+	return isClosedSpline(spline)
 end
 
 local function setClosedCurve(value)
@@ -359,10 +394,7 @@ local function sampleSpline(pointParts, closedCurve)
 	return samples
 end
 
-local function buildPrimitiveRoad(samples)
-	local roadModel = getOrCreateRoadModel()
-	clearFolder(roadModel)
-
+local function buildPrimitiveRoad(samples, targetModel, namePrefix)
 	local segments = 0
 	for i = 1, #samples - 1 do
 		local a = samples[i]
@@ -372,7 +404,7 @@ local function buildPrimitiveRoad(samples)
 		if len > 0.05 then
 			local mid = (a + b) * 0.5 + Vector3.new(0, ROAD_THICKNESS * 0.5, 0)
 			local part = Instance.new("Part")
-			part.Name = string.format("Road_%04d", i)
+			part.Name = string.format("%s_%04d", namePrefix or "Road", i)
 			part.Anchored = true
 			part.Material = Enum.Material.Asphalt
 			part.Color = Color3.fromRGB(28, 28, 32)
@@ -381,17 +413,14 @@ local function buildPrimitiveRoad(samples)
 			part.Size = Vector3.new(ROAD_WIDTH, ROAD_THICKNESS, len + ROAD_OVERLAP)
 			part.CFrame = CFrame.lookAt(mid, b)
 			part.Locked = true
-			part.Parent = roadModel
+			part.Parent = targetModel
 			segments += 1
 		end
 	end
 	return segments
 end
 
-local function buildMeshRoad(samples)
-	local roadModel = getOrCreateRoadModel()
-	clearFolder(roadModel)
-
+local function buildMeshRoad(samples, targetModel, meshName)
 	local editableMesh = AssetService:CreateEditableMesh()
 	if not editableMesh then
 		return false, "EditableMesh creation failed"
@@ -444,35 +473,212 @@ local function buildMeshRoad(samples)
 	end
 
 	local meshPart = meshPartOrErr
-	meshPart.Name = "RoadRibbonMesh"
+	meshPart.Name = meshName or "RoadRibbonMesh"
 	meshPart.Anchored = true
 	meshPart.Material = Enum.Material.Asphalt
 	meshPart.Color = Color3.fromRGB(28, 28, 32)
 	meshPart.DoubleSided = true
 	meshPart.Locked = true
-	meshPart.Parent = roadModel
+	meshPart.Parent = targetModel
 
 	return true, #samples - 1
 end
 
+local function distanceXZ(a, b)
+	local dx = a.X - b.X
+	local dz = a.Z - b.Z
+	return math.sqrt(dx * dx + dz * dz)
+end
+
+local function dedupeJunctionPoint(points, p, threshold)
+	for i = 1, #points do
+		if distanceXZ(points[i], p) <= threshold then
+			points[i] = (points[i] + p) * 0.5
+			return
+		end
+	end
+	table.insert(points, p)
+end
+
+local function collectSplineBuildData()
+	local chains = {}
+	for _, spline in ipairs(sortedSplines()) do
+		local points = sortedPointsInSpline(spline)
+		if #points >= 2 then
+			local closed = isClosedSpline(spline)
+			local samples = sampleSpline(points, closed)
+			table.insert(chains, {
+				spline = spline,
+				points = points,
+				samples = samples,
+				closed = closed,
+			})
+		end
+	end
+	return chains
+end
+
+local function weldEndpointJunctions(chains)
+	local endpoints = {}
+	for _, chain in ipairs(chains) do
+		if not chain.closed and #chain.samples >= 2 then
+			table.insert(endpoints, { chain = chain, index = 1, pos = chain.samples[1] })
+			table.insert(endpoints, { chain = chain, index = #chain.samples, pos = chain.samples[#chain.samples] })
+		end
+	end
+
+	local clusters = {}
+	for _, endpoint in ipairs(endpoints) do
+		local placed = false
+		for _, cluster in ipairs(clusters) do
+			if distanceXZ(cluster.center, endpoint.pos) <= ENDPOINT_WELD_DISTANCE then
+				table.insert(cluster.members, endpoint)
+				local sum = Vector3.zero
+				for _, m in ipairs(cluster.members) do
+					sum += m.pos
+				end
+				cluster.center = sum / #cluster.members
+				placed = true
+				break
+			end
+		end
+		if not placed then
+			table.insert(clusters, { center = endpoint.pos, members = { endpoint } })
+		end
+	end
+
+	local junctions = {}
+	for _, cluster in ipairs(clusters) do
+		if #cluster.members >= 2 then
+			local center = cluster.center
+			for _, m in ipairs(cluster.members) do
+				m.chain.samples[m.index] = center
+			end
+			dedupeJunctionPoint(junctions, center, ROAD_WIDTH * 0.35)
+		end
+	end
+
+	return junctions
+end
+
+local function segmentIntersection2D(a, b, c, d)
+	local function cross2(u, v)
+		return u.X * v.Y - u.Y * v.X
+	end
+
+	local p = Vector2.new(a.X, a.Z)
+	local r = Vector2.new(b.X - a.X, b.Z - a.Z)
+	local q = Vector2.new(c.X, c.Z)
+	local s = Vector2.new(d.X - c.X, d.Z - c.Z)
+
+	local denom = cross2(r, s)
+	if math.abs(denom) < 1e-6 then
+		return nil
+	end
+
+	local qp = q - p
+	local t = cross2(qp, s) / denom
+	local u = cross2(qp, r) / denom
+
+	if t <= 0 or t >= 1 or u <= 0 or u >= 1 then
+		return nil
+	end
+
+	return Vector2.new(p.X + r.X * t, p.Y + r.Y * t)
+end
+
+local function collectCrossIntersections(chains)
+	local points = {}
+	for i = 1, #chains do
+		local aChain = chains[i]
+		for j = i + 1, #chains do
+			local bChain = chains[j]
+			for ai = 1, #aChain.samples - 1 do
+				local a1 = aChain.samples[ai]
+				local a2 = aChain.samples[ai + 1]
+				for bi = 1, #bChain.samples - 1 do
+					local b1 = bChain.samples[bi]
+					local b2 = bChain.samples[bi + 1]
+					local hit2 = segmentIntersection2D(a1, a2, b1, b2)
+					if hit2 then
+						local y = (a1.Y + a2.Y + b1.Y + b2.Y) * 0.25
+						dedupeJunctionPoint(points, Vector3.new(hit2.X, y, hit2.Y), ROAD_WIDTH * 0.45)
+					end
+				end
+			end
+		end
+	end
+	return points
+end
+
+local function createIntersectionCaps(targetModel, points)
+	local caps = 0
+	for i, p in ipairs(points) do
+		local cap = Instance.new("Part")
+		cap.Name = string.format("Intersection_%03d", i)
+		cap.Shape = Enum.PartType.Cylinder
+		cap.Anchored = true
+		cap.Material = Enum.Material.Asphalt
+		cap.Color = Color3.fromRGB(28, 28, 32)
+		cap.Size = Vector3.new(ROAD_THICKNESS, ROAD_WIDTH * 1.15, ROAD_WIDTH * 1.15)
+		cap.CFrame = CFrame.new(p + Vector3.new(0, ROAD_THICKNESS * 0.5, 0)) * CFrame.Angles(0, 0, math.rad(90))
+		cap.Locked = true
+		cap.Parent = targetModel
+		caps += 1
+	end
+	return caps
+end
+
+local function clearPerSplineRoadMeshes()
+	for _, spline in ipairs(sortedSplines()) do
+		local road = spline:FindFirstChild(MESH_NAME)
+		if road and road:IsA("Model") then
+			clearFolder(road)
+		end
+	end
+end
+
 local function rebuildRoadMeshPreferred()
-	local points = sortedPoints()
-	if #points < 2 then
-		warn("[cab87 roads] Need at least 2 control points")
-		return 0, "Need at least 2 points"
+	local chains = collectSplineBuildData()
+	if #chains == 0 then
+		warn("[cab87 roads] Need at least one spline with 2+ points")
+		return 0, "Need at least one spline with 2+ points"
 	end
 
-	local samples = sampleSpline(points, isClosedCurve())
-	local okMesh, info = buildMeshRoad(samples)
-	if okMesh then
-		print(string.format("[cab87 roads] Built mesh road from %d control points", #points))
-		return info, "Mesh road built"
+	local network = getOrCreateNetworkModel()
+	clearFolder(network)
+	clearPerSplineRoadMeshes()
+
+	local endpointJunctions = weldEndpointJunctions(chains)
+	local crossJunctions = collectCrossIntersections(chains)
+
+	local totalSpans = 0
+	local usedFallback = false
+
+	for _, chain in ipairs(chains) do
+		local meshName = string.format("Road_%s", chain.spline.Name)
+		local okMesh, info = buildMeshRoad(chain.samples, network, meshName)
+		if okMesh then
+			totalSpans += info
+		else
+			usedFallback = true
+			warn("[cab87 roads] Mesh build failed for " .. chain.spline.Name .. ": " .. tostring(info))
+			totalSpans += buildPrimitiveRoad(chain.samples, network, meshName)
+		end
 	end
 
-	warn("[cab87 roads] EditableMesh build failed, falling back to primitives: " .. tostring(info))
-	local segs = buildPrimitiveRoad(samples)
-	print(string.format("[cab87 roads] Built %d primitive segments (fallback)", segs))
-	return segs, "Fallback primitives (EditableMesh unavailable)"
+	local junctionPoints = {}
+	for _, p in ipairs(endpointJunctions) do
+		dedupeJunctionPoint(junctionPoints, p, ROAD_WIDTH * 0.35)
+	end
+	for _, p in ipairs(crossJunctions) do
+		dedupeJunctionPoint(junctionPoints, p, ROAD_WIDTH * 0.35)
+	end
+	local capCount = createIntersectionCaps(network, junctionPoints)
+
+	local note = string.format("Network rebuilt: %d splines, %d spans, %d intersections%s", #chains, totalSpans, capCount, usedFallback and " (primitive fallback used)" or "")
+	print("[cab87 roads] " .. note)
+	return totalSpans, note
 end
 
 local function snapPointsToTerrain()
@@ -585,7 +791,7 @@ local function setSelectedPointY(mode)
 end
 
 local function countSegments()
-	local road = getOrCreateRoadModel()
+	local road = getOrCreateNetworkModel()
 	local n = 0
 	for _, child in ipairs(road:GetChildren()) do
 		if child:IsA("BasePart") then
@@ -738,19 +944,21 @@ end
 
 local function refreshPointWatchers()
 	local alive = {}
-	for _, p in ipairs(sortedPoints()) do
-		alive[p] = true
-		if not pointWatchers[p] then
-			pointWatchers[p] = {
-				p:GetPropertyChangedSignal("Position"):Connect(function()
-					scheduleAutoRebuild("point-moved")
-				end),
-				p.AncestryChanged:Connect(function(_, parent)
-					if parent == nil then
-						disconnectPointWatcher(p)
-					end
-				end),
-			}
+	for _, spline in ipairs(sortedSplines()) do
+		for _, p in ipairs(sortedPointsInSpline(spline)) do
+			alive[p] = true
+			if not pointWatchers[p] then
+				pointWatchers[p] = {
+					p:GetPropertyChangedSignal("Position"):Connect(function()
+						scheduleAutoRebuild("point-moved")
+					end),
+					p.AncestryChanged:Connect(function(_, parent)
+						if parent == nil then
+							disconnectPointWatcher(p)
+						end
+					end),
+				}
+			end
 		end
 	end
 
@@ -905,7 +1113,8 @@ end)
 
 btnClear.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before clear")
-	clearFolder(getOrCreateRoadModel())
+	clearFolder(getOrCreateNetworkModel())
+	clearPerSplineRoadMeshes()
 	ChangeHistoryService:SetWaypoint("cab87 roads after clear")
 	updateStatus("Cleared road geometry")
 end)

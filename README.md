@@ -87,7 +87,9 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
    - Use **Prev Spline** / **Next Spline** to switch active spline.
 2. Use **Add Point** repeatedly to lay out a path.
 3. Click **Snap Points** to drop points to terrain.
-4. Click **Rebuild Road (Mesh)** to generate a smooth road ribbon (EditableMesh). If EditableMesh is unavailable, it falls back to primitive strips.
+4. Click **Rebuild Road (Mesh)** to generate roads from **all splines** as one unified network (EditableMesh preferred, primitive fallback).
+   - Nearby spline endpoints are welded.
+   - Crossings get automatic intersection caps.
 5. Press Play and test traversal.
 
 ## Controls
@@ -107,4 +109,4 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
 
 - This uses a scripted arcade controller (not Roblox default vehicle physics).
 - Tune values in `src/shared/Config.lua`.
-- V2 is being delivered in staged chunks. Current chunk adds arterial skeleton roads and Voronoi-style district zoning.
+- V2 is being delivered in staged chunks. Current chunks include arterial skeleton roads, district zoning, and multi-spline road network meshing with intersections.
