@@ -348,6 +348,62 @@ local function removeSelectedPoint()
 	return true
 end
 
+local function selectedPointWithIndex()
+	local selection = Selection:Get()
+	if #selection == 0 then
+		return nil, nil, sortedPoints()
+	end
+	local target = selection[1]
+	if not isControlPoint(target) then
+		return nil, nil, sortedPoints()
+	end
+	local points = sortedPoints()
+	for i, p in ipairs(points) do
+		if p == target then
+			return p, i, points
+		end
+	end
+	return nil, nil, points
+end
+
+local function setSelectedPointY(mode)
+	local selected, idx, points = selectedPointWithIndex()
+	if not selected then
+		return false, "Select a control point first"
+	end
+
+	local prev = points[idx - 1]
+	local nextp = points[idx + 1]
+	local y
+
+	if mode == "prev" then
+		if not prev then
+			return false, "No previous point"
+		end
+		y = prev.Position.Y
+	elseif mode == "next" then
+		if not nextp then
+			return false, "No next point"
+		end
+		y = nextp.Position.Y
+	elseif mode == "avg" then
+		if prev and nextp then
+			y = (prev.Position.Y + nextp.Position.Y) * 0.5
+		elseif prev then
+			y = prev.Position.Y
+		elseif nextp then
+			y = nextp.Position.Y
+		else
+			return false, "Need at least one neighbor point"
+		end
+	else
+		return false, "Unknown Y snap mode"
+	end
+
+	selected.Position = Vector3.new(selected.Position.X, y, selected.Position.Z)
+	return true, string.format("Set %s Y to %.2f", selected.Name, y)
+end
+
 local function countSegments()
 	local road = getOrCreateRoadModel()
 	local n = 0
@@ -436,7 +492,7 @@ local function updateStatus(extra)
 	if extra and #extra > 0 then
 		status.Text = base .. "\n" .. extra
 	else
-		status.Text = base .. "\nTip: use Select Nearest to grab points from viewport fast."
+		status.Text = base .. "\nTip: Select Nearest + Y buttons makes fast flatten/slope edits."
 	end
 end
 
@@ -444,6 +500,9 @@ local btnNew = makeButton("New Spline")
 local btnAddCamera = makeButton("Add Point (Camera Hit)")
 local btnAddSelected = makeButton("Add Point (From Selection)")
 local btnSelectNearest = makeButton("Select Nearest Point (Camera)")
+local btnYPrev = makeButton("Set Selected Y = Prev")
+local btnYNext = makeButton("Set Selected Y = Next")
+local btnYAvg = makeButton("Set Selected Y = Avg")
 local btnRemoveSel = makeButton("Remove Selected Point")
 local btnRemoveLast = makeButton("Remove Last Point")
 local btnSnap = makeButton("Snap Points To Terrain")
@@ -492,6 +551,39 @@ btnSelectNearest.MouseButton1Click:Connect(function()
 	end
 	Selection:Set({ p })
 	updateStatus("Selected " .. p.Name)
+end)
+
+btnYPrev.MouseButton1Click:Connect(function()
+	ChangeHistoryService:SetWaypoint("cab87 roads before y=prev")
+	local ok, msg = setSelectedPointY("prev")
+	ChangeHistoryService:SetWaypoint("cab87 roads after y=prev")
+	if ok then
+		updateStatus(msg)
+	else
+		updateStatus(msg)
+	end
+end)
+
+btnYNext.MouseButton1Click:Connect(function()
+	ChangeHistoryService:SetWaypoint("cab87 roads before y=next")
+	local ok, msg = setSelectedPointY("next")
+	ChangeHistoryService:SetWaypoint("cab87 roads after y=next")
+	if ok then
+		updateStatus(msg)
+	else
+		updateStatus(msg)
+	end
+end)
+
+btnYAvg.MouseButton1Click:Connect(function()
+	ChangeHistoryService:SetWaypoint("cab87 roads before y=avg")
+	local ok, msg = setSelectedPointY("avg")
+	ChangeHistoryService:SetWaypoint("cab87 roads after y=avg")
+	if ok then
+		updateStatus(msg)
+	else
+		updateStatus(msg)
+	end
 end)
 
 btnRemoveSel.MouseButton1Click:Connect(function()

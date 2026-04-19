@@ -65,6 +65,9 @@ Road Editor panel actions:
 - Add Point (Camera Hit)
 - Add Point (From Selection)
 - Select Nearest Point (Camera)
+- Set Selected Y = Prev
+- Set Selected Y = Next
+- Set Selected Y = Avg
 - Remove Selected Point
 - Remove Last Point
 - Snap Points To Terrain
