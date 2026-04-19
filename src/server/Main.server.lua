@@ -4,7 +4,6 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
-local Easing = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Easing"))
 local MapGenerator = require(script.Parent:WaitForChild("MapGenerator"))
 
 local NORMAL_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(210, 210, 210))
@@ -416,9 +415,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local visualRoll = 0
 	local visualDriveRoll = 0
 	local visualDriftRoll = 0
-	local visualBoostPitch = 0
-	local visualBounceOffset = 0
-	local visualBounceVelocity = 0
 	local airPitchVelocity = 0
 	local airRollVelocity = 0
 	local reverseHoldTime = 0
@@ -426,9 +422,8 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local driftBoostReady = false
 	local driftInputWasHeld = false
 	local boostTimer = 0
-	local boostWheelieTimer = 0
-	local boostWheelieReturnTimer = 0
-	local boostWheelieReturnStartPitch = 0
+	local boostVisualPulse = 0
+	local landingVisualPulse = 0
 	local elapsedTime = 0
 	local fallResetCooldown = 0
 	local pendingFallResetPose = nil
@@ -442,8 +437,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
 	raycastParams.FilterDescendantsInstances = driveSurfaces
-	local wheeliePivotOffset = Vector3.new(0, -Config.carRideHeight, -5.6)
-
 	local serverPivotValue = car:FindFirstChild(Config.carServerPivotValueName)
 	if serverPivotValue and not serverPivotValue:IsA("CFrameValue") then
 		serverPivotValue:Destroy()
@@ -455,27 +448,20 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		serverPivotValue.Name = Config.carServerPivotValueName
 		serverPivotValue.Parent = car
 	end
+	car:SetAttribute(Config.carVisualDriftingAttribute, false)
+	car:SetAttribute(Config.carVisualDriftBoostReadyAttribute, false)
+	car:SetAttribute(Config.carVisualBoostPulseAttribute, boostVisualPulse)
+	car:SetAttribute(Config.carVisualLandingPulseAttribute, landingVisualPulse)
+	car:SetAttribute(Config.carVisualLandingSpeedAttribute, 0)
 
 	local function triggerBoostFeedback(player)
 		if Config.carBoostWheelieDuration > 0 and Config.carBoostWheelieDegrees > 0 then
-			boostWheelieTimer = math.max(boostWheelieTimer, Config.carBoostWheelieDuration)
-			boostWheelieReturnTimer = 0
-			boostWheelieReturnStartPitch = 0
+			boostVisualPulse += 1
+			car:SetAttribute(Config.carVisualBoostPulseAttribute, boostVisualPulse)
 		end
 
 		if player and cameraEventRemote and Config.cameraBoostShakeIntensity > 0 then
 			cameraEventRemote:FireClient(player, "Shake", Config.cameraBoostShakeIntensity)
-		end
-	end
-
-	local function startBoostWheelieReturn()
-		boostWheelieTimer = 0
-		boostWheelieReturnStartPitch = visualBoostPitch
-		boostWheelieReturnTimer = math.max(Config.carBoostWheelieReturnDuration, 0)
-
-		if boostWheelieReturnTimer <= 0 or math.abs(boostWheelieReturnStartPitch) <= 0.001 then
-			boostWheelieReturnTimer = 0
-			boostWheelieReturnStartPitch = 0
 		end
 	end
 
@@ -859,34 +845,9 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			return
 		end
 
-		visualBounceVelocity = math.min(visualBounceVelocity, -impulse * bounceAlpha)
-	end
-
-	local function updateLandingBounce(dt)
-		local spring = math.max(Config.carLandingBounceSpring, 0)
-		local damping = math.max(Config.carLandingBounceDamping, 0)
-		local maxOffset = math.max(Config.carLandingBounceMaxOffset, 0)
-		if not grounded or maxOffset <= 0 or spring <= 0 then
-			visualBounceOffset = 0
-			visualBounceVelocity = 0
-			return
-		end
-
-		visualBounceVelocity += (-visualBounceOffset * spring - visualBounceVelocity * damping) * dt
-		visualBounceOffset += visualBounceVelocity * dt
-
-		if visualBounceOffset < -maxOffset then
-			visualBounceOffset = -maxOffset
-			visualBounceVelocity = math.max(visualBounceVelocity, 0)
-		elseif visualBounceOffset > maxOffset then
-			visualBounceOffset = maxOffset
-			visualBounceVelocity = math.min(visualBounceVelocity, 0)
-		end
-
-		if math.abs(visualBounceOffset) < 0.001 and math.abs(visualBounceVelocity) < 0.001 then
-			visualBounceOffset = 0
-			visualBounceVelocity = 0
-		end
+		landingVisualPulse += 1
+		car:SetAttribute(Config.carVisualLandingSpeedAttribute, landingSpeed)
+		car:SetAttribute(Config.carVisualLandingPulseAttribute, landingVisualPulse)
 	end
 
 	local function trimSafeGroundHistory()
@@ -948,9 +909,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		visualRoll = 0
 		visualDriveRoll = 0
 		visualDriftRoll = 0
-		visualBoostPitch = 0
-		visualBounceOffset = 0
-		visualBounceVelocity = 0
 		airPitchVelocity = 0
 		airRollVelocity = 0
 		reverseHoldTime = 0
@@ -958,9 +916,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		driftBoostReady = false
 		driftInputWasHeld = false
 		boostTimer = 0
-		boostWheelieTimer = 0
-		boostWheelieReturnTimer = 0
-		boostWheelieReturnStartPitch = 0
 		pendingFallResetPose = nil
 		fallResetCooldown = math.max(Config.carFallResetCooldown, 0)
 		safeGroundHistory = {
@@ -999,9 +954,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			visualRoll = 0
 			visualDriveRoll = 0
 			visualDriftRoll = 0
-			visualBoostPitch = 0
-			visualBounceOffset = 0
-			visualBounceVelocity = 0
 			airPitchVelocity = 0
 			airRollVelocity = 0
 			reverseHoldTime = 0
@@ -1009,9 +961,6 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			driftBoostReady = false
 			driftInputWasHeld = false
 			boostTimer = 0
-			boostWheelieTimer = 0
-			boostWheelieReturnTimer = 0
-			boostWheelieReturnStartPitch = 0
 			fallResetCooldown = 0
 			pendingFallResetPose = nil
 			safeGroundHistory = {}
@@ -1321,65 +1270,21 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			visualDriftRoll = 0
 		end
 
-		local targetBoostPitch = 0
-		if grounded and boostWheelieTimer > 0 then
-			targetBoostPitch = -math.rad(Config.carBoostWheelieDegrees)
-			boostWheelieTimer = math.max(boostWheelieTimer - dt, 0)
-
-			if boostWheelieTimer <= 0 then
-				startBoostWheelieReturn()
-			end
-		elseif boostWheelieTimer > 0 then
-			boostWheelieTimer = math.max(boostWheelieTimer - dt, 0)
-			if boostWheelieTimer <= 0 then
-				boostWheelieReturnTimer = 0
-				boostWheelieReturnStartPitch = 0
-			end
-		elseif grounded and boostWheelieReturnTimer > 0 then
-			local returnDuration = math.max(Config.carBoostWheelieReturnDuration, 0.001)
-			local returnProgress = 1 - math.clamp(boostWheelieReturnTimer / returnDuration, 0, 1)
-			local returnAlpha = Easing.OutBack(returnProgress)
-			targetBoostPitch = boostWheelieReturnStartPitch * (1 - returnAlpha)
-			boostWheelieReturnTimer = math.max(boostWheelieReturnTimer - dt, 0)
-
-			if boostWheelieReturnTimer <= 0 then
-				targetBoostPitch = 0
-				boostWheelieReturnStartPitch = 0
-			end
-		elseif boostWheelieReturnTimer > 0 then
-			boostWheelieReturnTimer = 0
-			boostWheelieReturnStartPitch = 0
-		end
-		if grounded then
-			if targetBoostPitch < 0 and math.abs(targetBoostPitch) > math.abs(visualBoostPitch) then
-				visualBoostPitch += (targetBoostPitch - visualBoostPitch)
-					* math.clamp(Config.carBoostWheelieFollow * dt, 0, 1)
-			else
-				visualBoostPitch = targetBoostPitch
-			end
-		else
-			visualBoostPitch = 0
-		end
-		updateLandingBounce(dt)
-
 		if drifting then
 			setDriftSmokeState(driftBoostReady and "boost" or "normal")
 		else
 			setDriftSmokeState("off")
 		end
+		car:SetAttribute(Config.carVisualDriftingAttribute, drifting)
+		car:SetAttribute(Config.carVisualDriftBoostReadyAttribute, driftBoostReady)
 
 		driftInputWasHeld = driftHeld
 
-		local bodyRoll = visualRoll + visualDriveRoll + visualDriftRoll
-		local wheeliePivot = CFrame.new(wheeliePivotOffset)
-			* CFrame.Angles(visualBoostPitch, 0, 0)
-			* CFrame.new(wheeliePivotOffset * -1)
-		local targetPivot = CFrame.new(position + Vector3.new(0, visualBounceOffset, 0))
+		local networkPivot = CFrame.new(position)
 			* CFrame.Angles(0, yaw, 0)
-			* CFrame.Angles(visualPitch, 0, bodyRoll)
-			* wheeliePivot
-		serverPivotValue.Value = targetPivot
-		car:PivotTo(targetPivot)
+			* CFrame.Angles(visualPitch, 0, visualRoll)
+		serverPivotValue.Value = networkPivot
+		car:PivotTo(networkPivot)
 	end)
 end
 
