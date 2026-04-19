@@ -4,7 +4,7 @@ Code-first Roblox starter for a **Crazy Taxi style** prototype using **Rojo + Lu
 
 ## What is in this repo
 
-- Procedural-ish city grid (roads + buildings)
+- Procedural city generator (arterial-first roads + district-based buildings)
 - Drivable arcade cab built from code
 - Minimal HUD showing controls
 - Rojo project mapping for Studio sync
@@ -73,3 +73,4 @@ Then restart Studio. You will get a **cab87** toolbar with:
 
 - This uses a scripted arcade controller (not Roblox default vehicle physics).
 - Tune values in `src/shared/Config.lua`.
+- V2 is being delivered in staged chunks. Current chunk adds arterial skeleton roads and Voronoi-style district zoning.

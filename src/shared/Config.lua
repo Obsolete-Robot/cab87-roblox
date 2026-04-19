@@ -10,6 +10,14 @@ local Config = {
 	buildingHeightMin = 25,
 	buildingHeightMax = 120,
 
+	-- Map generation V2 (chunk 1): arterial-first roads + Voronoi-style districts.
+	districtCount = 9,
+	districtJitter = 0.35,
+	arterialRingRadiusBlocks = 4,
+	arterialSpineOffsetBlocks = 3,
+	secondaryRoadEveryBlocks = 2,
+	secondaryRoadChance = 0.55,
+
 	carRideHeight = carRideHeight,
 	carSpawn = Vector3.new(0, roadSurfaceY + carRideHeight, 0),
 	carAccel = 95,
