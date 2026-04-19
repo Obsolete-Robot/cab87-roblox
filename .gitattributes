@@ -1,0 +1,15 @@
+# Normalize source files so Windows/WSL line endings do not create noisy diffs.
+* text=auto eol=lf
+
+# Keep Windows command scripts friendly to cmd.exe on checkout.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Treat binary assets as binary if they are added later.
+*.ico binary
+*.gif binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.rbxl binary
+*.rbxm binary
