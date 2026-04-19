@@ -1,14 +1,13 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 set "SCRIPT_DIR=%~dp0"
-set "SOURCE=%SCRIPT_DIR%studio-plugin\Cab87MapTools.plugin.lua"
+set "PLUGIN_SRC_DIR=%SCRIPT_DIR%studio-plugin"
 set "TARGET_DIR=%LOCALAPPDATA%\Roblox\Plugins"
-set "TARGET=%TARGET_DIR%\Cab87MapTools.plugin.lua"
 
-if not exist "%SOURCE%" (
-  echo [cab87] ERROR: plugin source not found:
-  echo %SOURCE%
+if not exist "%PLUGIN_SRC_DIR%" (
+  echo [cab87] ERROR: plugin source folder not found:
+  echo %PLUGIN_SRC_DIR%
   exit /b 1
 )
 
@@ -21,16 +20,29 @@ if not exist "%TARGET_DIR%" (
   )
 )
 
-copy /Y "%SOURCE%" "%TARGET%" >nul
-if errorlevel 1 (
-  echo [cab87] ERROR: failed to copy plugin to:
-  echo %TARGET%
+set "COPIED=0"
+for %%F in (Cab87MapTools.plugin.lua Cab87RoadCurveTools.plugin.lua) do (
+  set "SRC=%PLUGIN_SRC_DIR%\%%F"
+  set "DST=%TARGET_DIR%\%%F"
+  if exist "!SRC!" (
+    copy /Y "!SRC!" "!DST!" >nul
+    if errorlevel 1 (
+      echo [cab87] ERROR: failed to copy %%F
+      exit /b 1
+    )
+    echo [cab87] Installed plugin: %%F
+    set /a COPIED+=1
+  ) else (
+    echo [cab87] WARNING: missing plugin file %%F
+  )
+)
+
+if "%COPIED%"=="0" (
+  echo [cab87] ERROR: no plugin files were installed.
   exit /b 1
 )
 
-echo [cab87] Installed plugin:
-echo %TARGET%
-echo [cab87] Restart Roblox Studio to load the toolbar.
+echo [cab87] Done. Restart Roblox Studio to load plugin updates.
 
 endlocal
 exit /b 0
