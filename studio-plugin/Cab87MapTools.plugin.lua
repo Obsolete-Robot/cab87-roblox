@@ -24,6 +24,23 @@ local clearButton = toolbar:CreateButton(
 generateButton.ClickableWhenViewportHidden = true
 clearButton.ClickableWhenViewportHidden = true
 
+local function requireFresh(moduleScript)
+	if not moduleScript or not moduleScript:IsA("ModuleScript") then
+		return nil, "target is not a ModuleScript"
+	end
+
+	-- Require cache can hold stale module state in plugin context.
+	-- Clone-and-require forces a fresh load of latest synced source.
+	local clone = moduleScript:Clone()
+	clone.Parent = nil
+	local ok, result = pcall(require, clone)
+	clone:Destroy()
+	if not ok then
+		return nil, result
+	end
+	return result, nil
+end
+
 local function getMapGenerator()
 	local folder = ServerScriptService:FindFirstChild("cab87")
 	if not folder then
@@ -37,9 +54,9 @@ local function getMapGenerator()
 		return nil
 	end
 
-	local ok, mod = pcall(require, moduleScript)
-	if not ok then
-		warn("[cab87] Failed to require MapGenerator: " .. tostring(mod))
+	local mod, err = requireFresh(moduleScript)
+	if not mod then
+		warn("[cab87] Failed to require MapGenerator: " .. tostring(err))
 		return nil
 	end
 
@@ -61,8 +78,8 @@ local function defaultOverrides()
 	if sharedFolder then
 		local cfgModule = sharedFolder:FindFirstChild("Config")
 		if cfgModule and cfgModule:IsA("ModuleScript") then
-			local okCfg, cfg = pcall(require, cfgModule)
-			if okCfg and type(cfg) == "table" then
+			local cfg = requireFresh(cfgModule)
+			if type(cfg) == "table" then
 				overrides.cityBlocks = cfg.cityBlocks
 				overrides.roadWidth = cfg.roadWidth
 			end
