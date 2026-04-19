@@ -64,10 +64,11 @@ Road Editor panel actions:
 - New Spline
 - Add Point (Camera Hit)
 - Add Point (From Selection)
+- Select Nearest Point (Camera)
 - Remove Selected Point
 - Remove Last Point
 - Snap Points To Terrain
-- Rebuild Road
+- Rebuild Road (Mesh preferred, primitive fallback)
 - Clear Road
 
 When you click **Generate Map**, check Studio Output for seed + generator version.
@@ -77,7 +78,7 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
 1. Click **New Spline**.
 2. Use **Add Point** repeatedly to lay out a path.
 3. Click **Snap Points** to drop points to terrain.
-4. Click **Rebuild Road** to generate joined road geometry.
+4. Click **Rebuild Road (Mesh)** to generate a smooth road ribbon (EditableMesh). If EditableMesh is unavailable, it falls back to primitive strips.
 5. Press Play and test traversal.
 
 ## Controls

@@ -2,6 +2,7 @@
 -- Install to:
 --   %LOCALAPPDATA%\Roblox\Plugins\Cab87RoadCurveTools.plugin.lua
 
+local AssetService = game:GetService("AssetService")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local Workspace = game:GetService("Workspace")
@@ -12,7 +13,7 @@ local MESH_NAME = "RoadMesh"
 
 local ROAD_WIDTH = 28
 local ROAD_THICKNESS = 1.2
-local SAMPLE_STEP_STUDS = 10
+local SAMPLE_STEP_STUDS = 8
 local ROAD_OVERLAP = 1.0
 local POINT_SNAP_OFFSET = 0.35
 
@@ -85,8 +86,7 @@ local function isControlPoint(inst)
 	if not inst or not inst:IsA("BasePart") then
 		return false
 	end
-	local folder = getOrCreatePointsFolder()
-	return inst.Parent == folder
+	return inst.Parent == getOrCreatePointsFolder()
 end
 
 local function raycastFromCamera(maxDistance)
@@ -110,17 +110,41 @@ local function raycastFromCamera(maxDistance)
 	return origin + camera.CFrame.LookVector * 120
 end
 
+local function nearestPointToCameraRay()
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		return nil
+	end
+	local origin = camera.CFrame.Position
+	local dir = camera.CFrame.LookVector
+
+	local best, bestDist = nil, math.huge
+	for _, p in ipairs(sortedPoints()) do
+		local toPoint = p.Position - origin
+		local along = toPoint:Dot(dir)
+		if along > 0 then
+			local perp = (toPoint - dir * along).Magnitude
+			if perp < bestDist then
+				best = p
+				bestDist = perp
+			end
+		end
+	end
+	return best
+end
+
 local function addControlPoint(pos)
 	local folder = getOrCreatePointsFolder()
 	local idx = #folder:GetChildren() + 1
 	local p = Instance.new("Part")
 	p.Name = pointName(idx)
 	p.Shape = Enum.PartType.Ball
-	p.Size = Vector3.new(4, 4, 4)
+	p.Size = Vector3.new(4.5, 4.5, 4.5)
 	p.Anchored = true
 	p.Material = Enum.Material.Neon
 	p.Color = Color3.fromRGB(255, 180, 75)
 	p.Position = pos
+	p.Locked = false
 	p.Parent = folder
 	return p
 end
@@ -159,19 +183,11 @@ local function sampleSpline(pointParts)
 	return samples
 end
 
-local function rebuildRoadFromPoints()
-	local points = sortedPoints()
-	if #points < 2 then
-		warn("[cab87 roads] Need at least 2 control points")
-		return 0
-	end
-
+local function buildPrimitiveRoad(samples)
 	local roadModel = getOrCreateRoadModel()
 	clearFolder(roadModel)
 
-	local samples = sampleSpline(points)
 	local segments = 0
-
 	for i = 1, #samples - 1 do
 		local a = samples[i]
 		local b = samples[i + 1]
@@ -188,13 +204,99 @@ local function rebuildRoadFromPoints()
 			part.BottomSurface = Enum.SurfaceType.Smooth
 			part.Size = Vector3.new(ROAD_WIDTH, ROAD_THICKNESS, len + ROAD_OVERLAP)
 			part.CFrame = CFrame.lookAt(mid, b)
+			part.Locked = true
 			part.Parent = roadModel
 			segments += 1
 		end
 	end
-
-	print(string.format("[cab87 roads] Built %d road segments from %d control points", segments, #points))
 	return segments
+end
+
+local function buildMeshRoad(samples)
+	local roadModel = getOrCreateRoadModel()
+	clearFolder(roadModel)
+
+	local editableMesh = AssetService:CreateEditableMesh()
+	if not editableMesh then
+		return false, "EditableMesh creation failed"
+	end
+
+	local leftVerts = {}
+	local rightVerts = {}
+
+	for i = 1, #samples do
+		local prev = samples[math.max(1, i - 1)]
+		local nextp = samples[math.min(#samples, i + 1)]
+		local tangent = (nextp - prev)
+		if tangent.Magnitude < 1e-4 then
+			tangent = Vector3.new(0, 0, 1)
+		else
+			tangent = tangent.Unit
+		end
+
+		local right = tangent:Cross(Vector3.yAxis)
+		if right.Magnitude < 1e-4 then
+			right = Vector3.xAxis
+		else
+			right = right.Unit
+		end
+
+		local center = samples[i] + Vector3.new(0, ROAD_THICKNESS * 0.5, 0)
+		local leftPos = center - right * (ROAD_WIDTH * 0.5)
+		local rightPos = center + right * (ROAD_WIDTH * 0.5)
+
+		leftVerts[i] = editableMesh:AddVertex(leftPos)
+		rightVerts[i] = editableMesh:AddVertex(rightPos)
+	end
+
+	for i = 1, #samples - 1 do
+		local l1 = leftVerts[i]
+		local r1 = rightVerts[i]
+		local l2 = leftVerts[i + 1]
+		local r2 = rightVerts[i + 1]
+
+		editableMesh:AddTriangle(l1, l2, r2)
+		editableMesh:AddTriangle(l1, r2, r1)
+	end
+
+	local meshContent = Content.fromObject(editableMesh)
+	local okCreate, meshPartOrErr = pcall(function()
+		return AssetService:CreateMeshPartAsync(meshContent)
+	end)
+	if not okCreate then
+		return false, tostring(meshPartOrErr)
+	end
+
+	local meshPart = meshPartOrErr
+	meshPart.Name = "RoadRibbonMesh"
+	meshPart.Anchored = true
+	meshPart.Material = Enum.Material.Asphalt
+	meshPart.Color = Color3.fromRGB(28, 28, 32)
+	meshPart.DoubleSided = true
+	meshPart.Locked = true
+	meshPart.Parent = roadModel
+
+	return true, #samples - 1
+end
+
+local function rebuildRoadMeshPreferred()
+	local points = sortedPoints()
+	if #points < 2 then
+		warn("[cab87 roads] Need at least 2 control points")
+		return 0, "Need at least 2 points"
+	end
+
+	local samples = sampleSpline(points)
+	local okMesh, info = buildMeshRoad(samples)
+	if okMesh then
+		print(string.format("[cab87 roads] Built mesh road from %d control points", #points))
+		return info, "Mesh road built"
+	end
+
+	warn("[cab87 roads] EditableMesh build failed, falling back to primitives: " .. tostring(info))
+	local segs = buildPrimitiveRoad(samples)
+	print(string.format("[cab87 roads] Built %d primitive segments (fallback)", segs))
+	return segs, "Fallback primitives (EditableMesh unavailable)"
 end
 
 local function snapPointsToTerrain()
@@ -219,8 +321,6 @@ local function snapPointsToTerrain()
 			changed += 1
 		end
 	end
-
-	print(string.format("[cab87 roads] Snapped %d points", changed))
 	return changed
 end
 
@@ -268,10 +368,10 @@ local widgetInfo = DockWidgetPluginGuiInfo.new(
 	Enum.InitialDockState.Right,
 	true,
 	true,
-	320,
-	420,
-	260,
-	300
+	340,
+	520,
+	280,
+	360
 )
 
 local widget = plugin:CreateDockWidgetPluginGui("Cab87RoadCurveEditorWidget", widgetInfo)
@@ -319,7 +419,7 @@ title.TextColor3 = Color3.fromRGB(255, 220, 120)
 title.Parent = root
 
 local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, 0, 0, 38)
+status.Size = UDim2.new(1, 0, 0, 52)
 status.BackgroundTransparency = 1
 status.TextXAlignment = Enum.TextXAlignment.Left
 status.TextYAlignment = Enum.TextYAlignment.Top
@@ -332,21 +432,22 @@ status.Parent = root
 local function updateStatus(extra)
 	local points = #sortedPoints()
 	local segments = countSegments()
-	local base = string.format("Points: %d | Segments: %d", points, segments)
+	local base = string.format("Points: %d | Road parts: %d", points, segments)
 	if extra and #extra > 0 then
 		status.Text = base .. "\n" .. extra
 	else
-		status.Text = base .. "\nAdd points from camera or selection, then rebuild."
+		status.Text = base .. "\nTip: use Select Nearest to grab points from viewport fast."
 	end
 end
 
 local btnNew = makeButton("New Spline")
 local btnAddCamera = makeButton("Add Point (Camera Hit)")
 local btnAddSelected = makeButton("Add Point (From Selection)")
+local btnSelectNearest = makeButton("Select Nearest Point (Camera)")
 local btnRemoveSel = makeButton("Remove Selected Point")
 local btnRemoveLast = makeButton("Remove Last Point")
 local btnSnap = makeButton("Snap Points To Terrain")
-local btnRebuild = makeButton("Rebuild Road")
+local btnRebuild = makeButton("Rebuild Road (Mesh)")
 local btnClear = makeButton("Clear Road")
 
 btnNew.MouseButton1Click:Connect(function()
@@ -383,6 +484,16 @@ btnAddSelected.MouseButton1Click:Connect(function()
 	updateStatus("Added " .. p.Name .. " from selection")
 end)
 
+btnSelectNearest.MouseButton1Click:Connect(function()
+	local p = nearestPointToCameraRay()
+	if not p then
+		updateStatus("No points found in front of camera")
+		return
+	end
+	Selection:Set({ p })
+	updateStatus("Selected " .. p.Name)
+end)
+
 btnRemoveSel.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before remove selected")
 	local ok = removeSelectedPoint()
@@ -414,9 +525,9 @@ end)
 
 btnRebuild.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before rebuild")
-	local n = rebuildRoadFromPoints()
+	local segs, note = rebuildRoadMeshPreferred()
 	ChangeHistoryService:SetWaypoint("cab87 roads after rebuild")
-	updateStatus(string.format("Rebuilt %d segments", n))
+	updateStatus(string.format("Rebuilt road (%d spans). %s", segs, note or ""))
 end)
 
 btnClear.MouseButton1Click:Connect(function()
