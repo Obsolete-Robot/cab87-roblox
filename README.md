@@ -41,6 +41,18 @@ g.Regenerate({
 
 Use `g.Clear()` if you just want to remove the generated world.
 
+### Optional: one-click Studio toolbar buttons (Generate/Clear)
+
+This repo includes a plugin file at:
+- `studio-plugin/Cab87MapTools.plugin.lua`
+
+Install it by copying that file to:
+- `%LOCALAPPDATA%\\Roblox\\Plugins\\Cab87MapTools.plugin.lua`
+
+Then restart Studio. You will get a **cab87** toolbar with:
+- **Generate Map**
+- **Clear Map**
+
 ## Controls
 
 - Accelerate: `W` / `Up`
