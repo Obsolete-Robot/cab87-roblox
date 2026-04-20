@@ -5,7 +5,9 @@ local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 local AuthoredRoadRuntime = require(script.Parent:WaitForChild("AuthoredRoadRuntime"))
+local GpsService = require(script.Parent:WaitForChild("GpsService"))
 local MapGenerator = require(script.Parent:WaitForChild("MapGenerator"))
+local PassengerService = require(script.Parent:WaitForChild("PassengerService"))
 
 local NORMAL_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(210, 210, 210))
 local BOOST_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(65, 185, 255))
@@ -1526,3 +1528,15 @@ end
 
 local car, seat, driftEmitters = createCab(world, spawnPose)
 runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
+local gpsService = GpsService.start({
+	world = world,
+	car = car,
+	driveSurfaces = driveSurfaces,
+})
+PassengerService.start({
+	world = world,
+	car = car,
+	driveSurfaces = driveSurfaces,
+	spawnPose = spawnPose,
+	gpsService = gpsService,
+})

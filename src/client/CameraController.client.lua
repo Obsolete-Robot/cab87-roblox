@@ -81,8 +81,16 @@ end
 
 local function getDrivenCab()
 	local humanoid = getHumanoid()
-	local seat = humanoid and humanoid.SeatPart
-	return getCabFromSeat(seat) or findCabOccupiedBy(humanoid)
+	if not humanoid or not humanoid.Sit then
+		return nil
+	end
+
+	local seat = humanoid.SeatPart
+	if seat and seat.Occupant == humanoid then
+		return getCabFromSeat(seat)
+	end
+
+	return findCabOccupiedBy(humanoid)
 end
 
 local function yawToForward(yaw)
@@ -202,10 +210,10 @@ local function restoreCamera()
 	if camera then
 		camera.CameraType = previousCameraType or Enum.CameraType.Custom
 
-		if previousCameraSubject and previousCameraSubject.Parent then
-			camera.CameraSubject = previousCameraSubject
-		elseif humanoid then
+		if humanoid and humanoid.Parent then
 			camera.CameraSubject = humanoid
+		elseif previousCameraSubject and previousCameraSubject.Parent then
+			camera.CameraSubject = previousCameraSubject
 		end
 
 		if previousFieldOfView then

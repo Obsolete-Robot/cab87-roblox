@@ -6,6 +6,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local MinimapController = require(script.Parent:WaitForChild("MinimapController"))
 local driveInputRemote = ReplicatedStorage:WaitForChild(Config.driveInputRemoteName)
 
 local keyDown = {}
@@ -89,6 +90,19 @@ local function getNumberAttribute(instance, attributeName)
 
 	local value = instance:GetAttribute(attributeName)
 	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+		return nil
+	end
+
+	return value
+end
+
+local function getStringAttribute(instance, attributeName)
+	if not instance or type(attributeName) ~= "string" then
+		return nil
+	end
+
+	local value = instance:GetAttribute(attributeName)
+	if type(value) ~= "string" then
 		return nil
 	end
 
@@ -232,6 +246,8 @@ gui.Name = "Cab87Hud"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
+MinimapController.start(gui, getDrivenCab)
+
 local label = Instance.new("TextLabel")
 label.Name = "Hint"
 label.AnchorPoint = Vector2.new(0.5, 1)
@@ -328,9 +344,83 @@ local speedBarFillCorner = Instance.new("UICorner")
 speedBarFillCorner.CornerRadius = UDim.new(1, 0)
 speedBarFillCorner.Parent = speedBarFill
 
+local farePanel = Instance.new("Frame")
+farePanel.Name = "FarePanel"
+farePanel.AnchorPoint = Vector2.new(0, 1)
+farePanel.Position = UDim2.new(0, 18, 1, -182)
+farePanel.Size = UDim2.fromOffset(260, 78)
+farePanel.BackgroundColor3 = Color3.fromRGB(15, 17, 20)
+farePanel.BackgroundTransparency = 0.12
+farePanel.BorderSizePixel = 0
+farePanel.Visible = false
+farePanel.Parent = gui
+
+local farePanelCorner = Instance.new("UICorner")
+farePanelCorner.CornerRadius = UDim.new(0, 8)
+farePanelCorner.Parent = farePanel
+
+local farePanelStroke = Instance.new("UIStroke")
+farePanelStroke.Color = Config.passengerPickupColor
+farePanelStroke.Transparency = 0.12
+farePanelStroke.Thickness = 2
+farePanelStroke.Parent = farePanel
+
+local fareMode = Instance.new("TextLabel")
+fareMode.Name = "Mode"
+fareMode.BackgroundTransparency = 1
+fareMode.Position = UDim2.fromOffset(14, 8)
+fareMode.Size = UDim2.new(1, -108, 0, 18)
+fareMode.Font = Enum.Font.GothamBold
+fareMode.Text = "PICKUP"
+fareMode.TextColor3 = Config.passengerPickupColor
+fareMode.TextSize = 14
+fareMode.TextXAlignment = Enum.TextXAlignment.Left
+fareMode.Parent = farePanel
+
+local fareDistance = Instance.new("TextLabel")
+fareDistance.Name = "Distance"
+fareDistance.BackgroundTransparency = 1
+fareDistance.Position = UDim2.new(1, -92, 0, 8)
+fareDistance.Size = UDim2.fromOffset(78, 18)
+fareDistance.Font = Enum.Font.GothamBold
+fareDistance.Text = "0 st"
+fareDistance.TextColor3 = Config.passengerPickupColor
+fareDistance.TextSize = 14
+fareDistance.TextXAlignment = Enum.TextXAlignment.Right
+fareDistance.Parent = farePanel
+
+local fareStatus = Instance.new("TextLabel")
+fareStatus.Name = "Status"
+fareStatus.BackgroundTransparency = 1
+fareStatus.Position = UDim2.fromOffset(14, 30)
+fareStatus.Size = UDim2.new(1, -28, 0, 22)
+fareStatus.Font = Enum.Font.GothamSemibold
+fareStatus.Text = "Find a pickup"
+fareStatus.TextColor3 = Color3.fromRGB(245, 245, 245)
+fareStatus.TextSize = 16
+fareStatus.TextWrapped = true
+fareStatus.TextXAlignment = Enum.TextXAlignment.Left
+fareStatus.Parent = farePanel
+
+local fareCompleted = Instance.new("TextLabel")
+fareCompleted.Name = "Completed"
+fareCompleted.BackgroundTransparency = 1
+fareCompleted.Position = UDim2.fromOffset(14, 55)
+fareCompleted.Size = UDim2.new(1, -28, 0, 16)
+fareCompleted.Font = Enum.Font.GothamSemibold
+fareCompleted.Text = "FARES 0"
+fareCompleted.TextColor3 = Color3.fromRGB(210, 213, 218)
+fareCompleted.TextSize = 12
+fareCompleted.TextXAlignment = Enum.TextXAlignment.Left
+fareCompleted.Parent = farePanel
+
 local displayedSpeed = 0
 local lastSpeedText = nil
 local lastSpeedCab = nil
+local lastFareMode = nil
+local lastFareStatus = nil
+local lastFareDistance = nil
+local lastFareCompleted = nil
 
 local function getSpeedometerMaxSpeed()
 	return math.max(
@@ -372,7 +462,59 @@ local function updateSpeedometer(dt)
 	speedBarFill.Size = UDim2.fromScale(math.clamp(displayedSpeed / getSpeedometerMaxSpeed(), 0, 1), 1)
 end
 
-RunService.RenderStepped:Connect(updateSpeedometer)
+local function updateFarePanel()
+	local cab = getDrivenCab()
+	farePanel.Visible = cab ~= nil
+	if not cab then
+		return
+	end
+
+	local mode = getStringAttribute(cab, Config.passengerFareModeAttribute) or "pickup"
+	local status = getStringAttribute(cab, Config.passengerFareStatusAttribute) or "Find a pickup"
+	local distance = getNumberAttribute(cab, Config.passengerFareDistanceAttribute) or 0
+	local completed = getNumberAttribute(cab, Config.passengerFareCompletedAttribute) or 0
+	local modeText = "PICKUP"
+	local modeColor = Config.passengerPickupColor
+
+	if mode == "delivery" then
+		modeText = "DELIVER"
+		modeColor = Config.passengerDeliveryColor
+	elseif mode == "boarding" then
+		modeText = "BOARDING"
+		modeColor = Color3.fromRGB(255, 206, 38)
+	end
+
+	if modeText ~= lastFareMode then
+		fareMode.Text = modeText
+		lastFareMode = modeText
+	end
+
+	if status ~= lastFareStatus then
+		fareStatus.Text = status
+		lastFareStatus = status
+	end
+
+	local roundedDistance = math.max(0, math.floor(distance + 0.5))
+	if roundedDistance ~= lastFareDistance then
+		fareDistance.Text = string.format("%d st", roundedDistance)
+		lastFareDistance = roundedDistance
+	end
+
+	local roundedCompleted = math.max(0, math.floor(completed + 0.5))
+	if roundedCompleted ~= lastFareCompleted then
+		fareCompleted.Text = string.format("FARES %d", roundedCompleted)
+		lastFareCompleted = roundedCompleted
+	end
+
+	fareMode.TextColor3 = modeColor
+	fareDistance.TextColor3 = modeColor
+	farePanelStroke.Color = modeColor
+end
+
+RunService.RenderStepped:Connect(function(dt)
+	updateSpeedometer(dt)
+	updateFarePanel()
+end)
 
 local function isDebugPanelAvailable()
 	return Config.debugPanelEnabled == true
@@ -452,6 +594,10 @@ local function getDebugPropertyTab(property)
 		return "Camera"
 	end
 
+	if string.sub(property.key, 1, 9) == "passenger" then
+		return "Passengers"
+	end
+
 	if cabVisualDebugProperties[property.key] then
 		return "Visual"
 	end
@@ -485,10 +631,11 @@ local function createDebugPanel()
 		return
 	end
 
-	local tabNames = { "Cab", "Visual", "Camera" }
+	local tabNames = { "Cab", "Visual", "Passengers", "Camera" }
 	local propertiesByTab = {
 		Cab = {},
 		Visual = {},
+		Passengers = {},
 		Camera = {},
 	}
 
@@ -499,7 +646,7 @@ local function createDebugPanel()
 	local debugValues = {}
 	local rowsByKey = {}
 	local activeSlider = nil
-	local activeTab = if #propertiesByTab.Cab > 0 then "Cab" else "Camera"
+	local activeTab = "Cab"
 	local scrollsByTab = {}
 	local tabButtons = {}
 	local tabPadding = 8
@@ -508,11 +655,10 @@ local function createDebugPanel()
 	for _, tabName in ipairs(tabNames) do
 		if #propertiesByTab[tabName] > 0 then
 			visibleTabCount += 1
+			if #propertiesByTab[activeTab] == 0 then
+				activeTab = tabName
+			end
 		end
-	end
-
-	if #propertiesByTab.Cab == 0 and #propertiesByTab.Visual > 0 then
-		activeTab = "Visual"
 	end
 
 	local toggle = Instance.new("TextButton")
