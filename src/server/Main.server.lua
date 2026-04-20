@@ -1467,7 +1467,15 @@ local driveSurfaces
 local crashObstacles
 local spawnPose
 
+local function authoredRoadStartupLog(message, ...)
+	if Config.authoredRoadDebugLogging == true then
+		local ok, formatted = pcall(string.format, tostring(message), ...)
+		print("[cab87 roads server] " .. (ok and formatted or tostring(message)))
+	end
+end
+
 local function createGeneratedWorld()
+	authoredRoadStartupLog("creating generated fallback world")
 	world = MapGenerator.Generate()
 	driveSurfaces, crashObstacles = collectWorldParts(world)
 	buildStuntFeatures(world, driveSurfaces)
@@ -1477,6 +1485,11 @@ local function createGeneratedWorld()
 	}
 end
 
+authoredRoadStartupLog(
+	"startup: useAuthoredRoadEditorWorld=%s root=%s",
+	tostring(Config.useAuthoredRoadEditorWorld == true),
+	authoredRoadRoot and authoredRoadRoot:GetFullName() or "nil"
+)
 local okHasAuthoredRoad, hasAuthoredRoad = pcall(function()
 	return AuthoredRoadRuntime.hasRoadData(authoredRoadRoot)
 end)
@@ -1484,8 +1497,10 @@ if not okHasAuthoredRoad then
 	warn("[cab87] Authored road data check failed; using generated map: " .. tostring(hasAuthoredRoad))
 	hasAuthoredRoad = false
 end
+authoredRoadStartupLog("hasAuthoredRoad=%s", tostring(hasAuthoredRoad == true))
 
 if hasAuthoredRoad then
+	authoredRoadStartupLog("creating authored road world")
 	local okWorld, authoredWorld, authoredDriveSurfaces, authoredCrashObstacles, authoredSpawnPose = pcall(function()
 		return AuthoredRoadRuntime.createWorld(authoredRoadRoot)
 	end)
@@ -1494,6 +1509,13 @@ if hasAuthoredRoad then
 		driveSurfaces = authoredDriveSurfaces
 		crashObstacles = authoredCrashObstacles
 		spawnPose = authoredSpawnPose
+		authoredRoadStartupLog(
+			"authored road world active: driveSurfaces=%d spawn=(%.1f, %.1f, %.1f)",
+			#(driveSurfaces or {}),
+			spawnPose.position.X,
+			spawnPose.position.Y,
+			spawnPose.position.Z
+		)
 	else
 		warn("[cab87] Authored road world failed; using generated map so the taxi can spawn: " .. tostring(authoredWorld))
 		createGeneratedWorld()

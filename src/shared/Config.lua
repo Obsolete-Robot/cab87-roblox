@@ -24,6 +24,7 @@ local Config = {
 	authoredRoadCollisionSurfaceOffset = 0.6,
 	authoredRoadSampleStepStuds = 8,
 	authoredRoadOverlap = 1.0,
+	authoredRoadDebugLogging = true,
 
 	carRideHeight = carRideHeight,
 	carSpawn = Vector3.new(0, roadSurfaceY + carRideHeight, 0),

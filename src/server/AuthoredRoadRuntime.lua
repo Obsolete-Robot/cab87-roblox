@@ -20,13 +20,37 @@ local VISUAL_ROAD_THICKNESS = 0.35
 local VISUAL_ROAD_SURFACE_OFFSET = 0.72
 local ROAD_MESH_THICKNESS = 1.2
 local ENDPOINT_WELD_DISTANCE = 22
-local INTERSECTION_RADIUS_SCALE = 0.58
+local INTERSECTION_RADIUS_SCALE = 0.5
 local INTERSECTION_BLEND_SCALE = 0.95
 local INTERSECTION_MERGE_SCALE = 0.45
 local INTERSECTION_RING_SEGMENTS = 28
+local ROAD_WIDTH_TRIANGULATION_STEP = 24
+local ROAD_WIDTH_MAX_INTERNAL_LOOPS = 2
+local ROAD_LOFT_LENGTH_STEP = Config.authoredRoadSampleStepStuds or 8
 local INTERSECTION_HEIGHT_TOLERANCE_MIN = ROAD_MESH_THICKNESS * 2
 local INTERSECTION_HEIGHT_TOLERANCE_MAX = ROAD_MESH_THICKNESS * 4
 local INTERSECTION_HEIGHT_TOLERANCE_WIDTH_SCALE = 0.18
+local ROAD_LOG_PREFIX = "[cab87 roads server]"
+
+local function formatLogMessage(message, ...)
+	local ok, formatted = pcall(string.format, tostring(message), ...)
+	if ok then
+		return formatted
+	end
+	return tostring(message)
+end
+
+local function roadDebugLog(message, ...)
+	if Config.authoredRoadDebugLogging == true then
+		print(ROAD_LOG_PREFIX .. " " .. formatLogMessage(message, ...))
+	end
+end
+
+local function roadDebugWarn(message, ...)
+	warn(ROAD_LOG_PREFIX .. " " .. formatLogMessage(message, ...))
+end
+
+local dataModelContentWarningShown = false
 
 local function vectorToYaw(vector)
 	return math.atan2(vector.X, vector.Z)
@@ -130,6 +154,7 @@ local function createReplicatedSplineData(root, world)
 
 	dataRoot:SetAttribute("SplineCount", splineCount)
 	dataRoot:SetAttribute("PointCount", pointCount)
+	roadDebugLog("replicated raw spline data: splines=%d points=%d", splineCount, pointCount)
 	return dataRoot
 end
 
@@ -306,6 +331,13 @@ local function collectSplineBuildData(root)
 		end
 	end
 	return chains
+end
+
+local function getChainName(chain, fallback)
+	if chain and chain.spline and chain.spline.Name then
+		return chain.spline.Name
+	end
+	return fallback or "unknown"
 end
 
 local function maxRoadWidthForMembers(members)
@@ -594,76 +626,291 @@ local function sampleLoopIsClosed(samples)
 	return distanceXZ(samples[1], samples[#samples]) <= 0.05 and math.abs(samples[1].Y - samples[#samples].Y) <= 0.05
 end
 
-local function tangentForSample(samples, index, closedLoop)
-	local count = #samples
-	local prev
-	local nextp
-	if closedLoop then
-		if index == 1 or index == count then
-			prev = samples[count - 1]
-			nextp = samples[2]
-		else
-			prev = samples[index - 1]
-			nextp = samples[index + 1]
-		end
-	else
-		prev = samples[math.max(1, index - 1)]
-		nextp = samples[math.min(count, index + 1)]
-	end
-
-	local tangent = nextp - prev
-	if tangent.Magnitude < 1e-4 then
-		return Vector3.new(0, 0, 1)
-	end
-	return tangent.Unit
-end
-
 local function roadRightFromTangent(tangent)
-	local right = tangent:Cross(Vector3.yAxis)
+	local right = Vector3.yAxis:Cross(tangent)
 	if right.Magnitude < 1e-4 then
 		return Vector3.xAxis
 	end
 	return right.Unit
 end
 
-local function addRoadRibbonToMesh(state, samples, roadWidth)
-	if #samples < 2 then
+local function horizontalUnit(vector)
+	local flat = Vector3.new(vector.X, 0, vector.Z)
+	if flat.Magnitude < 1e-4 then
+		return nil
+	end
+	return flat.Unit
+end
+
+local function addRoadLoftRowVertices(state, left, right, widthSegments)
+	local row = {}
+	for j = 0, widthSegments do
+		row[j + 1] = addMeshVertex(state, left:Lerp(right, j / widthSegments))
+	end
+	return row
+end
+
+local function getRoadSampleTangent(samples, index, edgeCount, closedLoop, fallbackDir)
+	if closedLoop then
+		local prevIndex = index - 1
+		if prevIndex < 1 then
+			prevIndex = edgeCount
+		end
+		local nextIndex = index + 1
+		if nextIndex > edgeCount then
+			nextIndex = 1
+		end
+		local prevDir = horizontalUnit(samples[index] - samples[prevIndex])
+		local nextDir = horizontalUnit(samples[nextIndex] - samples[index])
+		if prevDir and nextDir then
+			local combined = prevDir + nextDir
+			if combined.Magnitude > 1e-4 then
+				return combined.Unit
+			end
+		end
+		return nextDir or prevDir or fallbackDir
+	end
+
+	if index == 1 then
+		return horizontalUnit(samples[2] - samples[1]) or fallbackDir
+	elseif index == edgeCount then
+		return horizontalUnit(samples[edgeCount] - samples[edgeCount - 1]) or fallbackDir
+	end
+
+	local prevDir = horizontalUnit(samples[index] - samples[index - 1])
+	local nextDir = horizontalUnit(samples[index + 1] - samples[index])
+	if prevDir and nextDir then
+		local combined = prevDir + nextDir
+		if combined.Magnitude > 1e-4 then
+			return combined.Unit
+		end
+	end
+	return nextDir or prevDir or fallbackDir
+end
+
+local function polylineLength(points, closedLoop)
+	local count = #points
+	if count < 2 then
 		return 0
 	end
 
-	local closedLoop = sampleLoopIsClosed(samples)
-	local leftVerts = {}
-	local rightVerts = {}
-	local count = #samples
+	local segmentCount = closedLoop and count or count - 1
+	local total = 0
+	for i = 1, segmentCount do
+		local nextIndex = closedLoop and ((i % count) + 1) or (i + 1)
+		total += (points[nextIndex] - points[i]).Magnitude
+	end
+	return total
+end
 
-	for i = 1, count do
-		if closedLoop and i == count then
-			leftVerts[i] = leftVerts[1]
-			rightVerts[i] = rightVerts[1]
-		else
-			local tangent = tangentForSample(samples, i, closedLoop)
-			local right = roadRightFromTangent(tangent)
-			local center = samples[i] + Vector3.new(0, ROAD_MESH_THICKNESS * 0.5, 0)
-			local leftPos = center - right * (roadWidth * 0.5)
-			local rightPos = center + right * (roadWidth * 0.5)
+local function samplePolylineAtFraction(points, closedLoop, fraction)
+	local count = #points
+	if count == 0 then
+		return Vector3.zero
+	elseif count == 1 then
+		return points[1]
+	end
 
-			leftVerts[i] = addMeshVertex(state, leftPos)
-			rightVerts[i] = addMeshVertex(state, rightPos)
+	local totalLength = polylineLength(points, closedLoop)
+	if totalLength <= 1e-4 then
+		return points[1]
+	end
+
+	local target = math.clamp(fraction, 0, 1) * totalLength
+	if closedLoop then
+		target = target % totalLength
+	elseif target <= 0 then
+		return points[1]
+	elseif target >= totalLength then
+		return points[count]
+	end
+
+	local traveled = 0
+	local segmentCount = closedLoop and count or count - 1
+	for i = 1, segmentCount do
+		local nextIndex = closedLoop and ((i % count) + 1) or (i + 1)
+		local a = points[i]
+		local b = points[nextIndex]
+		local segmentLength = (b - a).Magnitude
+		if segmentLength > 1e-4 then
+			if traveled + segmentLength >= target then
+				return a:Lerp(b, (target - traveled) / segmentLength)
+			end
+			traveled += segmentLength
 		end
 	end
 
-	local spans = 0
-	for i = 1, count - 1 do
-		if (samples[i + 1] - samples[i]).Magnitude > 0.05 then
-			local l1 = leftVerts[i]
-			local r1 = rightVerts[i]
-			local l2 = leftVerts[i + 1]
-			local r2 = rightVerts[i + 1]
+	return closedLoop and points[1] or points[count]
+end
 
-			addMeshTriangle(state, l1, l2, r2)
-			addMeshTriangle(state, l1, r2, r1)
-			spans += 1
+local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugLabel)
+	if #samples < 2 then
+		return nil
+	end
+
+	roadWidth = sanitizeRoadWidth(roadWidth)
+	local closedLoop = sampleLoopIsClosed(samples)
+	local edgeCount = closedLoop and #samples - 1 or #samples
+	if edgeCount < 2 then
+		return nil
+	end
+
+	local halfWidth = roadWidth * 0.5
+	local widthSegments = math.min(ROAD_WIDTH_MAX_INTERNAL_LOOPS + 1, math.max(1, math.ceil(roadWidth / ROAD_WIDTH_TRIANGULATION_STEP)))
+	local centerControls = {}
+	local leftControls = {}
+	local rightControls = {}
+	local rights = {}
+	local fallbackDir = Vector3.new(0, 0, 1)
+	local rightFlips = 0
+
+	for i = 1, edgeCount do
+		local tangent = getRoadSampleTangent(samples, i, edgeCount, closedLoop, fallbackDir)
+		fallbackDir = tangent or fallbackDir
+		local right = roadRightFromTangent(fallbackDir)
+		if i > 1 and rights[i - 1] and right:Dot(rights[i - 1]) < 0 then
+			right = -right
+			rightFlips += 1
 		end
+		local center = samples[i] + Vector3.new(0, surfaceYOffset, 0)
+		centerControls[i] = center
+		rights[i] = right
+		leftControls[i] = center - right * halfWidth
+		rightControls[i] = center + right * halfWidth
+	end
+
+	local centerLength = polylineLength(centerControls, closedLoop)
+	local leftLength = polylineLength(leftControls, closedLoop)
+	local rightLength = polylineLength(rightControls, closedLoop)
+	local desiredRowCount
+	if closedLoop then
+		desiredRowCount = math.max(3, edgeCount, math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP))
+	else
+		desiredRowCount = math.max(2, edgeCount, math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP) + 1)
+	end
+	local minEdgeStep = math.max(2, roadWidth * 0.02)
+	local shortestCurveLength = math.min(centerLength, leftLength, rightLength)
+	local edgeLimitedRowCount = desiredRowCount
+	if shortestCurveLength > 1e-4 then
+		if closedLoop then
+			edgeLimitedRowCount = math.max(3, math.floor(shortestCurveLength / minEdgeStep))
+		else
+			edgeLimitedRowCount = math.max(2, math.floor(shortestCurveLength / minEdgeStep) + 1)
+		end
+	end
+	local rowCount = math.min(desiredRowCount, edgeLimitedRowCount)
+
+	local spanCount = closedLoop and rowCount or rowCount - 1
+	local centers = {}
+	local leftPositions = {}
+	local rightPositions = {}
+	for i = 1, rowCount do
+		local fraction
+		if closedLoop then
+			fraction = (i - 1) / rowCount
+		else
+			fraction = rowCount > 1 and ((i - 1) / (rowCount - 1)) or 0
+		end
+		centers[i] = samplePolylineAtFraction(centerControls, closedLoop, fraction)
+		leftPositions[i] = samplePolylineAtFraction(leftControls, closedLoop, fraction)
+		rightPositions[i] = samplePolylineAtFraction(rightControls, closedLoop, fraction)
+	end
+
+	local collapsedSpans = 0
+	local tightSpans = 0
+	local minCenterStep = math.huge
+	local minLeftStep = math.huge
+	local minRightStep = math.huge
+	local minLoftWidth = math.huge
+	local maxLoftWidth = 0
+	local pinchedRows = 0
+	for i = 1, rowCount do
+		local loftWidth = (rightPositions[i] - leftPositions[i]).Magnitude
+		minLoftWidth = math.min(minLoftWidth, loftWidth)
+		maxLoftWidth = math.max(maxLoftWidth, loftWidth)
+		if loftWidth < roadWidth * 0.35 then
+			pinchedRows += 1
+		end
+	end
+	for i = 1, spanCount do
+		local nextIndex = closedLoop and ((i % rowCount) + 1) or (i + 1)
+		local centerStep = (centers[nextIndex] - centers[i]).Magnitude
+		local leftStep = (leftPositions[nextIndex] - leftPositions[i]).Magnitude
+		local rightStep = (rightPositions[nextIndex] - rightPositions[i]).Magnitude
+		minCenterStep = math.min(minCenterStep, centerStep)
+		minLeftStep = math.min(minLeftStep, leftStep)
+		minRightStep = math.min(minRightStep, rightStep)
+		if centerStep > 1 and math.min(leftStep, rightStep) < 0.5 then
+			collapsedSpans += 1
+		end
+		if roadWidth > centerStep * 2 then
+			tightSpans += 1
+		end
+	end
+
+	if (collapsedSpans > 0 or pinchedRows > 0 or rightFlips > 0 or roadWidth >= 96) and Config.authoredRoadDebugLogging == true then
+		roadDebugLog(
+			"road loft diagnostics %s: width=%.1f samples=%d rows=%d closed=%s spans=%d tightSpans=%d collapsedSpans=%d pinchedRows=%d rightFlips=%d centerLen=%.1f leftLen=%.1f rightLen=%.1f minLoftWidth=%.2f maxLoftWidth=%.2f minCenterStep=%.2f minLeftStep=%.2f minRightStep=%.2f widthSegments=%d",
+			tostring(debugLabel or "road"),
+			roadWidth,
+			#samples,
+			rowCount,
+			tostring(closedLoop),
+			spanCount,
+			tightSpans,
+			collapsedSpans,
+			pinchedRows,
+			rightFlips,
+			centerLength,
+			leftLength,
+			rightLength,
+			minLoftWidth == math.huge and 0 or minLoftWidth,
+			maxLoftWidth,
+			minCenterStep == math.huge and 0 or minCenterStep,
+			minLeftStep == math.huge and 0 or minLeftStep,
+			minRightStep == math.huge and 0 or minRightStep,
+			widthSegments
+		)
+	end
+
+	return {
+		roadWidth = roadWidth,
+		closed = closedLoop,
+		rowCount = rowCount,
+		spanCount = spanCount,
+		widthSegments = widthSegments,
+		centers = centers,
+		left = leftPositions,
+		right = rightPositions,
+	}
+end
+
+local function addRoadRibbonToMesh(state, samples, roadWidth, debugLabel)
+	local sections = buildRoadCrossSections(samples, roadWidth, ROAD_MESH_THICKNESS * 0.5, debugLabel)
+	if not sections then
+		return 0
+	end
+
+	local rows = {}
+	for i = 1, sections.rowCount do
+		rows[i] = addRoadLoftRowVertices(state, sections.left[i], sections.right[i], sections.widthSegments)
+	end
+
+	local spans = 0
+	for i = 1, sections.spanCount do
+		local nextIndex = sections.closed and ((i % sections.rowCount) + 1) or (i + 1)
+		for j = 1, sections.widthSegments do
+			local v1 = rows[i][j]
+			local v2 = rows[nextIndex][j]
+			local v3 = rows[nextIndex][j + 1]
+			local v4 = rows[i][j + 1]
+			addMeshTriangle(state, v1, v2, v3)
+			addMeshTriangle(state, v1, v3, v4)
+		end
+		spans += 1
+	end
+	if Config.authoredRoadDebugLogging == true and sections.roadWidth >= 96 then
+		roadDebugLog("road loft %s: width=%.1f rows=%d spans=%d widthSegments=%d", tostring(debugLabel or "road"), sections.roadWidth, sections.rowCount, spans, sections.widthSegments)
 	end
 
 	return spans
@@ -682,29 +929,24 @@ local function addIntersectionDiskToMesh(state, junction)
 
 	for i = 1, INTERSECTION_RING_SEGMENTS do
 		local nextIndex = (i % INTERSECTION_RING_SEGMENTS) + 1
-		addMeshTriangle(state, centerVertex, ring[i], ring[nextIndex])
+		addMeshTriangle(state, centerVertex, ring[nextIndex], ring[i])
 	end
 end
 
-local function addRoadCollisionSpanToMesh(state, a, b, roadWidth)
-	if (b - a).Magnitude <= 0.05 then
+local function addRoadCollisionSpanToMesh(state, leftA, rightA, leftB, rightB)
+	if (leftB - leftA).Magnitude <= 0.05 and (rightB - rightA).Magnitude <= 0.05 then
 		return 0
 	end
 
-	local tangent = (b - a).Unit
-	local right = roadRightFromTangent(tangent)
-	local halfWidth = roadWidth * 0.5
-	local topOffset = Vector3.new(0, ROAD_MESH_THICKNESS * 0.5, 0)
-	local bottomOffset = Vector3.new(0, -ROAD_MESH_THICKNESS * 0.5, 0)
-
-	local aTopLeft = addMeshVertex(state, a + topOffset - right * halfWidth)
-	local aTopRight = addMeshVertex(state, a + topOffset + right * halfWidth)
-	local bTopLeft = addMeshVertex(state, b + topOffset - right * halfWidth)
-	local bTopRight = addMeshVertex(state, b + topOffset + right * halfWidth)
-	local aBottomLeft = addMeshVertex(state, a + bottomOffset - right * halfWidth)
-	local aBottomRight = addMeshVertex(state, a + bottomOffset + right * halfWidth)
-	local bBottomLeft = addMeshVertex(state, b + bottomOffset - right * halfWidth)
-	local bBottomRight = addMeshVertex(state, b + bottomOffset + right * halfWidth)
+	local bottomOffset = Vector3.new(0, -ROAD_MESH_THICKNESS, 0)
+	local aTopLeft = addMeshVertex(state, leftA)
+	local aTopRight = addMeshVertex(state, rightA)
+	local bTopLeft = addMeshVertex(state, leftB)
+	local bTopRight = addMeshVertex(state, rightB)
+	local aBottomLeft = addMeshVertex(state, leftA + bottomOffset)
+	local aBottomRight = addMeshVertex(state, rightA + bottomOffset)
+	local bBottomLeft = addMeshVertex(state, leftB + bottomOffset)
+	local bBottomRight = addMeshVertex(state, rightB + bottomOffset)
 
 	addMeshTriangle(state, aTopLeft, bTopLeft, bTopRight)
 	addMeshTriangle(state, aTopLeft, bTopRight, aTopRight)
@@ -744,10 +986,10 @@ local function addIntersectionCollisionDiskToMesh(state, junction)
 
 	for i = 1, INTERSECTION_RING_SEGMENTS do
 		local nextIndex = (i % INTERSECTION_RING_SEGMENTS) + 1
-		addMeshTriangle(state, topCenterVertex, topRing[i], topRing[nextIndex])
-		addMeshTriangle(state, bottomCenterVertex, bottomRing[nextIndex], bottomRing[i])
-		addMeshTriangle(state, topRing[i], bottomRing[i], bottomRing[nextIndex])
-		addMeshTriangle(state, topRing[i], bottomRing[nextIndex], topRing[nextIndex])
+		addMeshTriangle(state, topCenterVertex, topRing[nextIndex], topRing[i])
+		addMeshTriangle(state, bottomCenterVertex, bottomRing[i], bottomRing[nextIndex])
+		addMeshTriangle(state, topRing[i], bottomRing[nextIndex], bottomRing[i])
+		addMeshTriangle(state, topRing[i], topRing[nextIndex], bottomRing[nextIndex])
 	end
 end
 
@@ -765,6 +1007,15 @@ local function createRuntimeNetworkMeshPart(state, targetModel, meshName)
 			return false, "CreateDataModelContentAsync failed: " .. tostring(bakeResult)
 		end
 		meshContent = bakedContent
+	else
+		if not dataModelContentWarningShown then
+			dataModelContentWarningShown = true
+			roadDebugLog(
+				"CreateDataModelContentAsync unavailable in this Studio session; using transient runtime mesh content. First mesh=%s error=%s",
+				tostring(meshName or "unnamed"),
+				tostring(bakeResult)
+			)
+		end
 	end
 
 	local sourceMeshPart = AssetService:CreateMeshPartAsync(meshContent, {
@@ -790,6 +1041,9 @@ local function createRuntimeNetworkMeshPart(state, targetModel, meshName)
 	sourceMeshPart:SetAttribute("GeneratedBy", "Cab87RoadRuntime")
 	sourceMeshPart:SetAttribute("TriangleCount", state.faces)
 	sourceMeshPart.Parent = targetModel
+	if not string.match(sourceMeshPart.Name, "^RoadCollisionSpan_") then
+		roadDebugLog("created mesh part %s faces=%d", sourceMeshPart.Name, state.faces)
+	end
 
 	return true, sourceMeshPart
 end
@@ -802,7 +1056,7 @@ local function buildRoadMeshComponent(chains, junctions, targetModel, meshName)
 
 	local spans = 0
 	for _, chain in ipairs(chains) do
-		spans += addRoadRibbonToMesh(state, chain.samples, chain.width)
+		spans += addRoadRibbonToMesh(state, chain.samples, chain.width, meshName .. "/" .. getChainName(chain))
 	end
 
 	for _, junction in ipairs(junctions) do
@@ -895,6 +1149,16 @@ local function buildProcessedRoadNetwork(root)
 	if #chains == 0 then
 		return nil, "No authored spline chains found"
 	end
+	for i, chain in ipairs(chains) do
+		roadDebugLog(
+			"authored chain %d: name=%s samples=%d width=%.1f closed=%s",
+			i,
+			getChainName(chain),
+			#chain.samples,
+			chain.width,
+			tostring(chain.closed)
+		)
+	end
 
 	local rawJunctions = collectEndpointJunctions(chains)
 	local crossJunctions = collectCrossIntersections(chains)
@@ -909,6 +1173,14 @@ local function buildProcessedRoadNetwork(root)
 	for _, chain in ipairs(chains) do
 		spanCount += math.max(#chain.samples - 1, 0)
 	end
+	roadDebugLog(
+		"processed network: chains=%d rawJunctions=%d mergedJunctions=%d components=%d spans=%d",
+		#chains,
+		#rawJunctions,
+		#junctions,
+		#components,
+		spanCount
+	)
 
 	return {
 		chains = chains,
@@ -982,6 +1254,14 @@ local function createReplicatedProcessedRoadData(roadNetwork, world)
 	dataRoot:SetAttribute("JunctionCount", junctionCount)
 	dataRoot:SetAttribute("ComponentCount", #(roadNetwork.components or {}))
 	dataRoot:SetAttribute("SpanCount", roadNetwork.spans or 0)
+	roadDebugLog(
+		"replicated processed spline data: splines=%d points=%d junctions=%d components=%d spans=%d",
+		splineCount,
+		pointCount,
+		junctionCount,
+		#(roadNetwork.components or {}),
+		roadNetwork.spans or 0
+	)
 	return dataRoot
 end
 
@@ -1028,13 +1308,19 @@ local function buildRuntimeRoadMesh(roadNetwork, world, driveSurfaces)
 	if not ok then
 		meshModel:Destroy()
 		local message = tostring(meshInfoOrErr)
-		warn("[cab87 roads] Runtime road mesh build failed; client will rebuild visual mesh: " .. message)
+		roadDebugWarn("runtime road mesh build failed; client will rebuild visual mesh: %s", message)
 		return nil, 0, message
 	end
 
 	for _, meshPart in ipairs(meshInfoOrErr.meshParts) do
 		trackPart(driveSurfaces, meshPart)
 	end
+	roadDebugLog(
+		"runtime full mesh built: meshParts=%d spans=%d components=%d",
+		#meshInfoOrErr.meshParts,
+		meshInfoOrErr.spans or 0,
+		meshInfoOrErr.components or 0
+	)
 
 	return meshModel, #meshInfoOrErr.meshParts, nil
 end
@@ -1051,16 +1337,22 @@ local function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfac
 	local builtCount = 0
 	local ok, err = pcall(function()
 		for _, chain in ipairs(roadNetwork.chains) do
-			for i = 1, #chain.samples - 1 do
-				local a = chain.samples[i]
-				local b = chain.samples[i + 1]
-				if (b - a).Magnitude > 0.05 then
+			local sections = buildRoadCrossSections(chain.samples, chain.width, ROAD_MESH_THICKNESS * 0.5, "collision/" .. getChainName(chain))
+			if sections then
+				for i = 1, sections.spanCount do
+					local nextIndex = sections.closed and ((i % sections.rowCount) + 1) or (i + 1)
 					local state, stateErr = newMeshState()
 					if not state then
 						error(tostring(stateErr), 0)
 					end
 
-					addRoadCollisionSpanToMesh(state, a, b, chain.width)
+					addRoadCollisionSpanToMesh(
+						state,
+						sections.left[i],
+						sections.right[i],
+						sections.left[nextIndex],
+						sections.right[nextIndex]
+					)
 					local okMesh, meshPartOrErr = createRuntimeNetworkMeshPart(
 						state,
 						collisionModel,
@@ -1097,12 +1389,14 @@ local function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfac
 
 	if not ok then
 		collisionModel:Destroy()
+		roadDebugWarn("runtime collision mesh sections failed after %d sections: %s", builtCount, tostring(err))
 		return 0, tostring(err)
 	end
 
 	if builtCount == 0 then
 		collisionModel:Destroy()
 	end
+	roadDebugLog("runtime collision mesh sections built: sections=%d chains=%d junctions=%d", builtCount, #(roadNetwork.chains or {}), #(roadNetwork.junctions or {}))
 	return builtCount, nil
 end
 
@@ -1314,28 +1608,44 @@ end
 function AuthoredRoadRuntime.getRoot()
 	local root = Workspace:FindFirstChild(ROAD_EDITOR_ROOT_NAME)
 	if root and root:IsA("Model") then
+		roadDebugLog("found authored road root: %s", root:GetFullName())
 		return root
 	end
 
+	roadDebugLog("authored road root not found: %s", ROAD_EDITOR_ROOT_NAME)
 	return nil
 end
 
 function AuthoredRoadRuntime.hasRoadData(root)
 	if Config.useAuthoredRoadEditorWorld ~= true or not root then
+		roadDebugLog(
+			"hasRoadData=false configEnabled=%s root=%s",
+			tostring(Config.useAuthoredRoadEditorWorld == true),
+			root and root:GetFullName() or "nil"
+		)
 		return false
 	end
 
+	local splineCount = 0
+	local pointCount = 0
 	for _, spline in ipairs(getAuthoredSplines(root)) do
-		if #getAuthoredSplinePoints(spline) >= 2 then
+		splineCount += 1
+		local points = getAuthoredSplinePoints(spline)
+		pointCount += #points
+		if #points >= 2 then
+			roadDebugLog("hasRoadData=true splines=%d points=%d firstValid=%s", splineCount, pointCount, spline.Name)
 			return true
 		end
 	end
 
 	local network = root:FindFirstChild(ROAD_EDITOR_NETWORK_NAME)
 	if network and network:IsA("Model") then
-		return countRoadSurfaceParts(network) > 0
+		local surfaceParts = countRoadSurfaceParts(network)
+		roadDebugLog("hasRoadData=%s splines=%d points=%d networkSurfaceParts=%d", tostring(surfaceParts > 0), splineCount, pointCount, surfaceParts)
+		return surfaceParts > 0
 	end
 
+	roadDebugLog("hasRoadData=false splines=%d points=%d no network fallback", splineCount, pointCount)
 	return false
 end
 
@@ -1354,12 +1664,22 @@ function AuthoredRoadRuntime.createWorld(root)
 	local driveSurfaces = {}
 	local crashObstacles = {}
 	local spawnPose = findFirstSpawn(root)
+	local authoredSplines = getAuthoredSplines(root)
+	roadDebugLog(
+		"createWorld start: root=%s splines=%d editorSurfaceParts=%d spawn=(%.1f, %.1f, %.1f)",
+		root and root:GetFullName() or "nil",
+		#authoredSplines,
+		countRoadSurfaceParts(root),
+		spawnPose.position.X,
+		spawnPose.position.Y,
+		spawnPose.position.Z
+	)
 	local roadNetwork, roadNetworkErr = buildProcessedRoadNetwork(root)
 	local replicatedSplineData
 	if roadNetwork then
 		replicatedSplineData = createReplicatedProcessedRoadData(roadNetwork, world)
 	else
-		warn("[cab87 roads] Processed road network failed; falling back to raw spline data: " .. tostring(roadNetworkErr))
+		roadDebugWarn("processed road network failed; falling back to raw spline data: %s", tostring(roadNetworkErr))
 		replicatedSplineData = createReplicatedSplineData(root, world)
 	end
 
@@ -1397,6 +1717,14 @@ function AuthoredRoadRuntime.createWorld(root)
 			useRoadNetworkFallback(root:FindFirstChild(ROAD_EDITOR_NETWORK_NAME), driveSurfaces)
 		end
 	end
+	roadDebugLog(
+		"createWorld done: collisionSource=%s sectionCount=%d runtimeMeshCount=%d driveSurfaces=%d serverMeshError=%s",
+		tostring(world:GetAttribute("AuthoredRoadServerCollisionSource")),
+		sectionCount,
+		runtimeMeshCount,
+		#driveSurfaces,
+		tostring(world:GetAttribute("AuthoredRoadServerMeshError") or "")
+	)
 	hideEditorRootForPlay(root)
 
 	return world, driveSurfaces, crashObstacles, spawnPose
