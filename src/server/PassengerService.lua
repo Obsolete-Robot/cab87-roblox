@@ -646,18 +646,22 @@ local function countWaitingPassengers(service)
 	return count
 end
 
-local function isPickupStopAvailable(service, stop)
+local function isStopReservedByPassenger(service, stop)
 	for _, passenger in ipairs(service.passengers) do
 		if passenger.pickupStop == stop and passenger.status ~= "exiting" then
-			return false
+			return true
 		end
 
-		if passenger.targetStop == stop and passenger.status == "exiting" then
-			return false
+		if passenger.targetStop == stop then
+			return true
 		end
 	end
 
-	return true
+	return false
+end
+
+local function isPickupStopAvailable(service, stop)
+	return not isStopReservedByPassenger(service, stop)
 end
 
 local function choosePickupStop(service)
@@ -682,7 +686,7 @@ local function chooseTargetStop(service, pickupStop)
 	local farthestDistance = -math.huge
 
 	for _, stop in ipairs(service.stops) do
-		if stop ~= pickupStop then
+		if stop ~= pickupStop and not isStopReservedByPassenger(service, stop) then
 			local distance = horizontalDistance(stop.position, pickupStop.position)
 			if distance >= minDistance then
 				table.insert(candidates, stop)
@@ -883,7 +887,8 @@ end
 
 local function updateBoarding(service, passenger, dt)
 	local target = getCabDoorPosition(service.car)
-	local maxDistance = math.max(getConfigNumber("passengerWalkSpeed", 24), 1) * dt
+	local fallbackSpeed = getConfigNumber("passengerWalkSpeed", 24)
+	local maxDistance = math.max(getConfigNumber("passengerBoardingSpeed", fallbackSpeed), 1) * dt
 	local nextPosition, arrived = moveTowards(passenger.position, target, maxDistance)
 	passenger.runPhase += dt * 10
 	setPassengerGroundPose(passenger, nextPosition, target, true)
@@ -901,7 +906,8 @@ local function updateExiting(service, passenger, dt, cabPosition, cabDirection, 
 	end
 
 	local target = passenger.exitTarget or passenger.targetStop.position
-	local maxDistance = math.max(getConfigNumber("passengerWalkSpeed", 24), 1) * dt
+	local fallbackSpeed = getConfigNumber("passengerWalkSpeed", 24)
+	local maxDistance = math.max(getConfigNumber("passengerExitSpeed", fallbackSpeed), 1) * dt
 	local nextPosition, arrived = moveTowards(passenger.position, target, maxDistance)
 	passenger.runPhase += dt * 10
 	setPassengerGroundPose(passenger, nextPosition, target, true)

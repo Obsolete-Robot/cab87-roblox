@@ -27,6 +27,9 @@ local INTERSECTION_RING_SEGMENTS = 28
 local ROAD_WIDTH_TRIANGULATION_STEP = 24
 local ROAD_WIDTH_MAX_INTERNAL_LOOPS = 2
 local ROAD_LOFT_LENGTH_STEP = Config.authoredRoadSampleStepStuds or 8
+local ROAD_EDGE_CURVE_SMOOTH_STEP = math.max(1, ROAD_LOFT_LENGTH_STEP * 0.25)
+local ROAD_EDGE_CURVE_FAIR_PASSES = 4
+local ROAD_EDGE_CURVE_FAIR_ALPHA = 0.42
 local INTERSECTION_HEIGHT_TOLERANCE_MIN = ROAD_MESH_THICKNESS * 2
 local INTERSECTION_HEIGHT_TOLERANCE_MAX = ROAD_MESH_THICKNESS * 4
 local INTERSECTION_HEIGHT_TOLERANCE_WIDTH_SCALE = 0.18
@@ -743,6 +746,115 @@ local function samplePolylineAtFraction(points, closedLoop, fraction)
 	return closedLoop and points[1] or points[count]
 end
 
+local function sampleSmoothedCurveControls(points, closedLoop, sampleStep)
+	local count = #points
+	if count < 3 then
+		return points
+	end
+
+	local smoothed = {}
+	local function appendPoint(point)
+		local last = smoothed[#smoothed]
+		if not last or (point - last).Magnitude > 1e-4 then
+			table.insert(smoothed, point)
+		end
+	end
+
+	local segmentCount = closedLoop and count or count - 1
+	for i = 1, segmentCount do
+		local p0
+		local p1
+		local p2
+		local p3
+		if closedLoop then
+			p0 = points[((i - 2) % count) + 1]
+			p1 = points[i]
+			p2 = points[(i % count) + 1]
+			p3 = points[((i + 1) % count) + 1]
+		else
+			p0 = points[math.max(1, i - 1)]
+			p1 = points[i]
+			p2 = points[i + 1]
+			p3 = points[math.min(count, i + 2)]
+		end
+
+		local segmentLength = (p2 - p1).Magnitude
+		local subdivisions = math.max(2, math.ceil(segmentLength / sampleStep))
+		for s = 0, subdivisions - 1 do
+			appendPoint(catmullRom(p0, p1, p2, p3, s / subdivisions))
+		end
+	end
+
+	if not closedLoop then
+		appendPoint(points[count])
+	end
+
+	return #smoothed >= count and smoothed or points
+end
+
+local function resamplePolylineControls(points, closedLoop, targetCount)
+	targetCount = math.floor(targetCount)
+	if targetCount <= 0 or #points == 0 then
+		return {}
+	elseif #points == 1 then
+		return { points[1] }
+	end
+
+	targetCount = math.max(closedLoop and 3 or 2, targetCount)
+	local resampled = {}
+	for i = 1, targetCount do
+		local fraction
+		if closedLoop then
+			fraction = (i - 1) / targetCount
+		else
+			fraction = targetCount > 1 and ((i - 1) / (targetCount - 1)) or 0
+		end
+		resampled[i] = samplePolylineAtFraction(points, closedLoop, fraction)
+	end
+	return resampled
+end
+
+local function fairEdgeCurveControls(points, closedLoop, sampleStep)
+	local length = polylineLength(points, closedLoop)
+	local targetCount
+	if length > 1e-4 then
+		targetCount = closedLoop and math.ceil(length / sampleStep) or (math.ceil(length / sampleStep) + 1)
+		targetCount = math.max(#points, targetCount)
+	else
+		targetCount = #points
+	end
+
+	local relaxed = resamplePolylineControls(points, closedLoop, targetCount)
+	for _ = 1, ROAD_EDGE_CURVE_FAIR_PASSES do
+		local count = #relaxed
+		if count < 3 then
+			return relaxed
+		end
+
+		local nextPoints = {}
+		for i = 1, count do
+			if closedLoop or (i > 1 and i < count) then
+				local prevIndex = i - 1
+				if prevIndex < 1 then
+					prevIndex = count
+				end
+				local nextIndex = i + 1
+				if nextIndex > count then
+					nextIndex = 1
+				end
+
+				local average = (relaxed[prevIndex] + relaxed[nextIndex]) * 0.5
+				nextPoints[i] = relaxed[i]:Lerp(average, ROAD_EDGE_CURVE_FAIR_ALPHA)
+			else
+				nextPoints[i] = relaxed[i]
+			end
+		end
+		relaxed = resamplePolylineControls(nextPoints, closedLoop, targetCount)
+	end
+
+	return sampleSmoothedCurveControls(relaxed, closedLoop, sampleStep)
+end
+
 local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugLabel)
 	if #samples < 2 then
 		return nil
@@ -779,9 +891,13 @@ local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugL
 		rightControls[i] = center + right * halfWidth
 	end
 
-	local centerLength = polylineLength(centerControls, closedLoop)
-	local leftLength = polylineLength(leftControls, closedLoop)
-	local rightLength = polylineLength(rightControls, closedLoop)
+	local smoothedCenterControls = sampleSmoothedCurveControls(centerControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP)
+	local smoothedLeftControls = fairEdgeCurveControls(leftControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP)
+	local smoothedRightControls = fairEdgeCurveControls(rightControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP)
+
+	local centerLength = polylineLength(smoothedCenterControls, closedLoop)
+	local leftLength = polylineLength(smoothedLeftControls, closedLoop)
+	local rightLength = polylineLength(smoothedRightControls, closedLoop)
 	local desiredRowCount
 	if closedLoop then
 		desiredRowCount = math.max(3, edgeCount, math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP))
@@ -811,9 +927,15 @@ local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugL
 		else
 			fraction = rowCount > 1 and ((i - 1) / (rowCount - 1)) or 0
 		end
-		centers[i] = samplePolylineAtFraction(centerControls, closedLoop, fraction)
-		leftPositions[i] = samplePolylineAtFraction(leftControls, closedLoop, fraction)
-		rightPositions[i] = samplePolylineAtFraction(rightControls, closedLoop, fraction)
+		centers[i] = samplePolylineAtFraction(smoothedCenterControls, closedLoop, fraction)
+		leftPositions[i] = samplePolylineAtFraction(smoothedLeftControls, closedLoop, fraction)
+		rightPositions[i] = samplePolylineAtFraction(smoothedRightControls, closedLoop, fraction)
+		local lateral = horizontalUnit(rightPositions[i] - leftPositions[i])
+		if lateral then
+			local mid = (leftPositions[i] + rightPositions[i]) * 0.5
+			leftPositions[i] = Vector3.new(mid.X, mid.Y, mid.Z) - lateral * halfWidth
+			rightPositions[i] = Vector3.new(mid.X, mid.Y, mid.Z) + lateral * halfWidth
+		end
 	end
 
 	local collapsedSpans = 0
@@ -850,7 +972,7 @@ local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugL
 
 	if (collapsedSpans > 0 or pinchedRows > 0 or rightFlips > 0 or roadWidth >= 96) and Config.authoredRoadDebugLogging == true then
 		roadDebugLog(
-			"road loft diagnostics %s: width=%.1f samples=%d rows=%d closed=%s spans=%d tightSpans=%d collapsedSpans=%d pinchedRows=%d rightFlips=%d centerLen=%.1f leftLen=%.1f rightLen=%.1f minLoftWidth=%.2f maxLoftWidth=%.2f minCenterStep=%.2f minLeftStep=%.2f minRightStep=%.2f widthSegments=%d",
+			"road loft diagnostics %s: width=%.1f samples=%d rows=%d closed=%s spans=%d tightSpans=%d collapsedSpans=%d pinchedRows=%d rightFlips=%d centerLen=%.1f leftLen=%.1f rightLen=%.1f minLoftWidth=%.2f maxLoftWidth=%.2f minCenterStep=%.2f minLeftStep=%.2f minRightStep=%.2f widthSegments=%d smoothControls=%d/%d/%d",
 			tostring(debugLabel or "road"),
 			roadWidth,
 			#samples,
@@ -869,7 +991,10 @@ local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugL
 			minCenterStep == math.huge and 0 or minCenterStep,
 			minLeftStep == math.huge and 0 or minLeftStep,
 			minRightStep == math.huge and 0 or minRightStep,
-			widthSegments
+			widthSegments,
+			#smoothedCenterControls,
+			#smoothedLeftControls,
+			#smoothedRightControls
 		)
 	end
 
