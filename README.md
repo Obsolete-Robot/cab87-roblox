@@ -9,6 +9,11 @@ Code-first Roblox starter for a **Crazy Taxi style** prototype using **Rojo + Lu
 - Minimal HUD showing controls
 - Rojo project mapping for Studio sync
 
+## Planning
+
+- [Milestone roadmap](docs/MILESTONE_ROADMAP.md)
+- [Architecture plan](docs/ARCHITECTURE_PLAN.md)
+
 ## Requirements
 
 - Roblox Studio

@@ -53,6 +53,13 @@ local function horizontalDistance(a, b)
 	return math.sqrt(dx * dx + dz * dz)
 end
 
+local function getPassengerStopReservationDistance()
+	local pickupRadius = math.max(getConfigNumber("passengerPickupRadius", 24), 1)
+	local deliveryRadius = math.max(getConfigNumber("passengerDeliveryRadius", 28), 1)
+	local stopSeparation = math.max(getConfigNumber("passengerStopMinSeparation", 80), 1)
+	return math.max(stopSeparation, pickupRadius + deliveryRadius + 12)
+end
+
 local function horizontalUnit(vector)
 	local horizontal = Vector3.new(vector.X, 0, vector.Z)
 	local magnitude = horizontal.Magnitude
@@ -647,12 +654,21 @@ local function countWaitingPassengers(service)
 end
 
 local function isStopReservedByPassenger(service, stop)
+	local reservationDistance = getPassengerStopReservationDistance()
+
 	for _, passenger in ipairs(service.passengers) do
-		if passenger.pickupStop == stop and passenger.status ~= "exiting" then
+		if
+			passenger.pickupStop
+			and passenger.status ~= "exiting"
+			and horizontalDistance(passenger.pickupStop.position, stop.position) <= reservationDistance
+		then
 			return true
 		end
 
-		if passenger.targetStop == stop then
+		if
+			passenger.targetStop
+			and horizontalDistance(passenger.targetStop.position, stop.position) <= reservationDistance
+		then
 			return true
 		end
 	end
@@ -786,6 +802,37 @@ local function setGpsDestination(service, destination)
 	end
 end
 
+local function destroyPassengerMarker(marker)
+	if marker and marker.Parent then
+		marker:Destroy()
+	end
+end
+
+local function destroyPassenger(passenger)
+	if passenger.model and passenger.model.Parent then
+		passenger.model:Destroy()
+	end
+
+	destroyPassengerMarker(passenger.pickupMarker)
+	destroyPassengerMarker(passenger.deliveryMarker)
+end
+
+local function removeWaitingPassengersNearStop(service, stop)
+	local reservationDistance = getPassengerStopReservationDistance()
+
+	for i = #service.passengers, 1, -1 do
+		local passenger = service.passengers[i]
+		if
+			passenger.status == "waiting"
+			and passenger.pickupStop
+			and horizontalDistance(passenger.pickupStop.position, stop.position) <= reservationDistance
+		then
+			destroyPassenger(passenger)
+			table.remove(service.passengers, i)
+		end
+	end
+end
+
 local function startBoarding(service, passenger)
 	if service.activePassenger then
 		return
@@ -807,17 +854,12 @@ local function completeBoarding(service, passenger)
 	passenger.status = "inCab"
 	service.mode = "delivery"
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
+	removeWaitingPassengersNearStop(service, passenger.targetStop)
 	setModelVisible(passenger.model, false)
 	setModelVisible(passenger.deliveryMarker, true)
 	setPickupMarkersVisible(service, false)
 	setGpsDestination(service, passenger.targetStop.position)
 	ensureWaitingPassengerCount(service)
-end
-
-local function destroyPassengerMarker(marker)
-	if marker and marker.Parent then
-		marker:Destroy()
-	end
 end
 
 local function completeDelivery(service)
@@ -826,6 +868,7 @@ local function completeDelivery(service)
 		return
 	end
 
+	removeWaitingPassengersNearStop(service, passenger.targetStop)
 	service.activePassenger = nil
 	service.mode = "pickup"
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
