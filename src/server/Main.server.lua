@@ -401,7 +401,7 @@ local function createCab(world, spawnPose)
 	return car, seat, driftEmitters
 end
 
-local function runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
+local function runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose, fareService)
 	local defaultSpawnPose = spawnPose or {
 		position = Config.carSpawn,
 		yaw = 0,
@@ -433,6 +433,8 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 	local lastOccupant = nil
 	local hiddenCharacterState = nil
 	local crashShakeCooldown = 0
+	local scrapeDamageCooldown = 0
+	local damageEventSequence = 0
 
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
@@ -459,6 +461,9 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 	car:SetAttribute("Cab87GroundContacts", 0)
 	car:SetAttribute("Cab87Grounded", grounded)
 	car:SetAttribute("Cab87HasDriver", false)
+	car:SetAttribute(Config.carDamageLastEventIdAttribute or "Cab87DamageEventId", 0)
+	car:SetAttribute(Config.carDamageLastEventTypeAttribute or "Cab87DamageEventType", "")
+	car:SetAttribute(Config.carDamageLastEventSeverityAttribute or "Cab87DamageEventSeverity", 0)
 
 	local function triggerBoostFeedback(player)
 		if Config.carBoostWheelieDuration > 0 and Config.carBoostWheelieDegrees > 0 then
@@ -484,6 +489,32 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 			cameraEventRemote:FireClient(player, "Crash", math.max(intensity, 0.22))
 			crashShakeCooldown = math.max(Config.cameraCrashShakeCooldown, 0)
 		end
+	end
+
+	local function recordDamageEvent(kind, severity)
+		if not fareService or not fareService.recordDamage then
+			return
+		end
+
+		local snapshot = fareService:recordDamage(kind, severity)
+		if not snapshot then
+			return
+		end
+
+		damageEventSequence += 1
+		car:SetAttribute(Config.carDamageLastEventIdAttribute or "Cab87DamageEventId", damageEventSequence)
+		car:SetAttribute(Config.carDamageLastEventTypeAttribute or "Cab87DamageEventType", tostring(kind or "impact"))
+		car:SetAttribute(Config.carDamageLastEventSeverityAttribute or "Cab87DamageEventSeverity", math.max(severity or 0, 0))
+	end
+
+	local function reportImpactDamage(kind, impactSpeed)
+		local minImpactSpeed = math.max(Config.carDamageMinImpactSpeed or 18, 0)
+		if impactSpeed < minImpactSpeed then
+			return
+		end
+
+		local severity = (impactSpeed - minImpactSpeed) * math.max(Config.carDamageImpactSeverityScale or 0.1, 0)
+		recordDamageEvent(kind, severity)
 	end
 
 	local function hideCharacterVisualInstance(instance, state)
@@ -1085,6 +1116,7 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 		elapsedTime += dt
 		fallResetCooldown = math.max(fallResetCooldown - dt, 0)
 		crashShakeCooldown = math.max(crashShakeCooldown - dt, 0)
+		scrapeDamageCooldown = math.max(scrapeDamageCooldown - dt, 0)
 
 		local forward = yawToForward(yaw)
 		local right = yawToRight(yaw)
@@ -1264,6 +1296,12 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 
 		if crashed then
 			triggerCrashFeedback(driver, impactSpeed)
+			reportImpactDamage("crash", impactSpeed)
+		end
+
+		if wallScrapeDirection and scrapeDamageCooldown <= 0 then
+			scrapeDamageCooldown = math.max(Config.carDamageScrapeTickSeconds or 0.2, 0)
+			reportImpactDamage("scrape", impactSpeed)
 		end
 
 		local previousY = position.Y
@@ -1293,6 +1331,7 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 				targetPitch = visualPitch
 				targetRoll = visualRoll
 				triggerCrashFeedback(driver, impactSpeed)
+				reportImpactDamage("ground", impactSpeed)
 			else
 				position = Vector3.new(position.X, targetY, position.Z)
 				local riseVelocity = (position.Y - previousY) / dt
@@ -1564,7 +1603,6 @@ else
 end
 
 local car, seat, driftEmitters = createCab(world, spawnPose)
-runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
 local gpsService = GpsService.start({
 	world = world,
 	car = car,
@@ -1576,6 +1614,7 @@ local fareService = FareService.new({
 	car = car,
 	shiftService = shiftService,
 })
+runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose, fareService)
 PassengerService.start({
 	world = world,
 	car = car,

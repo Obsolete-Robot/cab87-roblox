@@ -478,6 +478,8 @@ local function updateFarePanel()
 	local fareActiveValue = getNumberAttribute(cab, Config.passengerFareActiveValueAttribute) or 0
 	local farePayout = getNumberAttribute(cab, Config.passengerFarePayoutAttribute) or 0
 	local fareResultStatus = getStringAttribute(cab, Config.passengerFareResultStatusAttribute) or "idle"
+	local fareDamageCollisions = getNumberAttribute(cab, Config.passengerFareDamageCollisionsAttribute) or 0
+	local fareDamagePoints = getNumberAttribute(cab, Config.passengerFareDamagePointsAttribute) or 0
 	local modeText = "PICKUP"
 	local modeColor = Config.passengerPickupColor
 
@@ -509,9 +511,17 @@ local function updateFarePanel()
 	local roundedEstimate = math.max(0, math.floor(fareEstimate + 0.5))
 	local roundedActiveValue = math.max(0, math.floor(fareActiveValue + 0.5))
 	local roundedPayout = math.max(0, math.floor(farePayout + 0.5))
+	local roundedDamageCollisions = math.max(0, math.floor(fareDamageCollisions + 0.5))
+	local roundedDamagePoints = math.max(0, math.floor(fareDamagePoints + 0.5))
 	local summary = string.format("FARES %d  •  EST $%d", roundedCompleted, roundedEstimate)
 	if mode == "delivery" then
-		summary = string.format("FARES %d  •  ACTIVE $%d", roundedCompleted, roundedActiveValue)
+		summary = string.format(
+			"FARES %d  •  ACTIVE $%d  •  DMG %d (%d)",
+			roundedCompleted,
+			roundedActiveValue,
+			roundedDamagePoints,
+			roundedDamageCollisions
+		)
 	end
 	if fareResultStatus == "completed" then
 		summary = string.format("FARES %d  •  LAST +$%d", roundedCompleted, roundedPayout)
