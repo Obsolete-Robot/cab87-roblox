@@ -33,8 +33,10 @@ local function moveAngleToward(fromAngle, toAngle, maxDelta)
 	return fromAngle + math.clamp(delta, -maxDelta, maxDelta)
 end
 
-local function getOrCreateDriveInputRemote()
-	local remote = ReplicatedStorage:FindFirstChild(Config.driveInputRemoteName)
+local driveInputHandler = nil
+
+local function getOrCreateRemoteEvent(name)
+	local remote = ReplicatedStorage:FindFirstChild(name)
 	if remote and not remote:IsA("RemoteEvent") then
 		remote:Destroy()
 		remote = nil
@@ -42,27 +44,23 @@ local function getOrCreateDriveInputRemote()
 
 	if not remote then
 		remote = Instance.new("RemoteEvent")
-		remote.Name = Config.driveInputRemoteName
+		remote.Name = name
 		remote.Parent = ReplicatedStorage
 	end
 
 	return remote
 end
 
+local function getOrCreateDriveInputRemote()
+	return getOrCreateRemoteEvent(Config.driveInputRemoteName)
+end
+
 local function getOrCreateCameraEventRemote()
-	local remote = ReplicatedStorage:FindFirstChild(Config.cameraEventRemoteName)
-	if remote and not remote:IsA("RemoteEvent") then
-		remote:Destroy()
-		remote = nil
-	end
+	return getOrCreateRemoteEvent(Config.cameraEventRemoteName)
+end
 
-	if not remote then
-		remote = Instance.new("RemoteEvent")
-		remote.Name = Config.cameraEventRemoteName
-		remote.Parent = ReplicatedStorage
-	end
-
-	return remote
+local function getOrCreateShiftStateRemote()
+	return getOrCreateRemoteEvent(Config.shiftStateRemoteName or "Cab87ShiftStateUpdated")
 end
 
 local function isDebugTuningEnabled()
@@ -75,19 +73,7 @@ local function getOrCreateDebugTuneRemote()
 		return nil
 	end
 
-	local remote = ReplicatedStorage:FindFirstChild(Config.debugTuneRemoteName)
-	if remote and not remote:IsA("RemoteEvent") then
-		remote:Destroy()
-		remote = nil
-	end
-
-	if not remote then
-		remote = Instance.new("RemoteEvent")
-		remote.Name = Config.debugTuneRemoteName
-		remote.Parent = ReplicatedStorage
-	end
-
-	return remote
+	return getOrCreateRemoteEvent(Config.debugTuneRemoteName)
 end
 
 local function normalizeTuningValue(value, property)
@@ -414,7 +400,7 @@ local function createCab(world, spawnPose)
 	return car, seat, driftEmitters
 end
 
-local function runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
+local function runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
 	local defaultSpawnPose = spawnPose or {
 		position = Config.carSpawn,
 		yaw = 0,
@@ -581,7 +567,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 		end)
 	end
 
-	driveInputRemote.OnServerEvent:Connect(function(player, action, throttle, steer, drift, airPitch)
+	driveInputHandler = function(player, action, throttle, steer, drift, airPitch)
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if humanoid ~= seat.Occupant then
@@ -613,7 +599,7 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 			input.drift = throttle
 			driverInput[player] = input
 		end
-	end)
+	end
 
 	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
 		local occupant = seat.Occupant
@@ -1459,9 +1445,59 @@ local function runCarController(car, seat, driftEmitters, driveInputRemote, came
 end
 
 local driveInputRemote = getOrCreateDriveInputRemote()
+driveInputRemote.OnServerEvent:Connect(function(player, ...)
+	if driveInputHandler then
+		driveInputHandler(player, ...)
+	end
+end)
+getOrCreateShiftStateRemote()
 local cameraEventRemote = getOrCreateCameraEventRemote()
 local debugTuneRemote = getOrCreateDebugTuneRemote()
 runDebugTuning(debugTuneRemote)
+
+local function startShiftService()
+	local runtimeFolder = script.Parent:FindFirstChild("Runtime")
+	local servicesFolder = script.Parent:FindFirstChild("Services")
+	if not runtimeFolder or not servicesFolder then
+		warn("[cab87] ShiftService startup skipped; Runtime or Services folder is missing")
+		return nil
+	end
+
+	local remoteRegistryModule = runtimeFolder:FindFirstChild("RemoteRegistry")
+	local shiftServiceModule = servicesFolder:FindFirstChild("ShiftService")
+	if not remoteRegistryModule or not shiftServiceModule then
+		warn("[cab87] ShiftService startup skipped; RemoteRegistry or ShiftService module is missing")
+		return nil
+	end
+
+	local okRemoteRegistry, RemoteRegistry = pcall(require, remoteRegistryModule)
+	if not okRemoteRegistry then
+		warn("[cab87] RemoteRegistry failed to load; shift loop disabled: " .. tostring(RemoteRegistry))
+		return nil
+	end
+
+	local okShiftService, ShiftService = pcall(require, shiftServiceModule)
+	if not okShiftService then
+		warn("[cab87] ShiftService failed to load; shift loop disabled: " .. tostring(ShiftService))
+		return nil
+	end
+
+	local okRemotes, runtimeRemotes = pcall(function()
+		return RemoteRegistry.ensure()
+	end)
+	if not okRemotes then
+		warn("[cab87] Shift remotes failed to initialize; shift loop disabled: " .. tostring(runtimeRemotes))
+		return nil
+	end
+
+	local shiftService = ShiftService.new({
+		config = Config,
+		remotes = runtimeRemotes,
+	})
+	shiftService:start()
+
+	return shiftService
+end
 
 local authoredRoadRoot = AuthoredRoadRuntime.getRoot()
 local world
@@ -1527,7 +1563,7 @@ else
 end
 
 local car, seat, driftEmitters = createCab(world, spawnPose)
-runCarController(car, seat, driftEmitters, driveInputRemote, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
+runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose)
 local gpsService = GpsService.start({
 	world = world,
 	car = car,
@@ -1540,3 +1576,4 @@ PassengerService.start({
 	spawnPose = spawnPose,
 	gpsService = gpsService,
 })
+local shiftService = startShiftService()
