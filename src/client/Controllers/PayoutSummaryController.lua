@@ -1,13 +1,11 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local GameplayStateStore = require(script.Parent.Parent:WaitForChild("GameplayStateStore"))
 
 local PayoutSummaryController = {}
-
-local player = Players.LocalPlayer
 
 local function getAlpha(responsiveness, dt)
 	if responsiveness <= 0 then
@@ -101,26 +99,36 @@ function PayoutSummaryController.start(parentGui)
 		ui.root.Visible = false
 	end
 
-	local renderConnection = RunService.RenderStepped:Connect(function(dt)
-		local eventId = player:GetAttribute(Config.shiftPayoutSummaryEventIdAttribute)
-		if type(eventId) == "number" and eventId > state.eventId then
-			state.eventId = eventId
-			state.target = {
-				fareTotals = math.max(player:GetAttribute(Config.shiftPayoutFareTotalsAttribute) or 0, 0),
-				bonuses = math.max(player:GetAttribute(Config.shiftPayoutBonusesAttribute) or 0, 0),
-				damagePenalties = math.max(player:GetAttribute(Config.shiftPayoutDamagePenaltiesAttribute) or 0, 0),
-				medallionFeeRate = math.max(player:GetAttribute(Config.shiftPayoutMedallionFeeRateAttribute) or 0, 0),
-				medallionFeeAmount = math.max(player:GetAttribute(Config.shiftPayoutMedallionFeeAmountAttribute) or 0, 0),
-				netDeposit = math.max(player:GetAttribute(Config.shiftPayoutNetDepositAttribute) or 0, 0),
-				grossEarnings = math.max(player:GetAttribute(Config.shiftGrossMoneyAttribute) or 0, 0),
-			}
-			state.displayGross = 0
-			state.displayNet = 0
-			state.visible = true
-			state.dismissAt = os.clock() + math.max(Config.shiftPayoutDismissSeconds or 10, 3)
-			ui.root.Visible = true
+	local function showSummary(summary)
+		if type(summary) ~= "table" or type(summary.eventId) ~= "number" or summary.eventId <= state.eventId then
+			return
 		end
 
+		state.eventId = summary.eventId
+		state.target = {
+			fareTotals = math.max(summary.fareTotals or 0, 0),
+			bonuses = math.max(summary.bonuses or 0, 0),
+			damagePenalties = math.max(summary.damagePenalties or 0, 0),
+			medallionFeeRate = math.max(summary.medallionFeeRate or 0, 0),
+			medallionFeeAmount = math.max(summary.medallionFeeAmount or 0, 0),
+			netDeposit = math.max(summary.netDeposit or 0, 0),
+			grossEarnings = math.max(summary.grossEarnings or 0, 0),
+		}
+		state.displayGross = 0
+		state.displayNet = 0
+		state.visible = true
+		state.dismissAt = os.clock() + math.max(Config.shiftPayoutDismissSeconds or 10, 3)
+		ui.root.Visible = true
+	end
+
+	local storeDisconnect = GameplayStateStore.onChanged(function(kind, payload)
+		if kind == "payoutSummary" then
+			showSummary(payload)
+		end
+	end)
+	showSummary(GameplayStateStore.getPayoutSummary())
+
+	local renderConnection = RunService.RenderStepped:Connect(function(dt)
 		if not state.visible or not state.target then
 			return
 		end
@@ -168,6 +176,7 @@ function PayoutSummaryController.start(parentGui)
 
 	return {
 		destroy = function()
+			storeDisconnect()
 			renderConnection:Disconnect()
 			inputConnection:Disconnect()
 			ui.root:Destroy()

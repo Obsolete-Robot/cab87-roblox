@@ -2,34 +2,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local GameplayStateStore = require(script.Parent.Parent:WaitForChild("GameplayStateStore"))
 
 local FareHudController = {}
-
-local function getNumberAttribute(instance, attributeName)
-	if not instance or type(attributeName) ~= "string" then
-		return nil
-	end
-
-	local value = instance:GetAttribute(attributeName)
-	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
-		return nil
-	end
-
-	return value
-end
-
-local function getStringAttribute(instance, attributeName)
-	if not instance or type(attributeName) ~= "string" then
-		return nil
-	end
-
-	local value = instance:GetAttribute(attributeName)
-	if type(value) ~= "string" then
-		return nil
-	end
-
-	return value
-end
 
 local function createUi(parentGui)
 	local farePanel = Instance.new("Frame")
@@ -127,16 +102,18 @@ function FareHudController.start(parentGui, cabTracker)
 			return
 		end
 
-		local mode = getStringAttribute(cab, Config.passengerFareModeAttribute) or "pickup"
-		local status = getStringAttribute(cab, Config.passengerFareStatusAttribute) or "Find a pickup"
-		local distance = getNumberAttribute(cab, Config.passengerFareDistanceAttribute) or 0
-		local completed = getNumberAttribute(cab, Config.passengerFareCompletedAttribute) or 0
-		local fareEstimate = getNumberAttribute(cab, Config.passengerFareEstimateAttribute) or 0
-		local fareActiveValue = getNumberAttribute(cab, Config.passengerFareActiveValueAttribute) or 0
-		local farePayout = getNumberAttribute(cab, Config.passengerFarePayoutAttribute) or 0
-		local fareResultStatus = getStringAttribute(cab, Config.passengerFareResultStatusAttribute) or "idle"
-		local fareDamageCollisions = getNumberAttribute(cab, Config.passengerFareDamageCollisionsAttribute) or 0
-		local fareDamagePoints = getNumberAttribute(cab, Config.passengerFareDamagePointsAttribute) or 0
+		local cabState = GameplayStateStore.getCabState(cab)
+		local fareState = cabState and cabState.fare or nil
+		local mode = cabState and cabState.mode or "pickup"
+		local status = cabState and cabState.status or "Find a pickup"
+		local distance = cabState and cabState.distance or 0
+		local completed = cabState and cabState.completedFares or 0
+		local fareEstimate = fareState and fareState.estimatedPayout or 0
+		local fareActiveValue = fareState and fareState.activeValue or 0
+		local farePayout = fareState and fareState.payout or 0
+		local fareResultStatus = fareState and fareState.status or "idle"
+		local fareDamageCollisions = fareState and fareState.damageCollisions or 0
+		local fareDamagePoints = fareState and fareState.damagePoints or 0
 		local modeText = "PICKUP"
 		local modeColor = Config.passengerPickupColor
 

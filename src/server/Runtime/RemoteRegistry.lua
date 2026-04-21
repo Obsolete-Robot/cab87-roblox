@@ -7,6 +7,7 @@ local DEFAULT_REMOTE_NAMES = {
 	driveInput = "Cab87DriveInput",
 	cameraEvent = "Cab87CameraEvent",
 	debugTune = "Cab87DebugTune",
+	gameplayStateUpdated = "Cab87GameplayStateUpdated",
 	shiftStateUpdated = "Cab87ShiftStateUpdated",
 }
 
@@ -42,6 +43,9 @@ local function getRemoteNames(config)
 		debugTune = clientToServer.debugTune
 			or config.debugTuneRemoteName
 			or DEFAULT_REMOTE_NAMES.debugTune,
+		gameplayStateUpdated = serverToClient.gameplayStateUpdated
+			or config.gameplayStateRemoteName
+			or DEFAULT_REMOTE_NAMES.gameplayStateUpdated,
 		shiftStateUpdated = serverToClient.shiftStateUpdated
 			or config.shiftStateRemoteName
 			or DEFAULT_REMOTE_NAMES.shiftStateUpdated,
@@ -81,6 +85,7 @@ function RemoteRegistry.ensure(options)
 		debugTune = if RemoteRegistry.isDebugTuningEnabled(config)
 			then getOrCreateRemoteEvent(remoteNames.debugTune)
 			else nil,
+		gameplayStateUpdated = getOrCreateRemoteEvent(remoteNames.gameplayStateUpdated),
 		shiftStateUpdated = getOrCreateRemoteEvent(remoteNames.shiftStateUpdated),
 	}
 end

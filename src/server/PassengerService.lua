@@ -3,6 +3,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local StateContracts = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("StateContracts"))
 local PassengerVisuals = require(script.Parent:WaitForChild("PassengerVisuals"))
 
 local PassengerService = {}
@@ -27,6 +28,16 @@ local function getConfigString(key, fallback)
 	end
 
 	return fallback
+end
+
+local function setAttributeIfChanged(instance, attributeName, value)
+	if type(attributeName) ~= "string" or attributeName == "" then
+		return
+	end
+
+	if instance:GetAttribute(attributeName) ~= value then
+		instance:SetAttribute(attributeName, value)
+	end
 end
 
 local function horizontalDistance(a, b)
@@ -630,6 +641,7 @@ local function startBoarding(service, passenger)
 
 	service.activePassenger = passenger
 	service.mode = "boarding"
+	service.forceNextCabStatePublish = true
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
 	passenger.status = "boarding"
 	passenger.runPhase = 0
@@ -643,6 +655,7 @@ end
 local function completeBoarding(service, passenger)
 	passenger.status = "inCab"
 	service.mode = "delivery"
+	service.forceNextCabStatePublish = true
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
 	if service.fareService and service.fareService.beginFare then
 		local routeDistance = horizontalDistance(passenger.pickupStop.position, passenger.targetStop.position)
@@ -669,6 +682,7 @@ local function completeDelivery(service)
 	removeWaitingPassengersNearStop(service, passenger.targetStop)
 	service.activePassenger = nil
 	service.mode = "pickup"
+	service.forceNextCabStatePublish = true
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
 	service.faresCompleted += 1
 	clearGpsDestination(service)
@@ -694,6 +708,7 @@ local function failActiveDelivery(service)
 	removeWaitingPassengersNearStop(service, passenger.targetStop)
 	service.activePassenger = nil
 	service.mode = "pickup"
+	service.forceNextCabStatePublish = true
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
 	clearGpsDestination(service)
 
@@ -870,13 +885,6 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 		end
 	end
 
-	service.car:SetAttribute(modeAttr, service.mode)
-	service.car:SetAttribute(statusAttr, status)
-	service.car:SetAttribute(distanceAttr, math.floor(distance + 0.5))
-	service.car:SetAttribute(destinationAttr, destination)
-	service.car:SetAttribute(completedAttr, service.faresCompleted)
-	service.car:SetAttribute(waitingAttr, countWaitingPassengers(service))
-
 	fareSnapshot = fareSnapshot or {
 		status = "idle",
 		estimatedPayout = 0,
@@ -892,18 +900,65 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 		routeDistance = 0,
 	}
 
-	service.car:SetAttribute(fareEstimateAttr, math.max(math.floor((fareSnapshot.estimatedPayout or 0) + 0.5), 0))
-	service.car:SetAttribute(fareActiveAttr, math.max(math.floor((fareSnapshot.activeValue or 0) + 0.5), 0))
-	service.car:SetAttribute(farePayoutAttr, math.max(math.floor((fareSnapshot.payout or 0) + 0.5), 0))
-	service.car:SetAttribute(fareTimeComponentAttr, math.floor((fareSnapshot.timeComponent or 0) + 0.5))
-	service.car:SetAttribute(fareSpeedBonusAttr, math.max(math.floor((fareSnapshot.speedBonus or 0) + 0.5), 0))
-	service.car:SetAttribute(fareDamagePenaltyAttr, math.max(math.floor((fareSnapshot.damagePenalty or 0) + 0.5), 0))
-	service.car:SetAttribute(fareDamageCollisionsAttr, math.max(math.floor((fareSnapshot.damageCollisions or 0) + 0.5), 0))
-	service.car:SetAttribute(fareDamageSeverityAttr, math.max(fareSnapshot.damageSeverity or 0, 0))
-	service.car:SetAttribute(fareDamagePointsAttr, math.max(fareSnapshot.damagePoints or 0, 0))
-	service.car:SetAttribute(fareResultStatusAttr, tostring(fareSnapshot.status or "idle"))
-	service.car:SetAttribute(fareDurationAttr, math.max(fareSnapshot.durationSeconds or 0, 0))
-	service.car:SetAttribute(fareRouteDistanceAttr, math.max(fareSnapshot.routeDistance or 0, 0))
+	local fareState = StateContracts.normalizeFareSnapshot({
+		status = tostring(fareSnapshot.status or "idle"),
+		estimatedPayout = math.max(math.floor((fareSnapshot.estimatedPayout or 0) + 0.5), 0),
+		activeValue = math.max(math.floor((fareSnapshot.activeValue or 0) + 0.5), 0),
+		payout = math.max(math.floor((fareSnapshot.payout or 0) + 0.5), 0),
+		timeComponent = math.floor((fareSnapshot.timeComponent or 0) + 0.5),
+		speedBonus = math.max(math.floor((fareSnapshot.speedBonus or 0) + 0.5), 0),
+		damagePenalty = math.max(math.floor((fareSnapshot.damagePenalty or 0) + 0.5), 0),
+		damageCollisions = math.max(math.floor((fareSnapshot.damageCollisions or 0) + 0.5), 0),
+		damageSeverity = math.max(fareSnapshot.damageSeverity or 0, 0),
+		damagePoints = math.max(fareSnapshot.damagePoints or 0, 0),
+		durationSeconds = math.max(fareSnapshot.durationSeconds or 0, 0),
+		routeDistance = math.max(fareSnapshot.routeDistance or 0, 0),
+	})
+	local now = Workspace:GetServerTimeNow()
+	local forcePublish = service.forceNextCabStatePublish == true
+	service.forceNextCabStatePublish = false
+	local cabState = StateContracts.normalizeCabHudState({
+		cabId = service.cabStateId,
+		mode = service.mode,
+		status = status,
+		distance = math.floor(distance + 0.5),
+		destination = destination,
+		destinationLabel = "No destination",
+		completedFares = service.faresCompleted,
+		waitingPassengers = countWaitingPassengers(service),
+		serverTime = now,
+		fare = fareState,
+	})
+	local mirrorInterval = math.max(getConfigNumber("gameplayStateBroadcastIntervalSeconds", 0.2), 0.05)
+	local shouldMirrorAttributes = forcePublish
+		or not service.lastCabAttributeMirrorAt
+		or now - service.lastCabAttributeMirrorAt >= mirrorInterval
+
+	if shouldMirrorAttributes then
+		service.lastCabAttributeMirrorAt = now
+		setAttributeIfChanged(service.car, modeAttr, cabState.mode)
+		setAttributeIfChanged(service.car, statusAttr, cabState.status)
+		setAttributeIfChanged(service.car, distanceAttr, cabState.distance)
+		setAttributeIfChanged(service.car, destinationAttr, cabState.destination)
+		setAttributeIfChanged(service.car, completedAttr, cabState.completedFares)
+		setAttributeIfChanged(service.car, waitingAttr, cabState.waitingPassengers)
+		setAttributeIfChanged(service.car, fareEstimateAttr, cabState.fare.estimatedPayout)
+		setAttributeIfChanged(service.car, fareActiveAttr, cabState.fare.activeValue)
+		setAttributeIfChanged(service.car, farePayoutAttr, cabState.fare.payout)
+		setAttributeIfChanged(service.car, fareTimeComponentAttr, cabState.fare.timeComponent)
+		setAttributeIfChanged(service.car, fareSpeedBonusAttr, cabState.fare.speedBonus)
+		setAttributeIfChanged(service.car, fareDamagePenaltyAttr, cabState.fare.damagePenalty)
+		setAttributeIfChanged(service.car, fareDamageCollisionsAttr, cabState.fare.damageCollisions)
+		setAttributeIfChanged(service.car, fareDamageSeverityAttr, cabState.fare.damageSeverity)
+		setAttributeIfChanged(service.car, fareDamagePointsAttr, cabState.fare.damagePoints)
+		setAttributeIfChanged(service.car, fareResultStatusAttr, cabState.fare.status)
+		setAttributeIfChanged(service.car, fareDurationAttr, cabState.fare.durationSeconds)
+		setAttributeIfChanged(service.car, fareRouteDistanceAttr, cabState.fare.routeDistance)
+	end
+
+	if service.stateReplicator and service.stateReplicator.publishCabState then
+		service.stateReplicator:publishCabState(cabState, forcePublish)
+	end
 end
 
 local function updateService(service, dt)
@@ -987,9 +1042,14 @@ function PassengerService.start(options)
 		lastDeltaTime = 0,
 		gpsService = options.gpsService,
 		fareService = options.fareService,
+		stateReplicator = options.stateReplicator,
+		cabStateId = options.cabStateId or StateContracts.defaultCabId,
+		forceNextCabStatePublish = true,
+		lastCabAttributeMirrorAt = nil,
 		previousCabPosition = nil,
 		previousCabMotionDirection = nil,
 	}
+	car:SetAttribute(getConfigString("gameplayStateCabIdAttribute", "Cab87GameplayCabId"), service.cabStateId)
 
 	service.stopFolder = nil
 	service.passengerFolder = PassengerVisuals.recreateFolder(world, getConfigString("passengerFolderName", "Passengers"))
