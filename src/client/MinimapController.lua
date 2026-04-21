@@ -526,12 +526,19 @@ local function getCharacterPose()
 	return root.Position, Vector3.new(forward.X, 0, forward.Z)
 end
 
-local function getTrackedPose(getDrivenCab)
+local function getDrivenCabFromTracker(cabTracker)
 	local cab = nil
-	if getDrivenCab then
-		cab = getDrivenCab()
+	if type(cabTracker) == "function" then
+		cab = cabTracker()
+	elseif type(cabTracker) == "table" and type(cabTracker.getDrivenCab) == "function" then
+		cab = cabTracker.getDrivenCab()
 	end
 
+	return cab
+end
+
+local function getTrackedPose(cabTracker)
+	local cab = getDrivenCabFromTracker(cabTracker)
 	local position, forward = getCabPose(cab)
 	if position then
 		return position, forward, cab
@@ -766,9 +773,9 @@ local function updateDestinationGuide(ui, world, cab, playerPosition, scale, hal
 	updateDestinationMarker(ui, cab, playerPosition, scale, viewportWidth, viewportHeight, halfWidth, halfHeight)
 end
 
-function MinimapController.start(parentGui, getDrivenCab)
+function MinimapController.start(parentGui, cabTracker)
 	if Config.minimapEnabled == false then
-		return
+		return nil
 	end
 
 	local ui = createUi(parentGui)
@@ -777,8 +784,16 @@ function MinimapController.start(parentGui, getDrivenCab)
 	local junctionItems = {}
 	local watchedWorld = nil
 	local worldConnections = {}
+	local connections = {}
 	local rebuildSerial = 0
 	local updateAccumulator = 0
+	local destroyed = false
+
+	local function connect(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(connections, connection)
+		return connection
+	end
 
 	local function disconnectWorld()
 		for _, connection in ipairs(worldConnections) do
@@ -788,6 +803,10 @@ function MinimapController.start(parentGui, getDrivenCab)
 	end
 
 	local function rebuild()
+		if destroyed then
+			return
+		end
+
 		currentMap = readRoadData(watchedWorld)
 		roadItems, junctionItems = buildRoadUi(ui, currentMap)
 		ui.root.Visible = false
@@ -797,13 +816,17 @@ function MinimapController.start(parentGui, getDrivenCab)
 		rebuildSerial += 1
 		local serial = rebuildSerial
 		task.delay(delayTime or 0.25, function()
-			if serial == rebuildSerial then
+			if not destroyed and serial == rebuildSerial then
 				rebuild()
 			end
 		end)
 	end
 
 	local function watchWorld(world)
+		if destroyed then
+			return
+		end
+
 		disconnectWorld()
 		watchedWorld = world
 		currentMap = nil
@@ -843,7 +866,7 @@ function MinimapController.start(parentGui, getDrivenCab)
 		scheduleRebuild(0.35)
 	end
 
-	Workspace.ChildAdded:Connect(function(child)
+	connect(Workspace.ChildAdded, function(child)
 		if child.Name == WORLD_NAME and child:IsA("Model") then
 			watchWorld(child)
 		end
@@ -856,7 +879,11 @@ function MinimapController.start(parentGui, getDrivenCab)
 		watchWorld(nil)
 	end
 
-	RunService.RenderStepped:Connect(function(dt)
+	connect(RunService.RenderStepped, function(dt)
+		if destroyed then
+			return
+		end
+
 		updateAccumulator += dt
 		local refreshRate = math.max(getConfigNumber("minimapRefreshRate", 1 / 30), 1 / 60)
 		if updateAccumulator < refreshRate then
@@ -864,7 +891,7 @@ function MinimapController.start(parentGui, getDrivenCab)
 		end
 		updateAccumulator = 0
 
-		local playerPosition, forward, cab = getTrackedPose(getDrivenCab)
+		local playerPosition, forward, cab = getTrackedPose(cabTracker)
 		ui.root.Visible = currentMap ~= nil and playerPosition ~= nil and #roadItems > 0
 		if not ui.root.Visible then
 			return
@@ -895,6 +922,19 @@ function MinimapController.start(parentGui, getDrivenCab)
 			ui.playerMarker.Rotation = math.deg(math.atan2(forward.X, -forward.Z))
 		end
 	end)
+
+	return {
+		destroy = function()
+			destroyed = true
+			rebuildSerial += 1
+			disconnectWorld()
+			for _, connection in ipairs(connections) do
+				connection:Disconnect()
+			end
+			table.clear(connections)
+			ui.root:Destroy()
+		end,
+	}
 end
 
 return MinimapController

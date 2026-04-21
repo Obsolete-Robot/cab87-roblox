@@ -1,11 +1,10 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
-local player = Players.LocalPlayer
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 local CabVisuals = require(script.Parent:WaitForChild("CabVisuals"))
+local DrivenCabTracker = require(script.Parent:WaitForChild("Controllers"):WaitForChild("DrivenCabTracker"))
 
 local TAU = math.pi * 2
 local UP = Vector3.new(0, 1, 0)
@@ -38,59 +37,6 @@ end
 
 local function getCurrentCamera()
 	return Workspace.CurrentCamera
-end
-
-local function getHumanoid()
-	local character = player.Character
-	if not character then
-		return nil
-	end
-
-	return character:FindFirstChildOfClass("Humanoid")
-end
-
-local function getCabFromSeat(seat)
-	if not seat or not seat:IsA("VehicleSeat") or seat.Name ~= "DriverSeat" then
-		return nil
-	end
-
-	local cab = seat.Parent
-	if not cab or not cab:IsA("Model") or cab.Name ~= "Cab87Taxi" then
-		return nil
-	end
-
-	return cab
-end
-
-local function findCabOccupiedBy(humanoid)
-	if not humanoid then
-		return nil
-	end
-
-	for _, descendant in ipairs(Workspace:GetDescendants()) do
-		if descendant:IsA("VehicleSeat")
-			and descendant.Name == "DriverSeat"
-			and descendant.Occupant == humanoid
-		then
-			return getCabFromSeat(descendant)
-		end
-	end
-
-	return nil
-end
-
-local function getDrivenCab()
-	local humanoid = getHumanoid()
-	if not humanoid or not humanoid.Sit then
-		return nil
-	end
-
-	local seat = humanoid.SeatPart
-	if seat and seat.Occupant == humanoid then
-		return getCabFromSeat(seat)
-	end
-
-	return findCabOccupiedBy(humanoid)
 end
 
 local function yawToForward(yaw)
@@ -204,7 +150,7 @@ end
 
 local function restoreCamera()
 	local camera = getCurrentCamera()
-	local humanoid = getHumanoid()
+	local humanoid = DrivenCabTracker.getHumanoid()
 	local cab = activeCab
 
 	if camera then
@@ -388,7 +334,7 @@ task.spawn(function()
 end)
 
 RunService:BindToRenderStep("Cab87CameraController", Enum.RenderPriority.Camera.Value + 1, function(dt)
-	local drivenCab = getDrivenCab()
+	local drivenCab = DrivenCabTracker.getDrivenCab()
 	if drivenCab then
 		lostDrivenCabTime = 0
 	elseif activeCab then
