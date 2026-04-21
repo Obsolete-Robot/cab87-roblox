@@ -72,6 +72,37 @@ local function getVector3ConfigForCab(cab, key, fallback)
 	return fallback
 end
 
+local function findCabAssetVisual(root)
+	local visual = root and root:FindFirstChild("CabAssetVisual", true)
+	if visual and visual:IsA("Model") then
+		return visual
+	end
+
+	return nil
+end
+
+local function alignCabAssetVisualToRoot(root, assetVisual, cab)
+	local rootPivot = root:GetPivot()
+	local yawOffset = math.rad(getNumberConfigForCab(cab, "carModelAssetYawOffsetDegrees", 0))
+	assetVisual:PivotTo(rootPivot * CFrame.Angles(0, yawOffset, 0))
+
+	if getCabConfigValue(cab, "carModelAssetGroundAlign") ~= false then
+		local boundsCFrame, boundsSize = assetVisual:GetBoundingBox()
+		local groundY = rootPivot.Position.Y - getNumberConfigForCab(cab, "carRideHeight", 2.3)
+		local targetCenter = Vector3.new(
+			rootPivot.Position.X,
+			groundY + boundsSize.Y * 0.5,
+			rootPivot.Position.Z
+		)
+		assetVisual:PivotTo(CFrame.new(targetCenter - boundsCFrame.Position) * assetVisual:GetPivot())
+	end
+
+	local offset = getVector3ConfigForCab(cab, "carModelAssetOffset", Vector3.new(0, 0, 0))
+	if offset.Magnitude > 0 then
+		assetVisual:PivotTo(assetVisual:GetPivot() * CFrame.new(offset))
+	end
+end
+
 local function shortestAngle(fromYaw, toYaw)
 	return (toYaw - fromYaw + math.pi) % TAU - math.pi
 end
@@ -358,6 +389,7 @@ function CabVisual.new(cab, options)
 	self.boostWheelieReturnTimer = 0
 	self.boostWheelieReturnStartPitch = 0
 	self.assetRig = nil
+	self.visualAssetScale = nil
 	self.wheelTravelStuds = 0
 	self.lastBoostPulse = getNumberAttribute(cab, Config.carVisualBoostPulseAttribute)
 	self.lastLandingPulse = getNumberAttribute(cab, Config.carVisualLandingPulseAttribute)
@@ -489,6 +521,39 @@ function CabVisual:configureAssetRig(visual)
 	}
 end
 
+function CabVisual:getConfiguredAssetScale()
+	return math.max(getNumberConfigForCab(self.cab, "carModelAssetScale", 1), 0.05)
+end
+
+function CabVisual:applyAssetScaleToVisual(visual, scale)
+	local assetVisual = findCabAssetVisual(visual)
+	if not assetVisual then
+		return false
+	end
+
+	local okScale = pcall(function()
+		assetVisual:ScaleTo(scale)
+	end)
+	if not okScale then
+		return false
+	end
+
+	alignCabAssetVisualToRoot(visual, assetVisual, self.cab)
+	return true
+end
+
+function CabVisual:updateConfiguredAssetScale()
+	local scale = self:getConfiguredAssetScale()
+	if math.abs((self.visualAssetScale or scale) - scale) <= 0.001 then
+		return
+	end
+
+	if self.visual and self:applyAssetScaleToVisual(self.visual, scale) then
+		self.visualAssetScale = scale
+		self:configureAssetRig(self.visual)
+	end
+end
+
 function CabVisual:createVisual()
 	self:restoreSourceVisuals()
 	self:destroyVisualOnly()
@@ -537,6 +602,8 @@ function CabVisual:createVisual()
 	end
 
 	visual:PivotTo(self.baseVisualCFrame or self.visualCFrame or CabVisuals.getCabTargetPivot(self.cab))
+	self.visualAssetScale = self:getConfiguredAssetScale()
+	self:applyAssetScaleToVisual(visual, self.visualAssetScale)
 	self:configureAssetRig(visual)
 	visual.Parent = self.parent
 	self.visual = visual
@@ -1032,6 +1099,7 @@ function CabVisual:update(rawPivot, dt)
 	if not self.visual or not self.visual.Parent then
 		self:createVisual()
 	end
+	self:updateConfiguredAssetScale()
 
 	local bufferedPivot = self:getBufferedPivot(rawPivot)
 	if bufferedPivot.Position.X ~= bufferedPivot.Position.X

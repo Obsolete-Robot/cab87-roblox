@@ -86,6 +86,9 @@ local function getOrCreateDebugTuneRemote()
 	return getOrCreateRemoteEvent(Config.debugTuneRemoteName)
 end
 
+local debugTunableCars = {}
+local applyLiveDebugTuning
+
 local function normalizeTuningValue(value, property)
 	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
 		return nil
@@ -146,6 +149,9 @@ local function runDebugTuning(debugTuneRemote)
 		if action == "ResetAll" then
 			for resetKey, defaultValue in pairs(defaultValues) do
 				Config[resetKey] = defaultValue
+				if applyLiveDebugTuning then
+					applyLiveDebugTuning(resetKey, defaultValue)
+				end
 			end
 			debugTuneRemote:FireAllClients("Snapshot", getSnapshot())
 			return
@@ -162,6 +168,9 @@ local function runDebugTuning(debugTuneRemote)
 
 		if action == "Reset" then
 			Config[key] = defaultValues[key]
+			if applyLiveDebugTuning then
+				applyLiveDebugTuning(key, Config[key])
+			end
 			debugTuneRemote:FireAllClients("Set", key, Config[key])
 		elseif action == "Set" then
 			local normalizedValue = normalizeTuningValue(value, property)
@@ -170,6 +179,9 @@ local function runDebugTuning(debugTuneRemote)
 			end
 
 			Config[key] = normalizedValue
+			if applyLiveDebugTuning then
+				applyLiveDebugTuning(key, normalizedValue)
+			end
 			debugTuneRemote:FireAllClients("Set", key, normalizedValue)
 		end
 	end)
@@ -415,17 +427,17 @@ local function countBaseParts(root)
 	return count
 end
 
-local function alignCabAssetVisual(visual, spawnPosition, carConfig)
+local function alignCabAssetVisualToPivot(visual, basePivot, carConfig)
 	local yawOffset = math.rad(getNumberConfig("carModelAssetYawOffsetDegrees", 0, carConfig))
-	visual:PivotTo(CFrame.new(spawnPosition) * CFrame.Angles(0, yawOffset, 0))
+	visual:PivotTo(basePivot * CFrame.Angles(0, yawOffset, 0))
 
 	if carConfig.carModelAssetGroundAlign ~= false then
 		local boundsCFrame, boundsSize = visual:GetBoundingBox()
-		local groundY = spawnPosition.Y - getNumberConfig("carRideHeight", 2.3, carConfig)
+		local groundY = basePivot.Position.Y - getNumberConfig("carRideHeight", 2.3, carConfig)
 		local targetCenter = Vector3.new(
-			spawnPosition.X,
+			basePivot.Position.X,
 			groundY + boundsSize.Y * 0.5,
-			spawnPosition.Z
+			basePivot.Position.Z
 		)
 		visual:PivotTo(CFrame.new(targetCenter - boundsCFrame.Position) * visual:GetPivot())
 	end
@@ -434,6 +446,10 @@ local function alignCabAssetVisual(visual, spawnPosition, carConfig)
 	if offset.Magnitude > 0 then
 		visual:PivotTo(visual:GetPivot() * CFrame.new(offset))
 	end
+end
+
+local function alignCabAssetVisual(visual, spawnPosition, carConfig)
+	alignCabAssetVisualToPivot(visual, CFrame.new(spawnPosition), carConfig)
 end
 
 local function loadCabAssetVisual(car, spawnPosition, carConfig)
@@ -640,6 +656,66 @@ local function createCab(world, spawnPose, carConfig)
 	end
 
 	return car, seat, driftEmitters
+end
+
+local function setCabConfigAttribute(car, key, value)
+	if not car then
+		return
+	end
+
+	local safeValue = getAttributeSafeValue(value)
+	if safeValue ~= nil then
+		local configPrefix = Config.carConfigAttributePrefix or "Cab87CarConfig_"
+		car:SetAttribute(configPrefix .. key, safeValue)
+	end
+end
+
+local function applyCabModelAssetScale(car, carConfig)
+	if not car or not car.Parent then
+		return
+	end
+
+	local visual = car:FindFirstChild("CabAssetVisual")
+	if not (visual and visual:IsA("Model")) then
+		return
+	end
+
+	local scale = math.max(getNumberConfig("carModelAssetScale", 1, carConfig), 0.05)
+	local okScale, scaleError = pcall(function()
+		visual:ScaleTo(scale)
+	end)
+	if not okScale then
+		warn("[cab87] Live cab model asset scale failed: " .. tostring(scaleError))
+		return
+	end
+
+	alignCabAssetVisualToPivot(visual, car:GetPivot(), carConfig)
+	setCabConfigAttribute(car, "carModelAssetScale", scale)
+end
+
+local function registerDebugTunableCar(car, carConfig)
+	table.insert(debugTunableCars, {
+		car = car,
+		config = carConfig,
+	})
+end
+
+applyLiveDebugTuning = function(key, value)
+	for index = #debugTunableCars, 1, -1 do
+		local target = debugTunableCars[index]
+		local targetCar = target.car
+		if not targetCar or not targetCar.Parent then
+			table.remove(debugTunableCars, index)
+		else
+			if target.config then
+				target.config[key] = value
+			end
+
+			if key == "carModelAssetScale" then
+				applyCabModelAssetScale(targetCar, target.config)
+			end
+		end
+	end
 end
 
 local function runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose, options)
@@ -1790,6 +1866,7 @@ local function spawnCarController(options)
 	options = options or {}
 	local carConfig = options.config or createCarConfig(options.profileName, options.configOverrides)
 	local car, seat, driftEmitters = createCab(options.world, options.spawnPose, carConfig)
+	registerDebugTunableCar(car, carConfig)
 	runCarController(
 		car,
 		seat,
@@ -1922,6 +1999,7 @@ end
 
 local playerCabConfig = createCarConfig(Config.carDefaultProfileName)
 local car, seat, driftEmitters = createCab(world, spawnPose, playerCabConfig)
+registerDebugTunableCar(car, playerCabConfig)
 local gpsService = GpsService.start({
 	world = world,
 	car = car,

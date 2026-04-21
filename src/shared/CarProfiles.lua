@@ -54,6 +54,7 @@ CarProfiles.BackgroundTaxi = {
 
 CarProfiles.visualAttributeKeys = {
 	"carVisualPolishEnabled",
+	"carModelAssetScale",
 	"carVisualBodySpringEnabled",
 	"carVisualLeanEnabled",
 	"carVisualBoostWheelieEnabled",

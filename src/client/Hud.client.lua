@@ -869,6 +869,7 @@ local function formatDebugValue(value, property)
 end
 
 local cabVisualDebugProperties = {
+	carModelAssetScale = true,
 	carVisualResponsiveness = true,
 	carVisualSnapDistance = true,
 	carVisualInterpolationDelay = true,

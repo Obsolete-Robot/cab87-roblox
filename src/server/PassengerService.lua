@@ -10,7 +10,10 @@ local ROAD_SPLINE_DATA_NAME = "AuthoredRoadSplineData"
 local ROAD_SPLINES_NAME = "Splines"
 local ROAD_POINTS_NAME = "RoadPoints"
 local PASSENGER_BASE_TRANSPARENCY_ATTR = "Cab87BaseTransparency"
-local PASSENGER_TORSO_Y = 2.1
+local PASSENGER_BASE_HEIGHT = 4.1
+local PASSENGER_BASE_LEG_HEIGHT = 1.55
+local PASSENGER_BASE_TORSO_Y = 2.1
+local PASSENGER_BASE_RUN_BOB_HEIGHT = 0.16
 local PASSENGER_COLORS = {
 	Color3.fromRGB(49, 151, 255),
 	Color3.fromRGB(255, 122, 65),
@@ -45,6 +48,11 @@ local function getConfigColor(key, fallback)
 	end
 
 	return fallback
+end
+
+local function getPassengerModelScale()
+	local height = math.max(getConfigNumber("passengerModelHeight", 5.5), 0.1)
+	return height / PASSENGER_BASE_HEIGHT
 end
 
 local function horizontalDistance(a, b)
@@ -263,6 +271,31 @@ local function ensureMinimumCandidateCount(candidates, spawnPose)
 	end
 end
 
+local function createSurfaceRaycastParams(driveSurfaces)
+	if not driveSurfaces or #driveSurfaces == 0 then
+		return nil
+	end
+
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Include
+	raycastParams.FilterDescendantsInstances = driveSurfaces
+	return raycastParams
+end
+
+local function getSurfacePositionFromParams(raycastParams, position, fallbackY)
+	if raycastParams then
+		local rayHeight = math.max(getConfigNumber("passengerSurfaceRaycastHeight", 140), 1)
+		local rayDepth = math.max(getConfigNumber("passengerSurfaceRaycastDepth", 260), rayHeight + 1)
+		local origin = Vector3.new(position.X, position.Y + rayHeight, position.Z)
+		local result = Workspace:Raycast(origin, Vector3.new(0, -rayDepth, 0), raycastParams)
+		if result then
+			return result.Position
+		end
+	end
+
+	return Vector3.new(position.X, fallbackY or position.Y, position.Z)
+end
+
 local function shuffle(values, rng)
 	for i = #values, 2, -1 do
 		local j = rng:NextInteger(1, i)
@@ -289,6 +322,7 @@ local function createPassengerStops(world, driveSurfaces, spawnPose, rng)
 	local minSeparation = math.max(getConfigNumber("passengerStopMinSeparation", 80), 1)
 	local maxStops = math.max(2, math.floor(getConfigNumber("passengerMaxStops", 36)))
 	local candidates = collectAuthoredRoadCandidates(world, minSeparation)
+	local surfaceRaycastParams = createSurfaceRaycastParams(driveSurfaces)
 
 	if #candidates == 0 then
 		candidates = collectSurfaceCandidates(driveSurfaces, minSeparation)
@@ -299,7 +333,8 @@ local function createPassengerStops(world, driveSurfaces, spawnPose, rng)
 
 	local stops = {}
 	for i = 1, math.min(#candidates, maxStops) do
-		local position = candidates[i]
+		local candidate = candidates[i]
+		local position = getSurfacePositionFromParams(surfaceRaycastParams, candidate, candidate.Y)
 		table.insert(stops, {
 			id = i,
 			position = position,
@@ -345,18 +380,7 @@ local function createCircleMarker(parent, name, position, radius, color)
 end
 
 local function getSurfacePosition(service, position, fallbackY)
-	local raycastParams = service.surfaceRaycastParams
-	if raycastParams then
-		local rayHeight = math.max(getConfigNumber("passengerSurfaceRaycastHeight", 140), 1)
-		local rayDepth = math.max(getConfigNumber("passengerSurfaceRaycastDepth", 260), rayHeight + 1)
-		local origin = Vector3.new(position.X, position.Y + rayHeight, position.Z)
-		local result = Workspace:Raycast(origin, Vector3.new(0, -rayDepth, 0), raycastParams)
-		if result then
-			return result.Position
-		end
-	end
-
-	return Vector3.new(position.X, fallbackY or position.Y, position.Z)
+	return getSurfacePositionFromParams(service.surfaceRaycastParams, position, fallbackY)
 end
 
 local function createPassengerModel(parent, passengerId, position, rng)
@@ -372,59 +396,73 @@ local function createPassengerModel(parent, passengerId, position, rng)
 		rng:NextInteger(40, 90),
 		rng:NextInteger(45, 100)
 	)
+	local scale = getPassengerModelScale()
+	local torsoY = PASSENGER_BASE_TORSO_Y * scale
+	local runBobHeight = PASSENGER_BASE_RUN_BOB_HEIGHT * scale
+	local legHalfHeight = PASSENGER_BASE_LEG_HEIGHT * scale * 0.5
+	local groundLift = PASSENGER_BASE_LEG_HEIGHT
+		* scale
+		* math.clamp(getConfigNumber("passengerGroundLiftLegFraction", 0.5), -0.5, 1.5)
+
+	model:SetAttribute("PassengerHeight", PASSENGER_BASE_HEIGHT * scale)
+	model:SetAttribute("PassengerGroundLift", groundLift)
+	model:SetAttribute("PassengerScale", scale)
 
 	local torso = makePart(model, {
 		Name = "Torso",
-		Size = Vector3.new(1.7, 2.2, 0.85),
-		Position = position + Vector3.new(0, PASSENGER_TORSO_Y, 0),
+		Size = Vector3.new(1.7, 2.2, 0.85) * scale,
+		Position = position + Vector3.new(0, torsoY, 0),
 		Color = shirtColor,
 		Material = Enum.Material.SmoothPlastic,
 	})
 	makePart(model, {
 		Name = "Head",
 		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(1.1, 1.1, 1.1),
-		Position = position + Vector3.new(0, 3.55, 0),
+		Size = Vector3.new(1.1, 1.1, 1.1) * scale,
+		Position = position + Vector3.new(0, 3.55, 0) * scale,
 		Color = Color3.fromRGB(232, 184, 142),
 		Material = Enum.Material.SmoothPlastic,
 	})
 	makePart(model, {
 		Name = "LeftLeg",
-		Size = Vector3.new(0.65, 1.55, 0.65),
-		Position = position + Vector3.new(-0.42, 0.72, 0),
+		Size = Vector3.new(0.65, PASSENGER_BASE_LEG_HEIGHT, 0.65) * scale,
+		Position = position + Vector3.new(-0.42 * scale, legHalfHeight, 0),
 		Color = pantsColor,
 		Material = Enum.Material.SmoothPlastic,
 	})
 	makePart(model, {
 		Name = "RightLeg",
-		Size = Vector3.new(0.65, 1.55, 0.65),
-		Position = position + Vector3.new(0.42, 0.72, 0),
+		Size = Vector3.new(0.65, PASSENGER_BASE_LEG_HEIGHT, 0.65) * scale,
+		Position = position + Vector3.new(0.42 * scale, legHalfHeight, 0),
 		Color = pantsColor,
 		Material = Enum.Material.SmoothPlastic,
 	})
 	makePart(model, {
 		Name = "LeftArm",
-		Size = Vector3.new(0.45, 1.75, 0.45),
-		Position = position + Vector3.new(-1.08, 2.05, 0),
+		Size = Vector3.new(0.45, 1.75, 0.45) * scale,
+		Position = position + Vector3.new(-1.08, 2.05, 0) * scale,
 		Color = shirtColor,
 		Material = Enum.Material.SmoothPlastic,
 	})
 	makePart(model, {
 		Name = "RightArm",
-		Size = Vector3.new(0.45, 1.75, 0.45),
-		Position = position + Vector3.new(1.08, 2.05, 0),
+		Size = Vector3.new(0.45, 1.75, 0.45) * scale,
+		Position = position + Vector3.new(1.08, 2.05, 0) * scale,
 		Color = shirtColor,
 		Material = Enum.Material.SmoothPlastic,
 	})
 
 	model.PrimaryPart = torso
-	return model
+	return model, torsoY, runBobHeight, groundLift
 end
 
 local function setPassengerGroundPose(passenger, groundPosition, lookAt, moving, pose)
-	local runBob = if moving then math.abs(math.sin(passenger.runPhase or 0)) * 0.16 else 0
+	local runBobHeight = passenger.runBobHeight or PASSENGER_BASE_RUN_BOB_HEIGHT
+	local runBob = if moving then math.abs(math.sin(passenger.runPhase or 0)) * runBobHeight else 0
 	local heightOffset = (pose and pose.heightOffset) or 0
-	local torsoPosition = groundPosition + Vector3.new(0, PASSENGER_TORSO_Y + runBob + heightOffset, 0)
+	local torsoY = passenger.torsoY or PASSENGER_BASE_TORSO_Y
+	local groundLift = passenger.groundLift or 0
+	local torsoPosition = groundPosition + Vector3.new(0, groundLift + torsoY + runBob + heightOffset, 0)
 	local lookDirection = lookAt and Vector3.new(lookAt.X - groundPosition.X, 0, lookAt.Z - groundPosition.Z) or Vector3.zero
 	local pivot
 
@@ -744,8 +782,9 @@ local function spawnWaitingPassenger(service)
 		targetStop = targetStop,
 		runPhase = 0,
 		position = pickupStop.position,
-		model = createPassengerModel(service.passengerFolder, passengerId, pickupStop.position, service.rng),
 	}
+	passenger.model, passenger.torsoY, passenger.runBobHeight, passenger.groundLift =
+		createPassengerModel(service.passengerFolder, passengerId, pickupStop.position, service.rng)
 
 	passenger.pickupMarker = createCircleMarker(
 		service.markerFolder,
@@ -1208,11 +1247,7 @@ function PassengerService.start(options)
 	service.passengerFolder = recreateFolder(world, getConfigString("passengerFolderName", "Passengers"))
 	service.markerFolder = recreateFolder(world, getConfigString("passengerMarkersFolderName", "PassengerMarkers"))
 	service.stops, service.stopFolder = createPassengerStops(world, options.driveSurfaces, options.spawnPose, service.rng)
-	if options.driveSurfaces and #options.driveSurfaces > 0 then
-		service.surfaceRaycastParams = RaycastParams.new()
-		service.surfaceRaycastParams.FilterType = Enum.RaycastFilterType.Include
-		service.surfaceRaycastParams.FilterDescendantsInstances = options.driveSurfaces
-	end
+	service.surfaceRaycastParams = createSurfaceRaycastParams(options.driveSurfaces)
 	service.world:SetAttribute("PassengerStopCount", #service.stops)
 
 	ensureWaitingPassengerCount(service)
