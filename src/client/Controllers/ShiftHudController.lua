@@ -1,38 +1,8 @@
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local GameplayStateStore = require(script.Parent.Parent:WaitForChild("GameplayStateStore"))
 
 local ShiftHudController = {}
-
-local player = Players.LocalPlayer
-
-local function getNumberAttribute(instance, attributeName)
-	if not instance or type(attributeName) ~= "string" then
-		return nil
-	end
-
-	local value = instance:GetAttribute(attributeName)
-	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
-		return nil
-	end
-
-	return value
-end
-
-local function getStringAttribute(instance, attributeName)
-	if not instance or type(attributeName) ~= "string" then
-		return nil
-	end
-
-	local value = instance:GetAttribute(attributeName)
-	if type(value) ~= "string" then
-		return nil
-	end
-
-	return value
-end
 
 local function formatShiftClock(seconds)
 	local clamped = math.max(0, math.floor((seconds or 0) + 0.5))
@@ -130,13 +100,15 @@ function ShiftHudController.start(parentGui, cabTracker)
 	local lastShiftDetails = nil
 
 	local connection = RunService.RenderStepped:Connect(function()
-		local phaseRaw = player:GetAttribute(Config.shiftPhaseAttribute)
-		local phase = type(phaseRaw) == "string" and phaseRaw or "Preparing"
-		local timeRemaining = player:GetAttribute(Config.shiftTimeRemainingAttribute)
-		local shiftMoney = player:GetAttribute(Config.shiftGrossMoneyAttribute)
 		local cab = cabTracker.getDrivenCab()
+		local shiftState = GameplayStateStore.getShiftState()
+		local cabState = GameplayStateStore.getCabState(cab)
+		local fareState = cabState and cabState.fare or nil
+		local phase = shiftState and shiftState.phase or "Preparing"
+		local timeRemaining = shiftState and shiftState.timeRemaining or 0
+		local shiftMoney = shiftState and shiftState.grossMoney or 0
 
-		ui.root.Visible = type(phaseRaw) == "string" or cab ~= nil
+		ui.root.Visible = shiftState ~= nil or cab ~= nil
 
 		local phaseText = string.upper(phase)
 		local phaseColor = Color3.fromRGB(255, 206, 38)
@@ -154,11 +126,10 @@ function ShiftHudController.start(parentGui, cabTracker)
 			math.max(0, math.floor((type(shiftMoney) == "number" and shiftMoney or 0) + 0.5))
 		)
 
-		local activeFare = cab and (getNumberAttribute(cab, Config.passengerFareActiveValueAttribute) or 0) or 0
-		local damagePenalty = cab and (getNumberAttribute(cab, Config.passengerFareDamagePenaltyAttribute) or 0) or 0
-		local completedFares = cab and (getNumberAttribute(cab, Config.passengerFareCompletedAttribute) or 0) or 0
-		local destination = cab and (getStringAttribute(cab, Config.passengerDestinationAttribute) or "No destination")
-			or "No destination"
+		local activeFare = fareState and fareState.activeValue or 0
+		local damagePenalty = fareState and fareState.damagePenalty or 0
+		local completedFares = cabState and cabState.completedFares or 0
+		local destination = cabState and cabState.destinationLabel or "No destination"
 		local detailsText = string.format(
 			"%s  •  Fare $%d  •  Damage -$%d  •  Fares %d",
 			destination,

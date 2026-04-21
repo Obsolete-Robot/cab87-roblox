@@ -72,6 +72,7 @@ function ShiftService.new(options)
 		config = options.config or {},
 		players = options.players or Players,
 		remote = options.remotes and options.remotes.shiftStateUpdated or nil,
+		stateReplicator = options.stateReplicator,
 		connections = {},
 		playerStates = {},
 		running = false,
@@ -169,6 +170,13 @@ function ShiftService:_resetShiftTotals()
 end
 
 function ShiftService:_publishPayoutSummary(player, summary)
+	if self.stateReplicator and self.stateReplicator.publishPayoutSummary then
+		local stateSummary = table.clone(summary)
+		stateSummary.shiftId = self.shiftId
+		stateSummary.serverTime = Workspace:GetServerTimeNow()
+		self.stateReplicator:publishPayoutSummary(player, stateSummary)
+	end
+
 	if not self.remote then
 		return
 	end
@@ -217,7 +225,9 @@ function ShiftService:_finalizeShiftPayouts()
 	end
 end
 
-function ShiftService:_getSnapshot()
+function ShiftService:_getSnapshot(player)
+	local playerState = player and self:_ensurePlayerState(player) or nil
+
 	return {
 		phase = self.phase,
 		shiftId = self.shiftId,
@@ -225,6 +235,7 @@ function ShiftService:_getSnapshot()
 		duration = self.phaseDuration,
 		phaseElapsed = self.phaseElapsed,
 		serverTime = Workspace:GetServerTimeNow(),
+		grossMoney = playerState and playerState.grossMoney or 0,
 	}
 end
 
@@ -238,6 +249,16 @@ end
 function ShiftService:_publish(action, targetPlayer)
 	local snapshot = self:_getSnapshot()
 	self:_setReplicatedAttributes(snapshot)
+
+	if self.stateReplicator and self.stateReplicator.publishShiftState then
+		if targetPlayer then
+			self.stateReplicator:publishShiftState(self:_getSnapshot(targetPlayer), targetPlayer)
+		else
+			for _, player in ipairs(self.players:GetPlayers()) do
+				self.stateReplicator:publishShiftState(self:_getSnapshot(player), player)
+			end
+		end
+	end
 
 	if not self.remote then
 		return
