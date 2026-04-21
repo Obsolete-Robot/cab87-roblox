@@ -2,23 +2,24 @@ local AssetService = game:GetService("AssetService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared:WaitForChild("Config"))
+local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
+local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
 if Config.useAuthoredRoadEditorWorld ~= true then
 	return
 end
 
-local ROAD_EDITOR_ROOT_NAME = "Cab87RoadEditor"
-local ROAD_EDITOR_SPLINES_NAME = "Splines"
-local ROAD_EDITOR_POINTS_NAME = "RoadPoints"
-local ROAD_WIDTH_ATTR = "RoadWidth"
+local ROAD_EDITOR_ROOT_NAME = RoadSplineData.EDITOR_ROOT_NAME
+local ROAD_EDITOR_SPLINES_NAME = RoadSplineData.SPLINES_NAME
+local ROAD_EDITOR_POINTS_NAME = RoadSplineData.POINTS_NAME
+local ROAD_WIDTH_ATTR = RoadSplineData.ROAD_WIDTH_ATTR
 local RUNTIME_WORLD_NAME = "Cab87World"
-local RUNTIME_SPLINE_DATA_NAME = "AuthoredRoadSplineData"
+local RUNTIME_SPLINE_DATA_NAME = RoadSplineData.RUNTIME_DATA_NAME
 local CLIENT_VISUALS_NAME = "AuthoredRoadClientVisuals"
 
-local DEFAULT_AUTHORED_ROAD_WIDTH = 28
-local AUTHORED_ROAD_MIN_WIDTH = 8
-local AUTHORED_ROAD_MAX_WIDTH = 200
+local DEFAULT_AUTHORED_ROAD_WIDTH = RoadSampling.DEFAULT_ROAD_WIDTH
 local ROAD_MESH_THICKNESS = 1.2
 local ENDPOINT_WELD_DISTANCE = 22
 local INTERSECTION_RADIUS_SCALE = 0.5
@@ -93,141 +94,14 @@ local function hideEditorDebugGeometry()
 	end
 end
 
-local function sortedChildren(parent, className)
-	local children = {}
-	if not parent then
-		return children
-	end
-
-	for _, child in ipairs(parent:GetChildren()) do
-		if not className or child:IsA(className) then
-			table.insert(children, child)
-		end
-	end
-
-	table.sort(children, function(a, b)
-		return a.Name < b.Name
-	end)
-
-	return children
-end
-
-local function sanitizeRoadWidth(value)
-	local width = tonumber(value) or DEFAULT_AUTHORED_ROAD_WIDTH
-	return math.clamp(width, AUTHORED_ROAD_MIN_WIDTH, AUTHORED_ROAD_MAX_WIDTH)
-end
-
-local function getSplineRoadWidth(spline)
-	local configuredDefault = tonumber(Config.authoredRoadCollisionWidth) or DEFAULT_AUTHORED_ROAD_WIDTH
-	return sanitizeRoadWidth(tonumber(spline and spline:GetAttribute(ROAD_WIDTH_ATTR)) or configuredDefault)
-end
-
-local function getAuthoredSplines(root)
-	local splinesFolder = root and root:FindFirstChild(ROAD_EDITOR_SPLINES_NAME)
-	if splinesFolder and splinesFolder:IsA("Folder") then
-		return sortedChildren(splinesFolder, "Model")
-	end
-
-	local legacyPoints = root and root:FindFirstChild(ROAD_EDITOR_POINTS_NAME)
-	if legacyPoints and legacyPoints:IsA("Folder") then
-		return { root }
-	end
-
-	return {}
-end
-
-local function getAuthoredSplinePoints(spline)
-	local pointsFolder = spline and spline:FindFirstChild(ROAD_EDITOR_POINTS_NAME)
-	if not (pointsFolder and pointsFolder:IsA("Folder")) then
-		return {}
-	end
-
-	local points = {}
-	for _, child in ipairs(pointsFolder:GetChildren()) do
-		if child:IsA("BasePart") or child:IsA("Vector3Value") then
-			table.insert(points, child)
-		end
-	end
-
-	table.sort(points, function(a, b)
-		return a.Name < b.Name
-	end)
-
-	return points
-end
-
-local function getPointPosition(point)
-	if point:IsA("BasePart") then
-		return point.Position
-	end
-	return point.Value
-end
-
-local function catmullRom(p0, p1, p2, p3, t)
-	local t2 = t * t
-	local t3 = t2 * t
-	return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
-end
-
-local function sampleAuthoredSpline(points, closedCurve)
-	local positions = {}
-	for _, point in ipairs(points) do
-		table.insert(positions, getPointPosition(point))
-	end
-
-	if #positions < 2 then
-		return positions
-	end
-
-	if closedCurve and #positions < 3 then
-		closedCurve = false
-	end
-
-	local samples = {}
-	local sampleStep = math.max(Config.authoredRoadSampleStepStuds, 1)
-	if closedCurve then
-		local count = #positions
-		for i = 1, count do
-			local p0 = positions[((i - 2) % count) + 1]
-			local p1 = positions[i]
-			local p2 = positions[(i % count) + 1]
-			local p3 = positions[((i + 1) % count) + 1]
-			local segmentLen = (p2 - p1).Magnitude
-			local subdivisions = math.max(2, math.floor(segmentLen / sampleStep))
-
-			for s = 0, subdivisions - 1 do
-				table.insert(samples, catmullRom(p0, p1, p2, p3, s / subdivisions))
-			end
-		end
-
-		if #samples > 1 then
-			table.insert(samples, samples[1])
-		end
-	else
-		for i = 1, #positions - 1 do
-			local p0 = positions[math.max(1, i - 1)]
-			local p1 = positions[i]
-			local p2 = positions[i + 1]
-			local p3 = positions[math.min(#positions, i + 2)]
-			local segmentLen = (p2 - p1).Magnitude
-			local subdivisions = math.max(2, math.floor(segmentLen / sampleStep))
-
-			for s = 0, subdivisions - 1 do
-				table.insert(samples, catmullRom(p0, p1, p2, p3, s / subdivisions))
-			end
-		end
-
-		table.insert(samples, positions[#positions])
-	end
-
-	return samples
-end
-
-local function distanceXZ(a, b)
-	local dx = a.X - b.X
-	local dz = a.Z - b.Z
-	return math.sqrt(dx * dx + dz * dz)
-end
+local sanitizeRoadWidth = RoadSampling.sanitizeRoadWidth
+local distanceXZ = RoadSampling.distanceXZ
+local horizontalUnit = RoadSampling.horizontalUnit
+local catmullRom = RoadSampling.catmullRom
+local sampleLoopIsClosed = RoadSampling.sampleLoopIsClosed
+local getRoadSampleTangent = RoadSampling.getRoadSampleTangent
+local polylineLength = RoadSampling.polylineLength
+local samplePolylineAtFraction = RoadSampling.samplePolylineAtFraction
 
 local function heightConnectTolerance(widthA, widthB)
 	local width = math.min(sanitizeRoadWidth(widthA), sanitizeRoadWidth(widthB))
@@ -243,30 +117,10 @@ local function positionsConnectIn3D(a, b, widthA, widthB)
 end
 
 local function collectSplineBuildData(root)
-	local chains = {}
-	for _, spline in ipairs(getAuthoredSplines(root)) do
-		local points = getAuthoredSplinePoints(spline)
-		if #points >= 2 then
-			local closed = spline:GetAttribute("ClosedCurve") == true
-			local samples
-			if spline:GetAttribute("SampledRoadChain") == true then
-				samples = {}
-				for _, point in ipairs(points) do
-					table.insert(samples, getPointPosition(point))
-				end
-			else
-				samples = sampleAuthoredSpline(points, closed)
-			end
-				table.insert(chains, {
-					name = spline.Name,
-					samples = samples,
-					closed = closed,
-					width = getSplineRoadWidth(spline),
-					componentId = tonumber(spline:GetAttribute("ComponentId")) or 1,
-				})
-		end
-	end
-	return chains
+	return RoadSplineData.collectSampledChains(root, {
+		defaultRoadWidth = RoadSampling.getConfiguredRoadWidth(Config),
+		sampleStep = Config.authoredRoadSampleStepStuds,
+	})
 end
 
 local function getChainName(chain, fallback)
@@ -274,23 +128,9 @@ local function getChainName(chain, fallback)
 end
 
 local function collectProcessedJunctions(root)
-	local junctionsFolder = root and root:FindFirstChild("Junctions")
-	if not (junctionsFolder and junctionsFolder:IsA("Folder")) then
-		return {}
-	end
-
-	local junctions = {}
-	local children = sortedChildren(junctionsFolder, "Vector3Value")
-	for _, junctionData in ipairs(children) do
-		table.insert(junctions, {
-			center = junctionData.Value,
-			radius = tonumber(junctionData:GetAttribute("Radius")) or DEFAULT_AUTHORED_ROAD_WIDTH * INTERSECTION_RADIUS_SCALE,
-			componentId = tonumber(junctionData:GetAttribute("ComponentId")) or 1,
-			members = {},
-			chains = {},
-		})
-	end
-	return junctions
+	return RoadSplineData.collectJunctions(root, {
+		defaultRadius = DEFAULT_AUTHORED_ROAD_WIDTH * INTERSECTION_RADIUS_SCALE,
+	})
 end
 
 local function buildProcessedComponents(chains, junctions)
@@ -562,27 +402,12 @@ local function applyJunctionsToChains(chains, junctions)
 	end
 end
 
-local function sampleLoopIsClosed(samples)
-	if #samples < 3 then
-		return false
-	end
-	return distanceXZ(samples[1], samples[#samples]) <= 0.05 and math.abs(samples[1].Y - samples[#samples].Y) <= 0.05
-end
-
 local function roadRightFromTangent(tangent)
 	local right = Vector3.yAxis:Cross(tangent)
 	if right.Magnitude < 1e-4 then
 		return Vector3.xAxis
 	end
 	return right.Unit
-end
-
-local function horizontalUnit(vector)
-	local flat = Vector3.new(vector.X, 0, vector.Z)
-	if flat.Magnitude < 1e-4 then
-		return nil
-	end
-	return flat.Unit
 end
 
 local function lineIntersectionXZ(a, dirA, b, dirB)
@@ -980,99 +805,6 @@ end
 local function addMeshTriangle(state, a, b, c)
 	state.mesh:AddTriangle(a, b, c)
 	state.faces += 1
-end
-
-local function getRoadSampleTangent(samples, index, edgeCount, closedLoop, fallbackDir)
-	if closedLoop then
-		local prevIndex = index - 1
-		if prevIndex < 1 then
-			prevIndex = edgeCount
-		end
-		local nextIndex = index + 1
-		if nextIndex > edgeCount then
-			nextIndex = 1
-		end
-		local prevDir = horizontalUnit(samples[index] - samples[prevIndex])
-		local nextDir = horizontalUnit(samples[nextIndex] - samples[index])
-		if prevDir and nextDir then
-			local combined = prevDir + nextDir
-			if combined.Magnitude > 1e-4 then
-				return combined.Unit
-			end
-		end
-		return nextDir or prevDir or fallbackDir
-	end
-
-	if index == 1 then
-		return horizontalUnit(samples[2] - samples[1]) or fallbackDir
-	elseif index == edgeCount then
-		return horizontalUnit(samples[edgeCount] - samples[edgeCount - 1]) or fallbackDir
-	end
-
-	local prevDir = horizontalUnit(samples[index] - samples[index - 1])
-	local nextDir = horizontalUnit(samples[index + 1] - samples[index])
-	if prevDir and nextDir then
-		local combined = prevDir + nextDir
-		if combined.Magnitude > 1e-4 then
-			return combined.Unit
-		end
-	end
-	return nextDir or prevDir or fallbackDir
-end
-
-local function polylineLength(points, closedLoop)
-	local count = #points
-	if count < 2 then
-		return 0
-	end
-
-	local segmentCount = closedLoop and count or count - 1
-	local total = 0
-	for i = 1, segmentCount do
-		local nextIndex = closedLoop and ((i % count) + 1) or (i + 1)
-		total += (points[nextIndex] - points[i]).Magnitude
-	end
-	return total
-end
-
-local function samplePolylineAtFraction(points, closedLoop, fraction)
-	local count = #points
-	if count == 0 then
-		return Vector3.zero
-	elseif count == 1 then
-		return points[1]
-	end
-
-	local totalLength = polylineLength(points, closedLoop)
-	if totalLength <= 1e-4 then
-		return points[1]
-	end
-
-	local target = math.clamp(fraction, 0, 1) * totalLength
-	if closedLoop then
-		target = target % totalLength
-	elseif target <= 0 then
-		return points[1]
-	elseif target >= totalLength then
-		return points[count]
-	end
-
-	local traveled = 0
-	local segmentCount = closedLoop and count or count - 1
-	for i = 1, segmentCount do
-		local nextIndex = closedLoop and ((i % count) + 1) or (i + 1)
-		local a = points[i]
-		local b = points[nextIndex]
-		local segmentLength = (b - a).Magnitude
-		if segmentLength > 1e-4 then
-			if traveled + segmentLength >= target then
-				return a:Lerp(b, (target - traveled) / segmentLength)
-			end
-			traveled += segmentLength
-		end
-	end
-
-	return closedLoop and points[1] or points[count]
 end
 
 local function sampleSmoothedCurveControls(points, closedLoop, sampleStep)
