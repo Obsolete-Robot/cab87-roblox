@@ -8,10 +8,64 @@ local CabVisuals = {}
 
 local TAU = math.pi * 2
 local HIDDEN_TRANSPARENCY_SEQUENCE = NumberSequence.new(1)
+local DEFAULT_WHEEL_NODE_NAMES = {
+	"wheel.front.l",
+	"wheel.front.r",
+	"wheel.rear.l",
+	"wheel.rear.r",
+}
 
 local function getNumberConfig(key, fallback)
 	local value = Config[key]
 	if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+		return value
+	end
+
+	return fallback
+end
+
+local function getCabConfigValue(cab, key)
+	local prefix = Config.carConfigAttributePrefix or "Cab87CarConfig_"
+	if cab then
+		local value = cab:GetAttribute(prefix .. key)
+		if value ~= nil then
+			return value
+		end
+	end
+
+	return Config[key]
+end
+
+local function getBooleanConfigForCab(cab, key, fallback)
+	local value = getCabConfigValue(cab, key)
+	if type(value) == "boolean" then
+		return value
+	end
+
+	return fallback
+end
+
+local function getNumberConfigForCab(cab, key, fallback)
+	local value = getCabConfigValue(cab, key)
+	if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+		return value
+	end
+
+	return fallback
+end
+
+local function getStringConfigForCab(cab, key, fallback)
+	local value = getCabConfigValue(cab, key)
+	if type(value) == "string" and value ~= "" then
+		return value
+	end
+
+	return fallback
+end
+
+local function getVector3ConfigForCab(cab, key, fallback)
+	local value = getCabConfigValue(cab, key)
+	if typeof(value) == "Vector3" then
 		return value
 	end
 
@@ -114,6 +168,146 @@ local function getNumberAttribute(instance, attributeName)
 	return nil
 end
 
+local function getNodePivot(node)
+	if node:IsA("BasePart") then
+		return node.CFrame
+	elseif node:IsA("Model") then
+		return node:GetPivot()
+	end
+
+	return nil
+end
+
+local function setNodePivot(node, pivot)
+	if node:IsA("BasePart") then
+		node.CFrame = pivot
+	elseif node:IsA("Model") then
+		node:PivotTo(pivot)
+	end
+end
+
+local function getNodeSize(node)
+	if node:IsA("BasePart") then
+		return node.Size
+	elseif node:IsA("Model") then
+		local _, size = node:GetBoundingBox()
+		return size
+	end
+
+	return Vector3.zero
+end
+
+local function findVisualNodeByName(root, nodeName)
+	local targetName = string.lower(nodeName)
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if (descendant:IsA("BasePart") or descendant:IsA("Model"))
+			and string.lower(descendant.Name) == targetName
+		then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+local function findWheelSpinNode(wheelNode)
+	if not wheelNode then
+		return nil
+	end
+
+	if wheelNode:IsA("BasePart") then
+		return wheelNode
+	end
+
+	for _, child in ipairs(wheelNode:GetChildren()) do
+		if child:IsA("BasePart") and string.find(string.lower(child.Name), "mesh", 1, true) then
+			return child
+		end
+	end
+
+	for _, child in ipairs(wheelNode:GetChildren()) do
+		if child:IsA("BasePart") then
+			return child
+		end
+	end
+
+	for _, descendant in ipairs(wheelNode:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+local function splitCsv(value)
+	local items = {}
+	for item in string.gmatch(value, "[^,]+") do
+		local trimmed = string.gsub(item, "^%s*(.-)%s*$", "%1")
+		if trimmed ~= "" then
+			table.insert(items, trimmed)
+		end
+	end
+
+	return items
+end
+
+local function getWheelNodeNames(cab)
+	local replicatedNames = getCabConfigValue(cab, "carVisualWheelNodeNames")
+	if type(replicatedNames) == "string" and replicatedNames ~= "" then
+		local names = splitCsv(replicatedNames)
+		if #names > 0 then
+			return names
+		end
+	end
+
+	if type(Config.carVisualWheelNodeNames) == "table" then
+		local names = {}
+		for _, name in ipairs(Config.carVisualWheelNodeNames) do
+			if type(name) == "string" and name ~= "" then
+				table.insert(names, name)
+			end
+		end
+
+		if #names > 0 then
+			return names
+		end
+	end
+
+	return DEFAULT_WHEEL_NODE_NAMES
+end
+
+local function getWheelSpinAxis(cab)
+	local axis = getVector3ConfigForCab(cab, "carVisualWheelSpinAxis", Vector3.new(1, 0, 0))
+	if axis.Magnitude <= 0.001 then
+		return Vector3.new(1, 0, 0)
+	end
+
+	return axis.Unit
+end
+
+local function getAutoWheelRadius(cab, wheelNode, axis)
+	local configuredRadius = getNumberConfigForCab(cab, "carVisualWheelRadius", 0)
+	if configuredRadius > 0 then
+		return configuredRadius
+	end
+
+	local size = getNodeSize(wheelNode)
+	local absAxis = Vector3.new(math.abs(axis.X), math.abs(axis.Y), math.abs(axis.Z))
+	local radius
+
+	if absAxis.X >= absAxis.Y and absAxis.X >= absAxis.Z then
+		radius = math.max(size.Y, size.Z) * 0.5
+	elseif absAxis.Y >= absAxis.X and absAxis.Y >= absAxis.Z then
+		radius = math.max(size.X, size.Z) * 0.5
+	else
+		radius = math.max(size.X, size.Y) * 0.5
+	end
+
+	return math.max(radius, 0.25)
+end
+
 function CabVisuals.getCabPivotValue(cab)
 	local pivotValue = cab:FindFirstChild(Config.carServerPivotValueName)
 	if pivotValue and pivotValue:IsA("CFrameValue") then
@@ -146,6 +340,7 @@ function CabVisual.new(cab, options)
 	self.latestServerPivotSample = nil
 	self.smoothedPosition = nil
 	self.visualCFrame = nil
+	self.baseVisualCFrame = nil
 	self.previousYaw = nil
 	self.visualDriveRoll = 0
 	self.visualDriftRoll = 0
@@ -162,6 +357,8 @@ function CabVisual.new(cab, options)
 	self.boostWheelieTimer = 0
 	self.boostWheelieReturnTimer = 0
 	self.boostWheelieReturnStartPitch = 0
+	self.assetRig = nil
+	self.wheelTravelStuds = 0
 	self.lastBoostPulse = getNumberAttribute(cab, Config.carVisualBoostPulseAttribute)
 	self.lastLandingPulse = getNumberAttribute(cab, Config.carVisualLandingPulseAttribute)
 
@@ -189,6 +386,7 @@ function CabVisual:reset(pivot)
 	self.latestServerPivotSample = pivot
 	self.smoothedPosition = pivot.Position
 	self.visualCFrame = pivot
+	self.baseVisualCFrame = pivot
 	self.previousYaw = vectorToYaw(pivot.LookVector)
 	self.visualDriveRoll = 0
 	self.visualDriftRoll = 0
@@ -205,6 +403,7 @@ function CabVisual:reset(pivot)
 	self.boostWheelieTimer = 0
 	self.boostWheelieReturnTimer = 0
 	self.boostWheelieReturnStartPitch = 0
+	self.wheelTravelStuds = 0
 	self.lastBoostPulse = getNumberAttribute(self.cab, Config.carVisualBoostPulseAttribute)
 	self.lastLandingPulse = getNumberAttribute(self.cab, Config.carVisualLandingPulseAttribute)
 end
@@ -249,6 +448,45 @@ function CabVisual:restoreSourceVisuals()
 	end
 
 	self.sourceState = nil
+end
+
+function CabVisual:configureAssetRig(visual)
+	self.assetRig = nil
+
+	if not visual:FindFirstChild("CabAssetVisual", true) then
+		return
+	end
+
+	local bodyNode = findVisualNodeByName(visual, getStringConfigForCab(self.cab, "carVisualBodyNodeName", "body"))
+	local bodyPivot = bodyNode and getNodePivot(bodyNode)
+	if not bodyNode or not bodyPivot then
+		return
+	end
+
+	local visualPivot = visual:GetPivot()
+	local wheelSpinAxis = getWheelSpinAxis(self.cab)
+	local wheels = {}
+
+	for _, wheelName in ipairs(getWheelNodeNames(self.cab)) do
+		local wheelNode = findVisualNodeByName(visual, wheelName)
+		local spinNode = findWheelSpinNode(wheelNode)
+		local wheelPivot = spinNode and getNodePivot(spinNode)
+		if spinNode and wheelPivot then
+			table.insert(wheels, {
+				node = spinNode,
+				baseLocalPivot = visualPivot:ToObjectSpace(wheelPivot),
+				radius = getAutoWheelRadius(self.cab, spinNode, wheelSpinAxis),
+			})
+		end
+	end
+
+	self.assetRig = {
+		bodyNode = bodyNode,
+		bodyBaseLocalPivot = visualPivot:ToObjectSpace(bodyPivot),
+		wheelSpinAxis = wheelSpinAxis,
+		wheelSpinDirection = getNumberConfigForCab(self.cab, "carVisualWheelSpinDirection", -1),
+		wheels = wheels,
+	}
 end
 
 function CabVisual:createVisual()
@@ -298,7 +536,8 @@ function CabVisual:createVisual()
 		end
 	end
 
-	visual:PivotTo(self.visualCFrame or CabVisuals.getCabTargetPivot(self.cab))
+	visual:PivotTo(self.baseVisualCFrame or self.visualCFrame or CabVisuals.getCabTargetPivot(self.cab))
+	self:configureAssetRig(visual)
 	visual.Parent = self.parent
 	self.visual = visual
 	self:hideSourceVisuals()
@@ -311,6 +550,7 @@ function CabVisual:destroyVisualOnly()
 		self.visual = nil
 	end
 
+	self.assetRig = nil
 	self.effectMirrors = {}
 end
 
@@ -418,6 +658,10 @@ function CabVisual:getBufferedPivot(rawPivot)
 end
 
 function CabVisual:startBoostWheelie()
+	if not getBooleanConfigForCab(self.cab, "carVisualBoostWheelieEnabled", true) then
+		return
+	end
+
 	if getNumberConfig("carBoostWheelieDuration", 0) <= 0
 		or getNumberConfig("carBoostWheelieDegrees", 0) <= 0
 	then
@@ -441,6 +685,10 @@ function CabVisual:startBoostWheelieReturn()
 end
 
 function CabVisual:triggerLandingBounce(landingSpeed)
+	if not getBooleanConfigForCab(self.cab, "carVisualLandingBounceEnabled", true) then
+		return
+	end
+
 	local maxOffset = math.max(getNumberConfig("carLandingBounceMaxOffset", 0), 0)
 	local impulse = math.max(getNumberConfig("carLandingBounceImpulse", 0), 0)
 	if maxOffset <= 0 or impulse <= 0 then
@@ -476,6 +724,14 @@ function CabVisual:updatePulses()
 end
 
 function CabVisual:updateBoostWheelie(dt)
+	if not getBooleanConfigForCab(self.cab, "carVisualBoostWheelieEnabled", true) then
+		self.visualBoostPitch = 0
+		self.boostWheelieTimer = 0
+		self.boostWheelieReturnTimer = 0
+		self.boostWheelieReturnStartPitch = 0
+		return
+	end
+
 	local targetBoostPitch = 0
 
 	if self.boostWheelieTimer > 0 then
@@ -507,6 +763,12 @@ function CabVisual:updateBoostWheelie(dt)
 end
 
 function CabVisual:updateLandingBounce(dt)
+	if not getBooleanConfigForCab(self.cab, "carVisualLandingBounceEnabled", true) then
+		self.visualBounceOffset = 0
+		self.visualBounceVelocity = 0
+		return
+	end
+
 	local spring = math.max(getNumberConfig("carLandingBounceSpring", 0), 0)
 	local damping = math.max(getNumberConfig("carLandingBounceDamping", 0), 0)
 	local maxOffset = math.max(getNumberConfig("carLandingBounceMaxOffset", 0), 0)
@@ -543,7 +805,24 @@ function CabVisual:resetBodySpring()
 	self.previousBodyVelocity = nil
 end
 
+function CabVisual:resetPolish()
+	self.visualDriveRoll = 0
+	self.visualDriftRoll = 0
+	self.visualBoostPitch = 0
+	self.visualBounceOffset = 0
+	self.visualBounceVelocity = 0
+	self.boostWheelieTimer = 0
+	self.boostWheelieReturnTimer = 0
+	self.boostWheelieReturnStartPitch = 0
+	self:resetBodySpring()
+end
+
 function CabVisual:updateBodySpring(bufferedPivot, previousPosition, dt)
+	if not getBooleanConfigForCab(self.cab, "carVisualBodySpringEnabled", true) then
+		self:resetBodySpring()
+		return
+	end
+
 	local maxPitch = math.rad(math.max(getNumberConfig("carBodySpringPitchDegrees", 0), 0))
 	local maxRoll = math.rad(math.max(getNumberConfig("carBodySpringRollDegrees", 0), 0))
 	local maxYaw = math.rad(math.max(getNumberConfig("carBodySpringYawDegrees", 0), 0))
@@ -592,6 +871,13 @@ function CabVisual:updateBodySpring(bufferedPivot, previousPosition, dt)
 end
 
 function CabVisual:updateLean(bufferedPivot, previousPosition, dt)
+	if not getBooleanConfigForCab(self.cab, "carVisualLeanEnabled", true) then
+		self.visualDriveRoll = 0
+		self.visualDriftRoll = 0
+		self.previousYaw = vectorToYaw(bufferedPivot.LookVector)
+		return
+	end
+
 	local currentYaw = vectorToYaw(bufferedPivot.LookVector)
 	local yawRate = 0
 	if self.previousYaw and dt > 0 then
@@ -637,6 +923,11 @@ function CabVisual:updateLean(bufferedPivot, previousPosition, dt)
 end
 
 function CabVisual:updatePolish(bufferedPivot, previousPosition, dt)
+	if not getBooleanConfigForCab(self.cab, "carVisualPolishEnabled", true) then
+		self:resetPolish()
+		return
+	end
+
 	self:updatePulses()
 	self:updateBodySpring(bufferedPivot, previousPosition, dt)
 	self:updateLean(bufferedPivot, previousPosition, dt)
@@ -644,18 +935,87 @@ function CabVisual:updatePolish(bufferedPivot, previousPosition, dt)
 	self:updateLandingBounce(dt)
 end
 
-function CabVisual:getPolishedCFrame(bufferedPivot)
+function CabVisual:getBaseVisualCFrame(bufferedPivot)
+	return CFrame.new(self.smoothedPosition) * getCFrameRotation(bufferedPivot)
+end
+
+function CabVisual:getWholeCarDynamicLocalCFrame()
 	local wheeliePivotOffset = Vector3.new(0, -getNumberConfig("carRideHeight", 2.3), -5.6)
-	local wheeliePivot = CFrame.new(wheeliePivotOffset)
+	return CFrame.new(wheeliePivotOffset)
 		* CFrame.Angles(self.visualBoostPitch, 0, 0)
 		* CFrame.new(wheeliePivotOffset * -1)
+end
+
+function CabVisual:getBodyDynamicLocalCFrame()
 	local dynamicRoll = self.visualDriveRoll + self.visualDriftRoll
 
-	return CFrame.new(self.smoothedPosition + Vector3.new(0, self.visualBounceOffset, 0))
-		* getCFrameRotation(bufferedPivot)
+	return CFrame.new(0, self.visualBounceOffset, 0)
 		* CFrame.Angles(self.bodySpringPitch, self.bodySpringYaw, self.bodySpringRoll)
 		* CFrame.Angles(0, 0, dynamicRoll)
-		* wheeliePivot
+end
+
+function CabVisual:getPolishedCFrame(bufferedPivot)
+	return self:getBaseVisualCFrame(bufferedPivot)
+		* self:getBodyDynamicLocalCFrame()
+		* self:getWholeCarDynamicLocalCFrame()
+end
+
+function CabVisual:updateWheelTravel(bufferedPivot, previousPosition, snapped)
+	if not getBooleanConfigForCab(self.cab, "carVisualWheelRotationEnabled", true) then
+		self.wheelTravelStuds = 0
+		return
+	end
+
+	if snapped then
+		return
+	end
+
+	local delta = self.smoothedPosition - previousPosition
+	local horizontalDelta = Vector3.new(delta.X, 0, delta.Z)
+	if horizontalDelta.Magnitude <= 0.001 then
+		return
+	end
+
+	local forward = flattenUnit(bufferedPivot.LookVector)
+	if not forward then
+		return
+	end
+
+	self.wheelTravelStuds += horizontalDelta:Dot(forward)
+end
+
+function CabVisual:applyAssetRig()
+	local rig = self.assetRig
+	if not rig then
+		return
+	end
+
+	local rootCFrame = self.baseVisualCFrame
+	if not rootCFrame then
+		return
+	end
+
+	if rig.bodyNode and rig.bodyNode.Parent then
+		setNodePivot(
+			rig.bodyNode,
+			rootCFrame * rig.bodyBaseLocalPivot * self:getBodyDynamicLocalCFrame()
+		)
+	end
+
+	for _, wheel in ipairs(rig.wheels) do
+		if wheel.node.Parent then
+			local wheelSpin = 0
+			if getBooleanConfigForCab(self.cab, "carVisualWheelRotationEnabled", true) then
+				wheelSpin = (self.wheelTravelStuds / wheel.radius) * rig.wheelSpinDirection
+			end
+			setNodePivot(
+				wheel.node,
+				rootCFrame
+					* wheel.baseLocalPivot
+					* CFrame.fromAxisAngle(rig.wheelSpinAxis, wheelSpin)
+			)
+		end
+	end
 end
 
 function CabVisual:update(rawPivot, dt)
@@ -702,10 +1062,20 @@ function CabVisual:update(rawPivot, dt)
 	end
 
 	self:updatePolish(bufferedPivot, previousPosition, dt)
-	self.visualCFrame = self:getPolishedCFrame(bufferedPivot)
+	self:updateWheelTravel(bufferedPivot, previousPosition, snapped)
+	local baseVisualCFrame = self:getBaseVisualCFrame(bufferedPivot)
+	self.baseVisualCFrame = baseVisualCFrame * self:getWholeCarDynamicLocalCFrame()
+	self.visualCFrame = baseVisualCFrame
+		* self:getBodyDynamicLocalCFrame()
+		* self:getWholeCarDynamicLocalCFrame()
 
 	if self.visual then
-		self.visual:PivotTo(self.visualCFrame)
+		if self.assetRig then
+			self.visual:PivotTo(self.baseVisualCFrame)
+			self:applyAssetRig()
+		else
+			self.visual:PivotTo(self.visualCFrame)
+		end
 		self:mirrorEffects()
 	end
 
