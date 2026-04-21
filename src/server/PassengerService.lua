@@ -3,25 +3,13 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local PassengerVisuals = require(script.Parent:WaitForChild("PassengerVisuals"))
 
 local PassengerService = {}
 
 local ROAD_SPLINE_DATA_NAME = "AuthoredRoadSplineData"
 local ROAD_SPLINES_NAME = "Splines"
 local ROAD_POINTS_NAME = "RoadPoints"
-local PASSENGER_BASE_TRANSPARENCY_ATTR = "Cab87BaseTransparency"
-local PASSENGER_BASE_HEIGHT = 4.1
-local PASSENGER_BASE_LEG_HEIGHT = 1.55
-local PASSENGER_BASE_TORSO_Y = 2.1
-local PASSENGER_BASE_RUN_BOB_HEIGHT = 0.16
-local PASSENGER_COLORS = {
-	Color3.fromRGB(49, 151, 255),
-	Color3.fromRGB(255, 122, 65),
-	Color3.fromRGB(181, 92, 255),
-	Color3.fromRGB(70, 210, 135),
-	Color3.fromRGB(255, 216, 84),
-	Color3.fromRGB(245, 82, 117),
-}
 
 local function getConfigNumber(key, fallback)
 	local value = Config[key]
@@ -39,20 +27,6 @@ local function getConfigString(key, fallback)
 	end
 
 	return fallback
-end
-
-local function getConfigColor(key, fallback)
-	local value = Config[key]
-	if typeof(value) == "Color3" then
-		return value
-	end
-
-	return fallback
-end
-
-local function getPassengerModelScale()
-	local height = math.max(getConfigNumber("passengerModelHeight", 5.5), 0.1)
-	return height / PASSENGER_BASE_HEIGHT
 end
 
 local function horizontalDistance(a, b)
@@ -95,59 +69,6 @@ local function sortedChildren(parent, className)
 	end)
 
 	return children
-end
-
-local function setPartRuntimeDefaults(part)
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanTouch = false
-	part.CanQuery = false
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
-end
-
-local function makePart(parent, props)
-	local part = Instance.new("Part")
-	setPartRuntimeDefaults(part)
-	for key, value in pairs(props) do
-		part[key] = value
-	end
-	part.Parent = parent
-	return part
-end
-
-local function setModelVisible(model, visible)
-	if not model then
-		return
-	end
-
-	for _, item in ipairs(model:GetDescendants()) do
-		if item:IsA("BasePart") then
-			local baseTransparency = item:GetAttribute(PASSENGER_BASE_TRANSPARENCY_ATTR)
-			if type(baseTransparency) ~= "number" then
-				baseTransparency = item.Transparency
-				item:SetAttribute(PASSENGER_BASE_TRANSPARENCY_ATTR, baseTransparency)
-			end
-
-			item.Transparency = if visible then baseTransparency else 1
-		elseif item:IsA("BillboardGui") or item:IsA("SurfaceGui") then
-			item.Enabled = visible
-		end
-	end
-
-	model:SetAttribute("Visible", visible)
-end
-
-local function recreateFolder(parent, name)
-	local oldFolder = parent:FindFirstChild(name)
-	if oldFolder then
-		oldFolder:Destroy()
-	end
-
-	local folder = Instance.new("Folder")
-	folder.Name = name
-	folder.Parent = parent
-	return folder
 end
 
 local function addCandidate(candidates, position, minSeparation)
@@ -303,22 +224,9 @@ local function shuffle(values, rng)
 	end
 end
 
-local function createStopPart(parent, id, position)
-	local part = makePart(parent, {
-		Name = string.format("PassengerStop_%03d", id),
-		Size = Vector3.new(2, 0.2, 2),
-		Position = position,
-		Transparency = 1,
-		Color = Color3.fromRGB(255, 255, 255),
-	})
-	part:SetAttribute("PassengerStopId", id)
-	part:SetAttribute("GeneratedBy", "Cab87PassengerService")
-	return part
-end
-
 local function createPassengerStops(world, driveSurfaces, spawnPose, rng)
 	local folderName = getConfigString("passengerStopFolderName", "PassengerStops")
-	local folder = recreateFolder(world, folderName)
+	local folder = PassengerVisuals.recreateFolder(world, folderName)
 	local minSeparation = math.max(getConfigNumber("passengerStopMinSeparation", 80), 1)
 	local maxStops = math.max(2, math.floor(getConfigNumber("passengerMaxStops", 36)))
 	local candidates = collectAuthoredRoadCandidates(world, minSeparation)
@@ -338,7 +246,7 @@ local function createPassengerStops(world, driveSurfaces, spawnPose, rng)
 		table.insert(stops, {
 			id = i,
 			position = position,
-			instance = createStopPart(folder, i, position),
+			instance = PassengerVisuals.createStop(folder, i, position),
 		})
 	end
 
@@ -346,140 +254,13 @@ local function createPassengerStops(world, driveSurfaces, spawnPose, rng)
 	return stops, folder
 end
 
-local function createCircleMarker(parent, name, position, radius, color)
-	local marker = Instance.new("Model")
-	marker.Name = name
-	marker:SetAttribute("Radius", radius)
-	marker:SetAttribute("GeneratedBy", "Cab87PassengerService")
-	marker.Parent = parent
-
-	local segments = math.max(12, math.floor(getConfigNumber("passengerMarkerSegments", 28)))
-	local thickness = math.max(getConfigNumber("passengerMarkerThickness", 0.35), 0.05)
-	local transparency = math.clamp(getConfigNumber("passengerMarkerTransparency", 0.12), 0, 1)
-	local heightOffset = getConfigNumber("passengerMarkerHeightOffset", 0.25)
-	local segmentLength = (2 * math.pi * radius / segments) * 0.92
-	local y = position.Y + heightOffset
-
-	for i = 1, segments do
-		local angle = ((i - 1) / segments) * math.pi * 2
-		local radial = Vector3.new(math.cos(angle), 0, math.sin(angle))
-		local tangent = Vector3.new(-math.sin(angle), 0, math.cos(angle))
-		local segmentPosition = Vector3.new(position.X, y, position.Z) + radial * radius
-		local segment = makePart(marker, {
-			Name = string.format("Segment_%02d", i),
-			Size = Vector3.new(thickness, 0.12, segmentLength),
-			CFrame = CFrame.lookAt(segmentPosition, segmentPosition + tangent),
-			Color = color,
-			Material = Enum.Material.Neon,
-			Transparency = transparency,
-		})
-		segment:SetAttribute(PASSENGER_BASE_TRANSPARENCY_ATTR, transparency)
-	end
-
-	return marker
-end
-
 local function getSurfacePosition(service, position, fallbackY)
 	return getSurfacePositionFromParams(service.surfaceRaycastParams, position, fallbackY)
 end
 
-local function createPassengerModel(parent, passengerId, position, rng)
-	local model = Instance.new("Model")
-	model.Name = string.format("Passenger_%03d", passengerId)
-	model:SetAttribute("PassengerId", passengerId)
-	model:SetAttribute("GeneratedBy", "Cab87PassengerService")
-	model.Parent = parent
-
-	local shirtColor = PASSENGER_COLORS[((passengerId - 1) % #PASSENGER_COLORS) + 1]
-	local pantsColor = Color3.fromRGB(
-		rng:NextInteger(35, 80),
-		rng:NextInteger(40, 90),
-		rng:NextInteger(45, 100)
-	)
-	local scale = getPassengerModelScale()
-	local torsoY = PASSENGER_BASE_TORSO_Y * scale
-	local runBobHeight = PASSENGER_BASE_RUN_BOB_HEIGHT * scale
-	local legHalfHeight = PASSENGER_BASE_LEG_HEIGHT * scale * 0.5
-	local groundLift = PASSENGER_BASE_LEG_HEIGHT
-		* scale
-		* math.clamp(getConfigNumber("passengerGroundLiftLegFraction", 0.5), -0.5, 1.5)
-
-	model:SetAttribute("PassengerHeight", PASSENGER_BASE_HEIGHT * scale)
-	model:SetAttribute("PassengerGroundLift", groundLift)
-	model:SetAttribute("PassengerScale", scale)
-
-	local torso = makePart(model, {
-		Name = "Torso",
-		Size = Vector3.new(1.7, 2.2, 0.85) * scale,
-		Position = position + Vector3.new(0, torsoY, 0),
-		Color = shirtColor,
-		Material = Enum.Material.SmoothPlastic,
-	})
-	makePart(model, {
-		Name = "Head",
-		Shape = Enum.PartType.Ball,
-		Size = Vector3.new(1.1, 1.1, 1.1) * scale,
-		Position = position + Vector3.new(0, 3.55, 0) * scale,
-		Color = Color3.fromRGB(232, 184, 142),
-		Material = Enum.Material.SmoothPlastic,
-	})
-	makePart(model, {
-		Name = "LeftLeg",
-		Size = Vector3.new(0.65, PASSENGER_BASE_LEG_HEIGHT, 0.65) * scale,
-		Position = position + Vector3.new(-0.42 * scale, legHalfHeight, 0),
-		Color = pantsColor,
-		Material = Enum.Material.SmoothPlastic,
-	})
-	makePart(model, {
-		Name = "RightLeg",
-		Size = Vector3.new(0.65, PASSENGER_BASE_LEG_HEIGHT, 0.65) * scale,
-		Position = position + Vector3.new(0.42 * scale, legHalfHeight, 0),
-		Color = pantsColor,
-		Material = Enum.Material.SmoothPlastic,
-	})
-	makePart(model, {
-		Name = "LeftArm",
-		Size = Vector3.new(0.45, 1.75, 0.45) * scale,
-		Position = position + Vector3.new(-1.08, 2.05, 0) * scale,
-		Color = shirtColor,
-		Material = Enum.Material.SmoothPlastic,
-	})
-	makePart(model, {
-		Name = "RightArm",
-		Size = Vector3.new(0.45, 1.75, 0.45) * scale,
-		Position = position + Vector3.new(1.08, 2.05, 0) * scale,
-		Color = shirtColor,
-		Material = Enum.Material.SmoothPlastic,
-	})
-
-	model.PrimaryPart = torso
-	return model, torsoY, runBobHeight, groundLift
-end
-
 local function setPassengerGroundPose(passenger, groundPosition, lookAt, moving, pose)
-	local runBobHeight = passenger.runBobHeight or PASSENGER_BASE_RUN_BOB_HEIGHT
-	local runBob = if moving then math.abs(math.sin(passenger.runPhase or 0)) * runBobHeight else 0
-	local heightOffset = (pose and pose.heightOffset) or 0
-	local torsoY = passenger.torsoY or PASSENGER_BASE_TORSO_Y
-	local groundLift = passenger.groundLift or 0
-	local torsoPosition = groundPosition + Vector3.new(0, groundLift + torsoY + runBob + heightOffset, 0)
-	local lookDirection = lookAt and Vector3.new(lookAt.X - groundPosition.X, 0, lookAt.Z - groundPosition.Z) or Vector3.zero
-	local pivot
-
-	if lookDirection.Magnitude > 0.001 then
-		pivot = CFrame.lookAt(torsoPosition, torsoPosition + lookDirection.Unit)
-	else
-		pivot = CFrame.new(torsoPosition)
-	end
-
-	local pitchRadians = (pose and pose.pitchRadians) or 0
-	local rollRadians = (pose and pose.rollRadians) or 0
-	if math.abs(pitchRadians) > 0.001 or math.abs(rollRadians) > 0.001 then
-		pivot *= CFrame.Angles(pitchRadians, 0, rollRadians)
-	end
-
 	passenger.position = groundPosition
-	passenger.model:PivotTo(pivot)
+	PassengerVisuals.setPose(passenger.visual, groundPosition, lookAt, moving, passenger.runPhase, pose)
 end
 
 local function moveTowards(current, target, maxDistance)
@@ -606,8 +387,7 @@ local function startPassengerDive(service, passenger, threat)
 		passenger.diveReturnDelay = math.max(getConfigNumber("passengerDiveReturnDelay", 0.55), 0)
 	end
 
-	passenger.model:SetAttribute("Diving", true)
-	passenger.model:SetAttribute("DiveTarget", targetPosition)
+	PassengerVisuals.setDiving(passenger.visual, true, targetPosition)
 end
 
 local function tryStartPassengerDive(service, passenger, cabPosition, cabDirection, cabSpeed)
@@ -649,7 +429,7 @@ local function updatePassengerDive(passenger, dt)
 
 	if alpha >= 1 then
 		passenger.dive = nil
-		passenger.model:SetAttribute("Diving", false)
+		PassengerVisuals.setDiving(passenger.visual, false)
 	end
 
 	return true
@@ -663,9 +443,7 @@ end
 local function clearPassengerDive(passenger)
 	passenger.dive = nil
 	passenger.diveReturnDelay = 0
-	if passenger.model then
-		passenger.model:SetAttribute("Diving", false)
-	end
+	PassengerVisuals.setDiving(passenger.visual, false)
 end
 
 local function isCabClearOfPosition(cabPosition, position)
@@ -675,7 +453,7 @@ end
 local function setPickupMarkersVisible(service, visible)
 	for _, passenger in ipairs(service.passengers) do
 		if passenger.status == "waiting" then
-			setModelVisible(passenger.pickupMarker, visible)
+			PassengerVisuals.setPickupVisible(passenger.visual, visible)
 		end
 	end
 end
@@ -783,35 +561,19 @@ local function spawnWaitingPassenger(service)
 		runPhase = 0,
 		position = pickupStop.position,
 	}
-	passenger.model, passenger.torsoY, passenger.runBobHeight, passenger.groundLift =
-		createPassengerModel(service.passengerFolder, passengerId, pickupStop.position, service.rng)
-
-	passenger.pickupMarker = createCircleMarker(
-		service.markerFolder,
-		string.format("PickupCircle_%03d", passengerId),
+	passenger.visual = PassengerVisuals.createPassenger(
+		service.passengerFolder,
+		passengerId,
 		pickupStop.position,
-		pickupRadius,
-		getConfigColor("passengerPickupColor", Color3.fromRGB(70, 255, 120))
+		service.rng
 	)
-	passenger.deliveryMarker = createCircleMarker(
-		service.markerFolder,
-		string.format("DeliveryCircle_%03d", passengerId),
-		targetStop.position,
-		deliveryRadius,
-		getConfigColor("passengerDeliveryColor", Color3.fromRGB(255, 70, 55))
-	)
-
-	passenger.model:SetAttribute("PickupStopId", pickupStop.id)
-	passenger.model:SetAttribute("TargetStopId", targetStop.id)
-	passenger.model:SetAttribute("Diving", false)
-	passenger.pickupMarker:SetAttribute("PassengerId", passengerId)
-	passenger.pickupMarker:SetAttribute("PickupStopId", pickupStop.id)
-	passenger.deliveryMarker:SetAttribute("PassengerId", passengerId)
-	passenger.deliveryMarker:SetAttribute("TargetStopId", targetStop.id)
+	PassengerVisuals.setPassengerStops(passenger.visual, pickupStop.id, targetStop.id)
+	PassengerVisuals.createPickupMarker(passenger.visual, service.markerFolder, passengerId, pickupStop, pickupRadius)
+	PassengerVisuals.createDeliveryMarker(passenger.visual, service.markerFolder, passengerId, targetStop, deliveryRadius)
 
 	setPassengerGroundPose(passenger, pickupStop.position, targetStop.position, false)
-	setModelVisible(passenger.deliveryMarker, false)
-	setModelVisible(passenger.pickupMarker, service.mode == "pickup")
+	PassengerVisuals.setDeliveryVisible(passenger.visual, false)
+	PassengerVisuals.setPickupVisible(passenger.visual, service.mode == "pickup")
 	table.insert(service.passengers, passenger)
 	return passenger
 end
@@ -841,19 +603,8 @@ local function setGpsDestination(service, destination)
 	end
 end
 
-local function destroyPassengerMarker(marker)
-	if marker and marker.Parent then
-		marker:Destroy()
-	end
-end
-
 local function destroyPassenger(passenger)
-	if passenger.model and passenger.model.Parent then
-		passenger.model:Destroy()
-	end
-
-	destroyPassengerMarker(passenger.pickupMarker)
-	destroyPassengerMarker(passenger.deliveryMarker)
+	PassengerVisuals.destroyPassenger(passenger.visual)
 end
 
 local function removeWaitingPassengersNearStop(service, stop)
@@ -885,8 +636,8 @@ local function startBoarding(service, passenger)
 	clearPassengerDive(passenger)
 	clearGpsDestination(service)
 	setPickupMarkersVisible(service, false)
-	setModelVisible(passenger.pickupMarker, false)
-	setModelVisible(passenger.deliveryMarker, false)
+	PassengerVisuals.setPickupVisible(passenger.visual, false)
+	PassengerVisuals.setDeliveryVisible(passenger.visual, false)
 end
 
 local function completeBoarding(service, passenger)
@@ -898,8 +649,8 @@ local function completeBoarding(service, passenger)
 		service.fareService:beginFare(routeDistance)
 	end
 	removeWaitingPassengersNearStop(service, passenger.targetStop)
-	setModelVisible(passenger.model, false)
-	setModelVisible(passenger.deliveryMarker, true)
+	PassengerVisuals.setPassengerVisible(passenger.visual, false)
+	PassengerVisuals.setDeliveryVisible(passenger.visual, true)
 	setPickupMarkersVisible(service, false)
 	setGpsDestination(service, passenger.targetStop.position)
 	ensureWaitingPassengerCount(service)
@@ -926,11 +677,10 @@ local function completeDelivery(service)
 	passenger.runPhase = 0
 	passenger.position = getCabDoorPosition(service.car)
 	passenger.exitTarget = passenger.targetStop.position
-	passenger.model.Parent = service.passengerFolder
+	PassengerVisuals.setParent(passenger.visual, service.passengerFolder)
 	setPassengerGroundPose(passenger, passenger.position, passenger.exitTarget, false)
-	setModelVisible(passenger.model, true)
-	destroyPassengerMarker(passenger.pickupMarker)
-	destroyPassengerMarker(passenger.deliveryMarker)
+	PassengerVisuals.setPassengerVisible(passenger.visual, true)
+	PassengerVisuals.destroyMarkers(passenger.visual)
 	ensureWaitingPassengerCount(service)
 	setPickupMarkersVisible(service, true)
 end
@@ -960,9 +710,7 @@ local function failActiveDelivery(service)
 end
 
 local function finishExiting(service, passenger)
-	if passenger.model and passenger.model.Parent then
-		passenger.model:Destroy()
-	end
+	PassengerVisuals.destroyPassenger(passenger.visual)
 
 	for i = #service.passengers, 1, -1 do
 		if service.passengers[i] == passenger then
@@ -1244,8 +992,8 @@ function PassengerService.start(options)
 	}
 
 	service.stopFolder = nil
-	service.passengerFolder = recreateFolder(world, getConfigString("passengerFolderName", "Passengers"))
-	service.markerFolder = recreateFolder(world, getConfigString("passengerMarkersFolderName", "PassengerMarkers"))
+	service.passengerFolder = PassengerVisuals.recreateFolder(world, getConfigString("passengerFolderName", "Passengers"))
+	service.markerFolder = PassengerVisuals.recreateFolder(world, getConfigString("passengerMarkersFolderName", "PassengerMarkers"))
 	service.stops, service.stopFolder = createPassengerStops(world, options.driveSurfaces, options.spawnPose, service.rng)
 	service.surfaceRaycastParams = createSurfaceRaycastParams(options.driveSurfaces)
 	service.world:SetAttribute("PassengerStopCount", #service.stops)
