@@ -24,6 +24,8 @@ These decisions are also repeated inside the relevant milestone sections so futu
 
 Goal: make a playable taxi shift with time pressure, fares, scoring, and clear HUD feedback.
 
+GitHub milestone: [Milestone 1: Core Shift Loop](https://github.com/Obsolete-Robot/cab87-roblox/milestone/1)
+
 Design decisions for this milestone:
 
 - Shift money is a per-shift gross value and is separate from persistent bank money.
@@ -31,36 +33,36 @@ Design decisions for this milestone:
 - Failed fares do not cost money; they only lose the unpaid potential payout.
 - Crash damage resets per passenger/fare when the passenger exits or the fare fails.
 
-- [ ] Add a server-authoritative shift state machine.
+- [ ] [#1 Add a server-authoritative shift state machine](https://github.com/Obsolete-Robot/cab87-roblox/issues/1).
   - [ ] Support configurable shift length, starting at 3 minutes.
   - [ ] Broadcast shift start, remaining time, overtime/end, and inter-shift states to clients.
   - [ ] Keep taxi driving available outside active shifts.
   - [ ] Store per-player shift totals separately from persistent bank money.
-- [ ] Implement fare pricing.
+- [ ] [#2 Implement fare pricing](https://github.com/Obsolete-Robot/cab87-roblox/issues/2).
   - [ ] Calculate base fare from pickup-to-dropoff distance.
   - [ ] Add time-based bonuses or penalties.
   - [ ] Add delivery speed bonus rules that reward fast but readable driving.
   - [ ] Add minimum fare and max payout caps in config.
   - [ ] Surface fare estimate, active fare value, and final payout in the HUD.
-- [ ] Implement passenger fare lifecycle.
+- [ ] [#3 Implement passenger fare lifecycle](https://github.com/Obsolete-Robot/cab87-roblox/issues/3).
   - [ ] Pick up passenger.
   - [ ] Assign destination.
   - [ ] Track active route and delivery progress.
   - [ ] Complete fare and award money.
   - [ ] Expire or fail fare when shift ends, losing only the unpaid potential payout.
-- [ ] Add crash and damage tracking during active fares.
+- [ ] [#4 Add crash and damage tracking during active fares](https://github.com/Obsolete-Robot/cab87-roblox/issues/4).
   - [ ] Track collision count and collision severity while a passenger is in the cab.
   - [ ] Convert crash damage into fare penalties.
   - [ ] Show active fare damage in the HUD.
   - [ ] Reset fare damage cleanly when the passenger exits or the fare fails.
   - [ ] Add config tuning for damage thresholds, penalty scaling, and forgiveness windows.
-- [ ] Add end-of-shift payout UI.
+- [ ] [#5 Add end-of-shift payout UI](https://github.com/Obsolete-Robot/cab87-roblox/issues/5).
   - [ ] Animate the shift gross earnings tally.
   - [ ] Show fare totals, bonuses, and damage penalties.
   - [ ] Show the cab company medallion fee deduction.
   - [ ] Deposit net earnings into the player's persistent bank.
   - [ ] Keep shift money and bank money visually distinct.
-- [ ] Update HUD for core loop.
+- [ ] [#6 Update HUD for core loop](https://github.com/Obsolete-Robot/cab87-roblox/issues/6).
   - [ ] Shift timer.
   - [ ] Current shift money.
   - [ ] Active fare payout.
