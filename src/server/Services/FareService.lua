@@ -11,15 +11,31 @@ local function roundNumber(value)
 	return math.floor((value or 0) + 0.5)
 end
 
+local function getOwnerUserId(owner)
+	if typeof(owner) == "Instance" and owner:IsA("Player") then
+		return owner.UserId
+	end
+
+	if type(owner) == "number" and owner == owner and owner > 0 then
+		return math.floor(owner)
+	end
+
+	return nil
+end
+
 function FareService.new(options)
 	options = options or {}
+	local ownerUserId = getOwnerUserId(options.ownerPlayer) or getOwnerUserId(options.ownerUserId)
+
 	return setmetatable({
 		config = options.config or {},
 		car = options.car,
 		shiftService = options.shiftService,
+		ownerUserId = ownerUserId,
 		activeFare = nil,
 		lastDamageEvent = nil,
 		lastResult = {
+			ownerUserId = ownerUserId,
 			status = "idle",
 			estimatedPayout = 0,
 			activeValue = 0,
@@ -36,7 +52,29 @@ function FareService.new(options)
 	}, FareService)
 end
 
+function FareService:setOwnerPlayer(player)
+	self.ownerUserId = getOwnerUserId(player)
+end
+
+function FareService:_getOwnerPlayer(ownerUserId)
+	local userId = ownerUserId
+	if userId == nil then
+		userId = self.ownerUserId
+	end
+
+	if type(userId) == "number" and userId > 0 then
+		return Players:GetPlayerByUserId(userId)
+	end
+
+	return nil
+end
+
 function FareService:_getDriverPlayer()
+	local ownerPlayer = self:_getOwnerPlayer()
+	if ownerPlayer then
+		return ownerPlayer
+	end
+
 	if not self.car then
 		return nil
 	end
@@ -158,7 +196,10 @@ function FareService:_setLastResult(result)
 	self.lastResult = result
 end
 
-function FareService:beginFare(routeDistance)
+function FareService:beginFare(routeDistance, ownerPlayer)
+	local ownerUserId = getOwnerUserId(ownerPlayer)
+	self.ownerUserId = ownerUserId
+
 	local estimate = FareRules.buildEstimate(self.config, routeDistance)
 	self.activeFare = {
 		routeDistance = routeDistance,
@@ -166,11 +207,13 @@ function FareService:beginFare(routeDistance)
 		estimatedPayout = estimate.estimatedPayout,
 		damage = self:_emptyDamageSnapshot(),
 		lastDamageAt = nil,
+		ownerUserId = ownerUserId,
 	}
 	self.lastDamageEvent = nil
 	self:_writeDamageAttributes(self.activeFare.damage)
 	self:_setLastResult({
 		status = "active",
+		ownerUserId = ownerUserId,
 		estimatedPayout = estimate.estimatedPayout,
 		activeValue = estimate.estimatedPayout,
 		payout = 0,
@@ -194,6 +237,7 @@ function FareService:getActiveSnapshot()
 
 	return {
 		status = "active",
+		ownerUserId = self.activeFare.ownerUserId,
 		estimatedPayout = self.activeFare.estimatedPayout,
 		activeValue = math.max(self.activeFare.estimatedPayout - roundNumber(self.activeFare.damage.points), 0),
 		payout = 0,
@@ -217,7 +261,14 @@ function FareService:completeFare()
 	local damageInput = self.activeFare.damage and self.activeFare.damage.points or 0
 	local result = FareRules.finalizeFare(self.config, self.activeFare.routeDistance, elapsed, damageInput)
 	local payout = result.finalPayout
-	local player = self:_getDriverPlayer()
+	local ownerUserId = self.activeFare.ownerUserId
+	local player = nil
+	if ownerUserId then
+		player = self:_getOwnerPlayer(ownerUserId)
+	end
+	if not player then
+		player = self:_getDriverPlayer()
+	end
 
 	if self.shiftService and player and self.shiftService.addShiftMoney then
 		self.shiftService:addShiftMoney(player, payout, {
@@ -232,6 +283,7 @@ function FareService:completeFare()
 	self:_writeDamageAttributes(self:_emptyDamageSnapshot())
 	self:_setLastResult({
 		status = "completed",
+		ownerUserId = ownerUserId,
 		estimatedPayout = result.estimatedPayout,
 		activeValue = result.estimatedPayout,
 		payout = payout,
@@ -255,11 +307,13 @@ function FareService:failFare()
 
 	local elapsed = math.max(Workspace:GetServerTimeNow() - self.activeFare.startedAt, 0)
 	local routeDistance = self.activeFare.routeDistance
+	local ownerUserId = self.activeFare.ownerUserId
 	self.activeFare = nil
 	self.lastDamageEvent = nil
 	self:_writeDamageAttributes(self:_emptyDamageSnapshot())
 	self:_setLastResult({
 		status = "failed",
+		ownerUserId = ownerUserId,
 		estimatedPayout = 0,
 		activeValue = 0,
 		payout = 0,

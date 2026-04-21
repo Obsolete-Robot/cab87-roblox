@@ -1,3 +1,4 @@
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -333,6 +334,20 @@ local function getCabDoorPosition(car)
 	local pivot = car:GetPivot()
 	local rideHeight = getConfigNumber("carRideHeight", 2.3)
 	return pivot:PointToWorldSpace(Vector3.new(-6.3, -rideHeight + 0.15, 0.8))
+end
+
+local function getCabOwnerPlayer(car)
+	if not car then
+		return nil
+	end
+
+	local seat = car:FindFirstChild("DriverSeat")
+	if not (seat and seat:IsA("VehicleSeat")) then
+		return nil
+	end
+
+	local occupant = seat.Occupant
+	return occupant and Players:GetPlayerFromCharacter(occupant.Parent) or nil
 end
 
 local function getCabSpeed(car)
@@ -695,7 +710,7 @@ local function completeBoarding(service, passenger)
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
 	if service.fareService and service.fareService.beginFare then
 		local routeDistance = horizontalDistance(passenger.pickupStop.position, passenger.targetStop.position)
-		service.fareService:beginFare(routeDistance)
+		service.fareService:beginFare(routeDistance, getCabOwnerPlayer(service.car))
 	end
 	removeWaitingPassengersNearStop(service, passenger.targetStop)
 	PassengerVisuals.setPassengerVisible(passenger.visual, false)
