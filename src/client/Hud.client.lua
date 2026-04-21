@@ -414,6 +414,76 @@ fareCompleted.TextSize = 12
 fareCompleted.TextXAlignment = Enum.TextXAlignment.Left
 fareCompleted.Parent = farePanel
 
+local shiftPanel = Instance.new("Frame")
+shiftPanel.Name = "ShiftPanel"
+shiftPanel.AnchorPoint = Vector2.new(0, 1)
+shiftPanel.Position = UDim2.new(0, 18, 1, -266)
+shiftPanel.Size = UDim2.fromOffset(260, 78)
+shiftPanel.BackgroundColor3 = Color3.fromRGB(15, 17, 20)
+shiftPanel.BackgroundTransparency = 0.12
+shiftPanel.BorderSizePixel = 0
+shiftPanel.Visible = false
+shiftPanel.Parent = gui
+
+local shiftPanelCorner = Instance.new("UICorner")
+shiftPanelCorner.CornerRadius = UDim.new(0, 8)
+shiftPanelCorner.Parent = shiftPanel
+
+local shiftPanelStroke = Instance.new("UIStroke")
+shiftPanelStroke.Color = Color3.fromRGB(255, 206, 38)
+shiftPanelStroke.Transparency = 0.12
+shiftPanelStroke.Thickness = 2
+shiftPanelStroke.Parent = shiftPanel
+
+local shiftPhaseLabel = Instance.new("TextLabel")
+shiftPhaseLabel.Name = "Phase"
+shiftPhaseLabel.BackgroundTransparency = 1
+shiftPhaseLabel.Position = UDim2.fromOffset(14, 8)
+shiftPhaseLabel.Size = UDim2.new(1, -112, 0, 18)
+shiftPhaseLabel.Font = Enum.Font.GothamBold
+shiftPhaseLabel.Text = "SHIFT"
+shiftPhaseLabel.TextColor3 = Color3.fromRGB(255, 206, 38)
+shiftPhaseLabel.TextSize = 14
+shiftPhaseLabel.TextXAlignment = Enum.TextXAlignment.Left
+shiftPhaseLabel.Parent = shiftPanel
+
+local shiftTimerLabel = Instance.new("TextLabel")
+shiftTimerLabel.Name = "Timer"
+shiftTimerLabel.BackgroundTransparency = 1
+shiftTimerLabel.Position = UDim2.new(1, -92, 0, 8)
+shiftTimerLabel.Size = UDim2.fromOffset(78, 18)
+shiftTimerLabel.Font = Enum.Font.GothamBold
+shiftTimerLabel.Text = "00:00"
+shiftTimerLabel.TextColor3 = Color3.fromRGB(255, 206, 38)
+shiftTimerLabel.TextSize = 14
+shiftTimerLabel.TextXAlignment = Enum.TextXAlignment.Right
+shiftTimerLabel.Parent = shiftPanel
+
+local shiftMoneyLabel = Instance.new("TextLabel")
+shiftMoneyLabel.Name = "Money"
+shiftMoneyLabel.BackgroundTransparency = 1
+shiftMoneyLabel.Position = UDim2.fromOffset(14, 29)
+shiftMoneyLabel.Size = UDim2.new(1, -28, 0, 20)
+shiftMoneyLabel.Font = Enum.Font.GothamSemibold
+shiftMoneyLabel.Text = "Shift $0"
+shiftMoneyLabel.TextColor3 = Color3.fromRGB(245, 245, 245)
+shiftMoneyLabel.TextSize = 16
+shiftMoneyLabel.TextXAlignment = Enum.TextXAlignment.Left
+shiftMoneyLabel.Parent = shiftPanel
+
+local shiftDetailsLabel = Instance.new("TextLabel")
+shiftDetailsLabel.Name = "Details"
+shiftDetailsLabel.BackgroundTransparency = 1
+shiftDetailsLabel.Position = UDim2.fromOffset(14, 52)
+shiftDetailsLabel.Size = UDim2.new(1, -28, 0, 16)
+shiftDetailsLabel.Font = Enum.Font.GothamSemibold
+shiftDetailsLabel.Text = "Fare $0  •  Damage -$0  •  Fares 0"
+shiftDetailsLabel.TextColor3 = Color3.fromRGB(210, 213, 218)
+shiftDetailsLabel.TextSize = 12
+shiftDetailsLabel.TextXAlignment = Enum.TextXAlignment.Left
+shiftDetailsLabel.TextTruncate = Enum.TextTruncate.AtEnd
+shiftDetailsLabel.Parent = shiftPanel
+
 local displayedSpeed = 0
 local lastSpeedText = nil
 local lastSpeedCab = nil
@@ -422,6 +492,17 @@ local lastFareStatus = nil
 local lastFareDistance = nil
 local lastFareCompleted = nil
 local lastFareSummary = nil
+local lastShiftHeader = nil
+local lastShiftTimer = nil
+local lastShiftMoney = nil
+local lastShiftDetails = nil
+
+local function formatShiftClock(seconds)
+	local clamped = math.max(0, math.floor((seconds or 0) + 0.5))
+	local minutes = math.floor(clamped / 60)
+	local remainder = clamped % 60
+	return string.format("%02d:%02d", minutes, remainder)
+end
 
 local function getSpeedometerMaxSpeed()
 	return math.max(
@@ -478,6 +559,8 @@ local function updateFarePanel()
 	local fareActiveValue = getNumberAttribute(cab, Config.passengerFareActiveValueAttribute) or 0
 	local farePayout = getNumberAttribute(cab, Config.passengerFarePayoutAttribute) or 0
 	local fareResultStatus = getStringAttribute(cab, Config.passengerFareResultStatusAttribute) or "idle"
+	local fareDamageCollisions = getNumberAttribute(cab, Config.passengerFareDamageCollisionsAttribute) or 0
+	local fareDamagePoints = getNumberAttribute(cab, Config.passengerFareDamagePointsAttribute) or 0
 	local modeText = "PICKUP"
 	local modeColor = Config.passengerPickupColor
 
@@ -509,9 +592,17 @@ local function updateFarePanel()
 	local roundedEstimate = math.max(0, math.floor(fareEstimate + 0.5))
 	local roundedActiveValue = math.max(0, math.floor(fareActiveValue + 0.5))
 	local roundedPayout = math.max(0, math.floor(farePayout + 0.5))
+	local roundedDamageCollisions = math.max(0, math.floor(fareDamageCollisions + 0.5))
+	local roundedDamagePoints = math.max(0, math.floor(fareDamagePoints + 0.5))
 	local summary = string.format("FARES %d  •  EST $%d", roundedCompleted, roundedEstimate)
 	if mode == "delivery" then
-		summary = string.format("FARES %d  •  ACTIVE $%d", roundedCompleted, roundedActiveValue)
+		summary = string.format(
+			"FARES %d  •  ACTIVE $%d  •  DMG %d (%d)",
+			roundedCompleted,
+			roundedActiveValue,
+			roundedDamagePoints,
+			roundedDamageCollisions
+		)
 	end
 	if fareResultStatus == "completed" then
 		summary = string.format("FARES %d  •  LAST +$%d", roundedCompleted, roundedPayout)
@@ -530,9 +621,67 @@ local function updateFarePanel()
 	farePanelStroke.Color = modeColor
 end
 
+local function updateShiftPanel()
+	local phaseRaw = player:GetAttribute(Config.shiftPhaseAttribute)
+	local phase = type(phaseRaw) == "string" and phaseRaw or "Preparing"
+	local timeRemaining = player:GetAttribute(Config.shiftTimeRemainingAttribute)
+	local shiftMoney = player:GetAttribute(Config.shiftGrossMoneyAttribute)
+	local cab = getDrivenCab()
+
+	shiftPanel.Visible = type(phaseRaw) == "string" or cab ~= nil
+
+	local phaseText = string.upper(phase)
+	local phaseColor = Color3.fromRGB(255, 206, 38)
+	if phase == "Active" then
+		phaseColor = Color3.fromRGB(90, 220, 124)
+	elseif phase == "Ending" then
+		phaseColor = Color3.fromRGB(255, 152, 58)
+	elseif phase == "Intermission" then
+		phaseColor = Color3.fromRGB(110, 176, 255)
+	end
+
+	local timerText = formatShiftClock(type(timeRemaining) == "number" and timeRemaining or 0)
+	local moneyText = string.format("Shift $%d", math.max(0, math.floor((type(shiftMoney) == "number" and shiftMoney or 0) + 0.5)))
+
+	local activeFare = cab and (getNumberAttribute(cab, Config.passengerFareActiveValueAttribute) or 0) or 0
+	local damagePenalty = cab and (getNumberAttribute(cab, Config.passengerFareDamagePenaltyAttribute) or 0) or 0
+	local completedFares = cab and (getNumberAttribute(cab, Config.passengerFareCompletedAttribute) or 0) or 0
+	local destination = cab and (getStringAttribute(cab, Config.passengerDestinationAttribute) or "No destination")
+		or "No destination"
+	local detailsText = string.format(
+		"%s  •  Fare $%d  •  Damage -$%d  •  Fares %d",
+		destination,
+		math.max(0, math.floor(activeFare + 0.5)),
+		math.max(0, math.floor(damagePenalty + 0.5)),
+		math.max(0, math.floor(completedFares + 0.5))
+	)
+
+	if phaseText ~= lastShiftHeader then
+		shiftPhaseLabel.Text = phaseText
+		lastShiftHeader = phaseText
+	end
+	if timerText ~= lastShiftTimer then
+		shiftTimerLabel.Text = timerText
+		lastShiftTimer = timerText
+	end
+	if moneyText ~= lastShiftMoney then
+		shiftMoneyLabel.Text = moneyText
+		lastShiftMoney = moneyText
+	end
+	if detailsText ~= lastShiftDetails then
+		shiftDetailsLabel.Text = detailsText
+		lastShiftDetails = detailsText
+	end
+
+	shiftPhaseLabel.TextColor3 = phaseColor
+	shiftTimerLabel.TextColor3 = phaseColor
+	shiftPanelStroke.Color = phaseColor
+end
+
 RunService.RenderStepped:Connect(function(dt)
 	updateSpeedometer(dt)
 	updateFarePanel()
+	updateShiftPanel()
 end)
 
 local function isDebugPanelAvailable()

@@ -7,6 +7,10 @@ local FareRules = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild(
 local FareService = {}
 FareService.__index = FareService
 
+local function roundNumber(value)
+	return math.floor((value or 0) + 0.5)
+end
+
 function FareService.new(options)
 	options = options or {}
 	return setmetatable({
@@ -14,6 +18,7 @@ function FareService.new(options)
 		car = options.car,
 		shiftService = options.shiftService,
 		activeFare = nil,
+		lastDamageEvent = nil,
 		lastResult = {
 			status = "idle",
 			estimatedPayout = 0,
@@ -22,6 +27,9 @@ function FareService.new(options)
 			timeComponent = 0,
 			speedBonus = 0,
 			damagePenalty = 0,
+			damageCollisions = 0,
+			damageSeverity = 0,
+			damagePoints = 0,
 			durationSeconds = 0,
 			routeDistance = 0,
 		},
@@ -38,14 +46,99 @@ function FareService:_getDriverPlayer()
 	return humanoid and Players:GetPlayerFromCharacter(humanoid.Parent) or nil
 end
 
-function FareService:_getCurrentDamagePoints()
-	return math.max(self:_getNumberAttribute(self.config.carDamagePenaltyAttribute, 0), 0)
+function FareService:_getConfigNumber(name, fallback)
+	local value = self.config and self.config[name]
+	if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+		return value
+	end
+
+	return fallback
 end
 
-function FareService:_resetDamageForFare()
-	if self.car and type(self.config.carDamagePenaltyAttribute) == "string" and self.config.carDamagePenaltyAttribute ~= "" then
-		self.car:SetAttribute(self.config.carDamagePenaltyAttribute, 0)
+function FareService:_emptyDamageSnapshot()
+	return {
+		collisions = 0,
+		severity = 0,
+		points = 0,
+	}
+end
+
+function FareService:_writeDamageAttributes(snapshot)
+	if not self.car then
+		return
 	end
+
+	local countAttr = self.config.carDamageCollisionCountAttribute
+	local severityAttr = self.config.carDamageSeverityAttribute
+	local pointsAttr = self.config.carDamagePenaltyAttribute
+	if type(countAttr) == "string" and countAttr ~= "" then
+		self.car:SetAttribute(countAttr, snapshot.collisions)
+	end
+	if type(severityAttr) == "string" and severityAttr ~= "" then
+		self.car:SetAttribute(severityAttr, snapshot.severity)
+	end
+	if type(pointsAttr) == "string" and pointsAttr ~= "" then
+		self.car:SetAttribute(pointsAttr, snapshot.points)
+	end
+end
+
+function FareService:_setDamageSnapshot(snapshot)
+	if self.activeFare then
+		self.activeFare.damage = {
+			collisions = snapshot.collisions,
+			severity = snapshot.severity,
+			points = snapshot.points,
+		}
+	end
+
+	self:_writeDamageAttributes(snapshot)
+end
+
+function FareService:getActiveDamageSnapshot()
+	if self.activeFare and self.activeFare.damage then
+		return {
+			collisions = self.activeFare.damage.collisions,
+			severity = self.activeFare.damage.severity,
+			points = self.activeFare.damage.points,
+		}
+	end
+
+	return self:_emptyDamageSnapshot()
+end
+
+function FareService:recordDamage(eventKind, severity)
+	if not self.activeFare then
+		return nil
+	end
+
+	local safeSeverity = math.max(severity or 0, 0)
+	if safeSeverity <= 0 then
+		return self:getActiveDamageSnapshot()
+	end
+
+	local now = Workspace:GetServerTimeNow()
+	local forgivenessWindow = math.max(self:_getConfigNumber("carDamageForgivenessWindowSeconds", 0), 0)
+	if self.activeFare.lastDamageAt and now - self.activeFare.lastDamageAt < forgivenessWindow then
+		return self:getActiveDamageSnapshot()
+	end
+
+	local severityScale = math.max(self:_getConfigNumber("carDamageSeverityToPointsScale", 1), 0)
+	local nextSnapshot = self:getActiveDamageSnapshot()
+	nextSnapshot.collisions += 1
+	nextSnapshot.severity += safeSeverity
+	nextSnapshot.points += safeSeverity * severityScale
+
+	self.activeFare.lastDamageAt = now
+	self.lastDamageEvent = {
+		time = now,
+		kind = eventKind,
+		severity = safeSeverity,
+		collisions = nextSnapshot.collisions,
+		points = nextSnapshot.points,
+	}
+
+	self:_setDamageSnapshot(nextSnapshot)
+	return nextSnapshot
 end
 
 function FareService:_getNumberAttribute(name, fallback)
@@ -67,14 +160,15 @@ end
 
 function FareService:beginFare(routeDistance)
 	local estimate = FareRules.buildEstimate(self.config, routeDistance)
-	local startDamage = self:_getCurrentDamagePoints()
 	self.activeFare = {
 		routeDistance = routeDistance,
 		startedAt = Workspace:GetServerTimeNow(),
 		estimatedPayout = estimate.estimatedPayout,
-		startDamage = startDamage,
+		damage = self:_emptyDamageSnapshot(),
+		lastDamageAt = nil,
 	}
-	self:_resetDamageForFare()
+	self.lastDamageEvent = nil
+	self:_writeDamageAttributes(self.activeFare.damage)
 	self:_setLastResult({
 		status = "active",
 		estimatedPayout = estimate.estimatedPayout,
@@ -83,6 +177,9 @@ function FareService:beginFare(routeDistance)
 		timeComponent = 0,
 		speedBonus = 0,
 		damagePenalty = 0,
+		damageCollisions = 0,
+		damageSeverity = 0,
+		damagePoints = 0,
 		durationSeconds = 0,
 		routeDistance = routeDistance,
 	})
@@ -98,11 +195,14 @@ function FareService:getActiveSnapshot()
 	return {
 		status = "active",
 		estimatedPayout = self.activeFare.estimatedPayout,
-		activeValue = self.activeFare.estimatedPayout,
+		activeValue = math.max(self.activeFare.estimatedPayout - roundNumber(self.activeFare.damage.points), 0),
 		payout = 0,
 		timeComponent = 0,
 		speedBonus = 0,
-		damagePenalty = 0,
+		damagePenalty = roundNumber(self.activeFare.damage.points),
+		damageCollisions = roundNumber(self.activeFare.damage.collisions),
+		damageSeverity = self.activeFare.damage.severity,
+		damagePoints = self.activeFare.damage.points,
 		durationSeconds = math.max(Workspace:GetServerTimeNow() - self.activeFare.startedAt, 0),
 		routeDistance = self.activeFare.routeDistance,
 	}
@@ -114,8 +214,7 @@ function FareService:completeFare()
 	end
 
 	local elapsed = math.max(Workspace:GetServerTimeNow() - self.activeFare.startedAt, 0)
-	local currentDamage = self:_getCurrentDamagePoints()
-	local damageInput = math.max(currentDamage - (self.activeFare.startDamage or 0), 0)
+	local damageInput = self.activeFare.damage and self.activeFare.damage.points or 0
 	local result = FareRules.finalizeFare(self.config, self.activeFare.routeDistance, elapsed, damageInput)
 	local payout = result.finalPayout
 	local player = self:_getDriverPlayer()
@@ -124,8 +223,9 @@ function FareService:completeFare()
 		self.shiftService:addShiftMoney(player, payout)
 	end
 
+	local completedDamage = self.activeFare.damage or self:_emptyDamageSnapshot()
 	self.activeFare = nil
-	self:_resetDamageForFare()
+	self:_writeDamageAttributes(self:_emptyDamageSnapshot())
 	self:_setLastResult({
 		status = "completed",
 		estimatedPayout = result.estimatedPayout,
@@ -134,6 +234,9 @@ function FareService:completeFare()
 		timeComponent = result.timeComponent,
 		speedBonus = result.speedBonus,
 		damagePenalty = result.damagePenalty,
+		damageCollisions = roundNumber(completedDamage.collisions),
+		damageSeverity = completedDamage.severity,
+		damagePoints = completedDamage.points,
 		durationSeconds = result.elapsedSeconds,
 		routeDistance = result.routeDistance,
 	})
@@ -149,7 +252,8 @@ function FareService:failFare()
 	local elapsed = math.max(Workspace:GetServerTimeNow() - self.activeFare.startedAt, 0)
 	local routeDistance = self.activeFare.routeDistance
 	self.activeFare = nil
-	self:_resetDamageForFare()
+	self.lastDamageEvent = nil
+	self:_writeDamageAttributes(self:_emptyDamageSnapshot())
 	self:_setLastResult({
 		status = "failed",
 		estimatedPayout = 0,
@@ -158,6 +262,9 @@ function FareService:failFare()
 		timeComponent = 0,
 		speedBonus = 0,
 		damagePenalty = 0,
+		damageCollisions = 0,
+		damageSeverity = 0,
+		damagePoints = 0,
 		durationSeconds = elapsed,
 		routeDistance = routeDistance,
 	})

@@ -1033,6 +1033,9 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 	local fareTimeComponentAttr = getConfigString("passengerFareTimeComponentAttribute", "Cab87FareTimeComponent")
 	local fareSpeedBonusAttr = getConfigString("passengerFareSpeedBonusAttribute", "Cab87FareSpeedBonus")
 	local fareDamagePenaltyAttr = getConfigString("passengerFareDamagePenaltyAttribute", "Cab87FareDamagePenalty")
+	local fareDamageCollisionsAttr = getConfigString("passengerFareDamageCollisionsAttribute", "Cab87FareDamageCollisions")
+	local fareDamageSeverityAttr = getConfigString("passengerFareDamageSeverityAttribute", "Cab87FareDamageSeverity")
+	local fareDamagePointsAttr = getConfigString("passengerFareDamagePointsAttribute", "Cab87FareDamagePoints")
 	local fareResultStatusAttr = getConfigString("passengerFareResultStatusAttribute", "Cab87FareResultStatus")
 	local fareDurationAttr = getConfigString("passengerFareDurationAttribute", "Cab87FareDuration")
 	local fareRouteDistanceAttr = getConfigString("passengerFareRouteDistanceAttribute", "Cab87FareRouteDistance")
@@ -1095,6 +1098,9 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 		timeComponent = 0,
 		speedBonus = 0,
 		damagePenalty = 0,
+		damageCollisions = 0,
+		damageSeverity = 0,
+		damagePoints = 0,
 		durationSeconds = 0,
 		routeDistance = 0,
 	}
@@ -1105,6 +1111,9 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 	service.car:SetAttribute(fareTimeComponentAttr, math.floor((fareSnapshot.timeComponent or 0) + 0.5))
 	service.car:SetAttribute(fareSpeedBonusAttr, math.max(math.floor((fareSnapshot.speedBonus or 0) + 0.5), 0))
 	service.car:SetAttribute(fareDamagePenaltyAttr, math.max(math.floor((fareSnapshot.damagePenalty or 0) + 0.5), 0))
+	service.car:SetAttribute(fareDamageCollisionsAttr, math.max(math.floor((fareSnapshot.damageCollisions or 0) + 0.5), 0))
+	service.car:SetAttribute(fareDamageSeverityAttr, math.max(fareSnapshot.damageSeverity or 0, 0))
+	service.car:SetAttribute(fareDamagePointsAttr, math.max(fareSnapshot.damagePoints or 0, 0))
 	service.car:SetAttribute(fareResultStatusAttr, tostring(fareSnapshot.status or "idle"))
 	service.car:SetAttribute(fareDurationAttr, math.max(fareSnapshot.durationSeconds or 0, 0))
 	service.car:SetAttribute(fareRouteDistanceAttr, math.max(fareSnapshot.routeDistance or 0, 0))
