@@ -8,6 +8,7 @@ local AuthoredRoadRuntime = require(script.Parent:WaitForChild("AuthoredRoadRunt
 local GpsService = require(script.Parent:WaitForChild("GpsService"))
 local MapGenerator = require(script.Parent:WaitForChild("MapGenerator"))
 local PassengerService = require(script.Parent:WaitForChild("PassengerService"))
+local FareService = require(script.Parent:WaitForChild("Services"):WaitForChild("FareService"))
 
 local NORMAL_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(210, 210, 210))
 local BOOST_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(65, 185, 255))
@@ -1569,11 +1570,17 @@ local gpsService = GpsService.start({
 	car = car,
 	driveSurfaces = driveSurfaces,
 })
+local shiftService = startShiftService()
+local fareService = FareService.new({
+	config = Config,
+	car = car,
+	shiftService = shiftService,
+})
 PassengerService.start({
 	world = world,
 	car = car,
 	driveSurfaces = driveSurfaces,
 	spawnPose = spawnPose,
 	gpsService = gpsService,
+	fareService = fareService,
 })
-local shiftService = startShiftService()

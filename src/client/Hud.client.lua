@@ -421,6 +421,7 @@ local lastFareMode = nil
 local lastFareStatus = nil
 local lastFareDistance = nil
 local lastFareCompleted = nil
+local lastFareSummary = nil
 
 local function getSpeedometerMaxSpeed()
 	return math.max(
@@ -473,6 +474,10 @@ local function updateFarePanel()
 	local status = getStringAttribute(cab, Config.passengerFareStatusAttribute) or "Find a pickup"
 	local distance = getNumberAttribute(cab, Config.passengerFareDistanceAttribute) or 0
 	local completed = getNumberAttribute(cab, Config.passengerFareCompletedAttribute) or 0
+	local fareEstimate = getNumberAttribute(cab, Config.passengerFareEstimateAttribute) or 0
+	local fareActiveValue = getNumberAttribute(cab, Config.passengerFareActiveValueAttribute) or 0
+	local farePayout = getNumberAttribute(cab, Config.passengerFarePayoutAttribute) or 0
+	local fareResultStatus = getStringAttribute(cab, Config.passengerFareResultStatusAttribute) or "idle"
 	local modeText = "PICKUP"
 	local modeColor = Config.passengerPickupColor
 
@@ -501,8 +506,22 @@ local function updateFarePanel()
 	end
 
 	local roundedCompleted = math.max(0, math.floor(completed + 0.5))
-	if roundedCompleted ~= lastFareCompleted then
-		fareCompleted.Text = string.format("FARES %d", roundedCompleted)
+	local roundedEstimate = math.max(0, math.floor(fareEstimate + 0.5))
+	local roundedActiveValue = math.max(0, math.floor(fareActiveValue + 0.5))
+	local roundedPayout = math.max(0, math.floor(farePayout + 0.5))
+	local summary = string.format("FARES %d  •  EST $%d", roundedCompleted, roundedEstimate)
+	if mode == "delivery" then
+		summary = string.format("FARES %d  •  ACTIVE $%d", roundedCompleted, roundedActiveValue)
+	end
+	if fareResultStatus == "completed" then
+		summary = string.format("FARES %d  •  LAST +$%d", roundedCompleted, roundedPayout)
+	elseif fareResultStatus == "failed" then
+		summary = string.format("FARES %d  •  LAST FAILED", roundedCompleted)
+	end
+
+	if summary ~= lastFareSummary or roundedCompleted ~= lastFareCompleted then
+		fareCompleted.Text = summary
+		lastFareSummary = summary
 		lastFareCompleted = roundedCompleted
 	end
 
