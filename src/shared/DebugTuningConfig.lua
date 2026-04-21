@@ -86,6 +86,7 @@ local DebugTuningConfig = {
 		{ key = "carLandingBounceDamping", label = "Bounce Damping", min = 0, max = 50, step = 0.5 },
 		{ key = "carLandingBounceMaxOffset", label = "Bounce Max Offset", min = 0, max = 6, step = 0.1 },
 		{ key = "passengerActiveCount", label = "Active Count", min = 1, max = 12, step = 1 },
+		{ key = "passengerStopRoadEdgeInset", label = "Stop Edge Margin", min = 0, max = 48, step = 1 },
 		{ key = "passengerModelHeight", label = "Passenger Height", min = 3, max = 8, step = 0.1 },
 		{ key = "passengerGroundLiftLegFraction", label = "Passenger Lift", min = -0.5, max = 1.5, step = 0.05 },
 		{ key = "passengerPickupRadius", label = "Pickup Radius", min = 4, max = 80, step = 1 },

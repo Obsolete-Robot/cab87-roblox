@@ -12,6 +12,21 @@ local PassengerVisuals = require(script.Parent:WaitForChild("PassengerVisuals"))
 local PassengerService = {}
 
 local ROAD_SPLINE_DATA_NAME = RoadSplineData.RUNTIME_DATA_NAME
+local STOP_LAYOUT_TUNING_KEYS = {
+	passengerMaxStops = true,
+	passengerStopMinSeparation = true,
+	passengerStopRoadEdgeInset = true,
+	passengerStopSpacing = true,
+}
+
+local function recordStopLayoutValues(service)
+	table.clear(service.stopLayoutValues)
+	for key in pairs(STOP_LAYOUT_TUNING_KEYS) do
+		service.stopLayoutValues[key] = Config[key]
+	end
+end
+
+local rebuildPassengerStops
 
 local function getConfigNumber(key, fallback)
 	local value = Config[key]
@@ -60,6 +75,10 @@ local function horizontalUnit(vector)
 	return horizontal / magnitude
 end
 
+local function getPerpendicularRight(direction)
+	return Vector3.new(direction.Z, 0, -direction.X)
+end
+
 local function addCandidate(candidates, position, minSeparation)
 	for _, candidate in ipairs(candidates) do
 		if horizontalDistance(candidate, position) < minSeparation then
@@ -71,6 +90,35 @@ local function addCandidate(candidates, position, minSeparation)
 	return true
 end
 
+local function getPassengerStopRoadEdgeMargin()
+	return math.max(getConfigNumber("passengerStopRoadEdgeInset", 4), 0)
+end
+
+local function getPassengerStopLateralDistance(roadWidth)
+	local halfWidth = math.max((tonumber(roadWidth) or 0) * 0.5, 0)
+	if halfWidth <= 0 then
+		return 0
+	end
+
+	return math.max(halfWidth - math.min(getPassengerStopRoadEdgeMargin(), halfWidth), 0)
+end
+
+local function addRoadEdgeCandidate(candidates, centerPosition, tangent, roadWidth, minSeparation, preferredSide)
+	local lateralDistance = getPassengerStopLateralDistance(roadWidth)
+	if not tangent or lateralDistance <= 0.001 then
+		return addCandidate(candidates, centerPosition, minSeparation)
+	end
+
+	local right = getPerpendicularRight(tangent)
+	local firstSide = if preferredSide and preferredSide < 0 then -1 else 1
+	local firstPosition = centerPosition + right * lateralDistance * firstSide
+	if addCandidate(candidates, firstPosition, minSeparation) then
+		return true
+	end
+
+	return addCandidate(candidates, centerPosition - right * lateralDistance * firstSide, minSeparation)
+end
+
 local function collectAuthoredRoadCandidates(world, minSeparation)
 	local candidates = {}
 	local spacing = math.max(getConfigNumber("passengerStopSpacing", 160), 24)
@@ -79,17 +127,37 @@ local function collectAuthoredRoadCandidates(world, minSeparation)
 		return candidates
 	end
 
-	for _, record in ipairs(RoadSplineData.collectSplineRecords(dataRoot)) do
+	local defaultRoadWidth = RoadSampling.getConfiguredRoadWidth(Config)
+	for recordIndex, record in ipairs(RoadSplineData.collectSplineRecords(dataRoot, {
+		defaultRoadWidth = defaultRoadWidth,
+	})) do
+		local positions = if record.sampled
+			then record.positions
+			else RoadSampling.samplePositions(
+				record.positions,
+				record.closed,
+				getConfigNumber("authoredRoadSampleStepStuds", 8)
+			)
+		local closedLoop = RoadSampling.sampleLoopIsClosed(positions)
+		local edgeCount = if closedLoop then #positions - 1 else #positions
+		if edgeCount < 2 then
+			continue
+		end
+
 		local distanceSinceLastStop = spacing
 		local previousPosition = nil
+		local fallbackDir = horizontalUnit(positions[2] - positions[1]) or Vector3.new(0, 0, 1)
 
-		for _, position in ipairs(record.positions) do
+		for index = 1, edgeCount do
+			local position = positions[index]
 			if previousPosition then
 				distanceSinceLastStop += horizontalDistance(position, previousPosition)
 			end
 
 			if distanceSinceLastStop >= spacing then
-				addCandidate(candidates, position, minSeparation)
+				local tangent = RoadSampling.getRoadSampleTangent(positions, index, edgeCount, closedLoop, fallbackDir)
+				local preferredSide = if ((#candidates + recordIndex) % 2 == 0) then 1 else -1
+				addRoadEdgeCandidate(candidates, position, tangent, record.width, minSeparation, preferredSide)
 				distanceSinceLastStop = 0
 			end
 
@@ -115,8 +183,7 @@ end
 local function collectSurfaceCandidates(driveSurfaces, minSeparation)
 	local candidates = {}
 	local spacing = math.max(getConfigNumber("passengerStopSpacing", 160), 24)
-	local edgeInset = math.max(getConfigNumber("passengerStopRoadEdgeInset", 12), 0)
-	local configuredLateralOffset = math.max(getConfigNumber("passengerStopLateralOffset", 18), 0)
+	local edgeMargin = getPassengerStopRoadEdgeMargin()
 
 	for _, surface in ipairs(driveSurfaces or {}) do
 		if canUseSurfaceForStops(surface) then
@@ -124,25 +191,24 @@ local function collectSurfaceCandidates(driveSurfaces, minSeparation)
 			local longAxisIsX = size.X >= size.Z
 			local longSize = if longAxisIsX then size.X else size.Z
 			local shortSize = if longAxisIsX then size.Z else size.X
-			local halfLong = math.max(longSize * 0.5 - edgeInset, 0)
+			local halfLong = math.max(longSize * 0.5 - edgeMargin, 0)
 			local span = halfLong * 2
 			local count = math.max(1, math.floor(span / spacing + 0.5) + 1)
-			local maxLateral = math.max(shortSize * 0.5 - edgeInset, 0)
-			local lateralOffset = math.min(configuredLateralOffset, maxLateral)
-			local lateralOffsets = { 0 }
-
-			if lateralOffset >= 6 then
-				lateralOffsets = { -lateralOffset, lateralOffset }
-			end
+			local lateralDistance = getPassengerStopLateralDistance(shortSize)
 
 			for i = 1, count do
 				local along = if count == 1 then 0 else -halfLong + span * ((i - 1) / (count - 1))
-				for _, lateral in ipairs(lateralOffsets) do
+				local preferredSide = if (#candidates % 2 == 0) then 1 else -1
+				for attempt = 1, 2 do
+					local side = if attempt == 1 then preferredSide else -preferredSide
+					local lateral = lateralDistance * side
 					local localPosition = if longAxisIsX
 						then Vector3.new(along, size.Y * 0.5, lateral)
 						else Vector3.new(lateral, size.Y * 0.5, along)
 					local worldPosition = surface.CFrame:PointToWorldSpace(localPosition)
-					addCandidate(candidates, worldPosition, minSeparation)
+					if addCandidate(candidates, worldPosition, minSeparation) or lateralDistance <= 0.001 then
+						break
+					end
 				end
 			end
 		end
@@ -292,10 +358,6 @@ local function getCabMotionDirection(service, cabPivot, cabPosition)
 
 	local fallbackDirection = horizontalUnit(cabPivot:VectorToWorldSpace(Vector3.new(0, 0, 1)))
 	return service.previousCabMotionDirection or fallbackDirection
-end
-
-local function getPerpendicularRight(direction)
-	return Vector3.new(direction.Z, 0, -direction.X)
 end
 
 local function getPassengerCabThreat(passenger, cabPosition, cabDirection, cabSpeed)
@@ -990,8 +1052,52 @@ local function updateService(service, dt)
 		end
 	end
 
+	if service.pendingStopLayoutRebuild and service.mode == "pickup" then
+		service.pendingStopLayoutRebuild = false
+		rebuildPassengerStops(service)
+		return
+	end
+
 	updateCabFareAttributes(service, cabPosition, cabSpeed)
 	service.previousCabPosition = cabPosition
+end
+
+rebuildPassengerStops = function(service)
+	clearGpsDestination(service)
+	service.pendingStopLayoutRebuild = false
+	service.forceNextCabStatePublish = true
+
+	if service.fareService and service.fareService.failFare and service.mode == "delivery" then
+		service.fareService:failFare()
+	end
+
+	for _, passenger in ipairs(service.passengers) do
+		destroyPassenger(passenger)
+	end
+
+	table.clear(service.passengers)
+	service.activePassenger = nil
+	service.mode = "pickup"
+	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
+	service.nextPassengerId = 0
+	service.rng = Random.new(service.rngSeed)
+
+	if service.stopFolder and service.stopFolder.Parent then
+		service.stopFolder:Destroy()
+	end
+
+	service.stops, service.stopFolder = createPassengerStops(
+		service.world,
+		service.driveSurfaces,
+		service.spawnPose,
+		service.rng
+	)
+	service.surfaceRaycastParams = createSurfaceRaycastParams(service.driveSurfaces)
+	service.world:SetAttribute("PassengerStopCount", #service.stops)
+	recordStopLayoutValues(service)
+
+	ensureWaitingPassengerCount(service)
+	updateCabFareAttributes(service, service.car:GetPivot().Position, getCabSpeed(service.car))
 end
 
 function PassengerService.start(options)
@@ -1005,6 +1111,9 @@ function PassengerService.start(options)
 	local service = {
 		world = world,
 		car = car,
+		driveSurfaces = options.driveSurfaces,
+		spawnPose = options.spawnPose,
+		rngSeed = rngSeed,
 		rng = Random.new(rngSeed),
 		mode = "pickup",
 		activePassenger = nil,
@@ -1014,6 +1123,8 @@ function PassengerService.start(options)
 		pickupCooldown = 0,
 		elapsedTime = 0,
 		lastDeltaTime = 0,
+		pendingStopLayoutRebuild = false,
+		stopLayoutValues = {},
 		gpsService = options.gpsService,
 		fareService = options.fareService,
 		stateReplicator = options.stateReplicator,
@@ -1031,6 +1142,7 @@ function PassengerService.start(options)
 	service.stops, service.stopFolder = createPassengerStops(world, options.driveSurfaces, options.spawnPose, service.rng)
 	service.surfaceRaycastParams = createSurfaceRaycastParams(options.driveSurfaces)
 	service.world:SetAttribute("PassengerStopCount", #service.stops)
+	recordStopLayoutValues(service)
 
 	ensureWaitingPassengerCount(service)
 	updateCabFareAttributes(service, car:GetPivot().Position, getCabSpeed(car))
@@ -1060,6 +1172,21 @@ function PassengerService.start(options)
 
 		if service.stopFolder and service.stopFolder.Parent then
 			service.stopFolder:Destroy()
+		end
+	end
+
+	function service.applyLiveTuning(key)
+		if STOP_LAYOUT_TUNING_KEYS[key] then
+			if service.stopLayoutValues[key] == Config[key] then
+				return
+			end
+
+			if service.mode ~= "pickup" then
+				service.pendingStopLayoutRebuild = true
+				return
+			end
+
+			rebuildPassengerStops(service)
 		end
 	end
 

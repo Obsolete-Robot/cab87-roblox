@@ -207,8 +207,12 @@ local function bootstrap()
 		config = Config,
 		remote = remotes.debugTune,
 	})
+	local passengerService = nil
 	debugTuningService:onChanged(function(key, value)
 		taxiService:applyLiveTuning(key, value)
+		if passengerService and passengerService.applyLiveTuning then
+			passengerService.applyLiveTuning(key)
+		end
 	end)
 	debugTuningService:start()
 
@@ -243,7 +247,7 @@ local function bootstrap()
 		fareService = fareService,
 	})
 
-	PassengerService.start({
+	passengerService = PassengerService.start({
 		world = world,
 		car = car,
 		driveSurfaces = driveSurfaces,
