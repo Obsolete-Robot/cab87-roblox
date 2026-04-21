@@ -12,6 +12,7 @@ local PHASE_ENDING = "Ending"
 local PHASE_INTERMISSION = "Intermission"
 local SHIFT_STATE_ACTION = "State"
 local SHIFT_SNAPSHOT_ACTION = "Snapshot"
+local SHIFT_PAYOUT_ACTION = "PayoutSummary"
 
 local function loadRemoteActions()
 	local shared = ReplicatedStorage:FindFirstChild("Shared")
@@ -32,6 +33,9 @@ local function loadRemoteActions()
 		end
 		if type(Remotes.actions.shiftStateSnapshot) == "string" then
 			SHIFT_SNAPSHOT_ACTION = Remotes.actions.shiftStateSnapshot
+		end
+		if type(Remotes.actions.shiftPayoutSummary) == "string" then
+			SHIFT_PAYOUT_ACTION = Remotes.actions.shiftPayoutSummary
 		end
 	end
 end
@@ -137,6 +141,10 @@ function ShiftService:_ensurePlayerState(player)
 	if not state then
 		state = {
 			grossMoney = 0,
+			fareTotals = 0,
+			bonuses = 0,
+			damagePenalties = 0,
+			lastPayoutEventId = 0,
 		}
 		self.playerStates[player] = state
 	end
@@ -153,7 +161,59 @@ function ShiftService:_resetShiftTotals()
 	for _, player in ipairs(self.players:GetPlayers()) do
 		local state = self:_ensurePlayerState(player)
 		state.grossMoney = 0
+		state.fareTotals = 0
+		state.bonuses = 0
+		state.damagePenalties = 0
 		setAttributeIfNamed(player, self.config.shiftGrossMoneyAttribute, state.grossMoney)
+	end
+end
+
+function ShiftService:_publishPayoutSummary(player, summary)
+	if not self.remote then
+		return
+	end
+
+	self.remote:FireClient(player, SHIFT_PAYOUT_ACTION, {
+		shiftId = self.shiftId,
+		serverTime = Workspace:GetServerTimeNow(),
+		payoutSummary = summary,
+	})
+end
+
+function ShiftService:_finalizeShiftPayouts()
+	local medallionFeeRate = math.clamp(getConfigNumber(self.config, "shiftMedallionFeeRate", 0.2), 0, 1)
+
+	for _, player in ipairs(self.players:GetPlayers()) do
+		local state = self:_ensurePlayerState(player)
+		state.lastPayoutEventId = (state.lastPayoutEventId or 0) + 1
+
+		local grossEarnings = math.max(math.floor((state.grossMoney or 0) + 0.5), 0)
+		local fareTotals = math.max(math.floor((state.fareTotals or 0) + 0.5), 0)
+		local bonuses = math.max(math.floor((state.bonuses or 0) + 0.5), 0)
+		local damagePenalties = math.max(math.floor((state.damagePenalties or 0) + 0.5), 0)
+		local medallionFeeAmount = math.max(math.floor(grossEarnings * medallionFeeRate + 0.5), 0)
+		local netDeposit = math.max(grossEarnings - medallionFeeAmount, 0)
+
+		local summary = {
+			eventId = state.lastPayoutEventId,
+			grossEarnings = grossEarnings,
+			fareTotals = fareTotals,
+			bonuses = bonuses,
+			damagePenalties = damagePenalties,
+			medallionFeeRate = medallionFeeRate,
+			medallionFeeAmount = medallionFeeAmount,
+			netDeposit = netDeposit,
+		}
+
+		setAttributeIfNamed(player, self.config.shiftPayoutSummaryEventIdAttribute, summary.eventId)
+		setAttributeIfNamed(player, self.config.shiftPayoutFareTotalsAttribute, summary.fareTotals)
+		setAttributeIfNamed(player, self.config.shiftPayoutBonusesAttribute, summary.bonuses)
+		setAttributeIfNamed(player, self.config.shiftPayoutDamagePenaltiesAttribute, summary.damagePenalties)
+		setAttributeIfNamed(player, self.config.shiftPayoutMedallionFeeRateAttribute, summary.medallionFeeRate)
+		setAttributeIfNamed(player, self.config.shiftPayoutMedallionFeeAmountAttribute, summary.medallionFeeAmount)
+		setAttributeIfNamed(player, self.config.shiftPayoutNetDepositAttribute, summary.netDeposit)
+
+		self:_publishPayoutSummary(player, summary)
 	end
 end
 
@@ -229,6 +289,7 @@ function ShiftService:_advancePhase()
 	if self.phase == PHASE_PREPARING then
 		self:_beginPhase(PHASE_ACTIVE, self:_getShiftDuration())
 	elseif self.phase == PHASE_ACTIVE then
+		self:_finalizeShiftPayouts()
 		local endingDuration = self:_getEndingDuration()
 		if endingDuration > 0 then
 			self:_beginPhase(PHASE_ENDING, endingDuration)
@@ -260,7 +321,7 @@ function ShiftService:_step(dt)
 	end
 end
 
-function ShiftService:addShiftMoney(player, amount)
+function ShiftService:addShiftMoney(player, amount, breakdown)
 	if self.phase ~= PHASE_ACTIVE then
 		return 0
 	end
@@ -277,6 +338,17 @@ function ShiftService:addShiftMoney(player, amount)
 
 	local state = self:_ensurePlayerState(player)
 	state.grossMoney = math.max(state.grossMoney + amount, 0)
+	if type(breakdown) == "table" then
+		if type(breakdown.fareTotals) == "number" then
+			state.fareTotals = math.max((state.fareTotals or 0) + breakdown.fareTotals, 0)
+		end
+		if type(breakdown.bonuses) == "number" then
+			state.bonuses = math.max((state.bonuses or 0) + breakdown.bonuses, 0)
+		end
+		if type(breakdown.damagePenalties) == "number" then
+			state.damagePenalties = math.max((state.damagePenalties or 0) + breakdown.damagePenalties, 0)
+		end
+	end
 	setAttributeIfNamed(player, self.config.shiftGrossMoneyAttribute, state.grossMoney)
 	self:_publishState()
 

@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DEFAULT_SHIFT_STATE_REMOTE_NAME = "Cab87ShiftStateUpdated"
 local player = Players.LocalPlayer
+local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 
 local function getRemoteName()
 	local shared = ReplicatedStorage:WaitForChild("Shared", 10)
@@ -27,15 +28,32 @@ local function setAttributeIfPresent(name, value, expectedType)
 	end
 end
 
-local function applySnapshot(_action, snapshot)
+local function applySnapshot(action, snapshot)
 	if type(snapshot) ~= "table" then
 		return
 	end
 
-	setAttributeIfPresent("Cab87ShiftPhase", snapshot.phase, "string")
-	setAttributeIfPresent("Cab87ShiftId", snapshot.shiftId, "number")
-	setAttributeIfPresent("Cab87ShiftTimeRemaining", snapshot.timeRemaining, "number")
-	setAttributeIfPresent("Cab87ShiftDuration", snapshot.duration, "number")
+	if action == "PayoutSummary" then
+		local summary = snapshot.payoutSummary
+		if type(summary) ~= "table" then
+			return
+		end
+
+		setAttributeIfPresent(Config.shiftPayoutSummaryEventIdAttribute, summary.eventId, "number")
+		setAttributeIfPresent(Config.shiftPayoutFareTotalsAttribute, summary.fareTotals, "number")
+		setAttributeIfPresent(Config.shiftPayoutBonusesAttribute, summary.bonuses, "number")
+		setAttributeIfPresent(Config.shiftPayoutDamagePenaltiesAttribute, summary.damagePenalties, "number")
+		setAttributeIfPresent(Config.shiftPayoutMedallionFeeRateAttribute, summary.medallionFeeRate, "number")
+		setAttributeIfPresent(Config.shiftPayoutMedallionFeeAmountAttribute, summary.medallionFeeAmount, "number")
+		setAttributeIfPresent(Config.shiftPayoutNetDepositAttribute, summary.netDeposit, "number")
+		setAttributeIfPresent(Config.shiftGrossMoneyAttribute, summary.grossEarnings, "number")
+		return
+	end
+
+	setAttributeIfPresent(Config.shiftPhaseAttribute, snapshot.phase, "string")
+	setAttributeIfPresent(Config.shiftIdAttribute, snapshot.shiftId, "number")
+	setAttributeIfPresent(Config.shiftTimeRemainingAttribute, snapshot.timeRemaining, "number")
+	setAttributeIfPresent(Config.shiftDurationAttribute, snapshot.duration, "number")
 end
 
 local remote = ReplicatedStorage:WaitForChild(getRemoteName())

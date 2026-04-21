@@ -220,7 +220,11 @@ function FareService:completeFare()
 	local player = self:_getDriverPlayer()
 
 	if self.shiftService and player and self.shiftService.addShiftMoney then
-		self.shiftService:addShiftMoney(player, payout)
+		self.shiftService:addShiftMoney(player, payout, {
+			fareTotals = result.estimatedPayout,
+			bonuses = math.max(result.timeComponent, 0) + math.max(result.speedBonus, 0),
+			damagePenalties = math.max(result.damagePenalty, 0),
+		})
 	end
 
 	local completedDamage = self.activeFare.damage or self:_emptyDamageSnapshot()
