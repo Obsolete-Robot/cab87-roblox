@@ -3,19 +3,17 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared:WaitForChild("Config"))
+local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
+local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
 local MinimapController = {}
 
 local WORLD_NAME = "Cab87World"
-local RUNTIME_SPLINE_DATA_NAME = "AuthoredRoadSplineData"
-local SPLINES_NAME = "Splines"
-local ROAD_POINTS_NAME = "RoadPoints"
-local ROAD_WIDTH_ATTR = "RoadWidth"
+local RUNTIME_SPLINE_DATA_NAME = RoadSplineData.RUNTIME_DATA_NAME
 
-local DEFAULT_ROAD_WIDTH = 28
-local MIN_ROAD_WIDTH = 8
-local MAX_ROAD_WIDTH = 200
+local DEFAULT_ROAD_WIDTH = RoadSampling.DEFAULT_ROAD_WIDTH
 
 local player = Players.LocalPlayer
 
@@ -46,137 +44,8 @@ local function getConfigString(key, fallback)
 	return fallback
 end
 
-local function sanitizeRoadWidth(value)
-	local width = tonumber(value) or DEFAULT_ROAD_WIDTH
-	return math.clamp(width, MIN_ROAD_WIDTH, MAX_ROAD_WIDTH)
-end
-
-local function sortedChildren(parent, className)
-	local children = {}
-	if not parent then
-		return children
-	end
-
-	for _, child in ipairs(parent:GetChildren()) do
-		if not className or child:IsA(className) then
-			table.insert(children, child)
-		end
-	end
-
-	table.sort(children, function(a, b)
-		return a.Name < b.Name
-	end)
-
-	return children
-end
-
-local function getAuthoredSplines(root)
-	local splinesFolder = root and root:FindFirstChild(SPLINES_NAME)
-	if splinesFolder and splinesFolder:IsA("Folder") then
-		return sortedChildren(splinesFolder, "Model")
-	end
-
-	local legacyPoints = root and root:FindFirstChild(ROAD_POINTS_NAME)
-	if legacyPoints and legacyPoints:IsA("Folder") then
-		return { root }
-	end
-
-	return {}
-end
-
-local function getAuthoredSplinePoints(spline)
-	local pointsFolder = spline and spline:FindFirstChild(ROAD_POINTS_NAME)
-	if not (pointsFolder and pointsFolder:IsA("Folder")) then
-		return {}
-	end
-
-	local points = {}
-	for _, child in ipairs(pointsFolder:GetChildren()) do
-		if child:IsA("BasePart") or child:IsA("Vector3Value") then
-			table.insert(points, child)
-		end
-	end
-
-	table.sort(points, function(a, b)
-		return a.Name < b.Name
-	end)
-
-	return points
-end
-
-local function getPointPosition(point)
-	if point:IsA("BasePart") then
-		return point.Position
-	end
-
-	return point.Value
-end
-
-local function distanceXZ(a, b)
-	local dx = a.X - b.X
-	local dz = a.Z - b.Z
-	return math.sqrt(dx * dx + dz * dz)
-end
-
-local function catmullRom(p0, p1, p2, p3, t)
-	local t2 = t * t
-	local t3 = t2 * t
-	return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
-end
-
-local function sampleAuthoredSpline(points, closedCurve)
-	local positions = {}
-	for _, point in ipairs(points) do
-		table.insert(positions, getPointPosition(point))
-	end
-
-	if #positions < 2 then
-		return positions
-	end
-
-	if closedCurve and #positions < 3 then
-		closedCurve = false
-	end
-
-	local samples = {}
-	local sampleStep = math.max(Config.authoredRoadSampleStepStuds or 8, 1)
-	if closedCurve then
-		local count = #positions
-		for i = 1, count do
-			local p0 = positions[((i - 2) % count) + 1]
-			local p1 = positions[i]
-			local p2 = positions[(i % count) + 1]
-			local p3 = positions[((i + 1) % count) + 1]
-			local segmentLen = (p2 - p1).Magnitude
-			local subdivisions = math.max(2, math.floor(segmentLen / sampleStep))
-
-			for s = 0, subdivisions - 1 do
-				table.insert(samples, catmullRom(p0, p1, p2, p3, s / subdivisions))
-			end
-		end
-
-		if #samples > 1 then
-			table.insert(samples, samples[1])
-		end
-	else
-		for i = 1, #positions - 1 do
-			local p0 = positions[math.max(1, i - 1)]
-			local p1 = positions[i]
-			local p2 = positions[i + 1]
-			local p3 = positions[math.min(#positions, i + 2)]
-			local segmentLen = (p2 - p1).Magnitude
-			local subdivisions = math.max(2, math.floor(segmentLen / sampleStep))
-
-			for s = 0, subdivisions - 1 do
-				table.insert(samples, catmullRom(p0, p1, p2, p3, s / subdivisions))
-			end
-		end
-
-		table.insert(samples, positions[#positions])
-	end
-
-	return samples
-end
+local sortedChildren = RoadSplineData.sortedChildren
+local distanceXZ = RoadSampling.distanceXZ
 
 local function simplifySamples(samples)
 	local spacing = math.max(getConfigNumber("minimapRoadPointSpacing", 28), 1)
@@ -236,37 +105,26 @@ local function collectAuthoredRoadData(dataRoot)
 	local junctions = {}
 	local bounds = newBounds()
 
-	for _, spline in ipairs(getAuthoredSplines(dataRoot)) do
-		local points = getAuthoredSplinePoints(spline)
-		if #points >= 2 then
-			local samples = {}
-			if spline:GetAttribute("SampledRoadChain") == true then
-				for _, point in ipairs(points) do
-					table.insert(samples, getPointPosition(point))
-				end
-			else
-				samples = sampleAuthoredSpline(points, spline:GetAttribute("ClosedCurve") == true)
-			end
-
-			local width = sanitizeRoadWidth(spline:GetAttribute(ROAD_WIDTH_ATTR))
-			local simplified = simplifySamples(samples)
-			for i = 1, #simplified - 1 do
-				addRoadSegment(segments, bounds, simplified[i], simplified[i + 1], width)
-			end
+	for _, chain in ipairs(RoadSplineData.collectSampledChains(dataRoot, {
+		defaultRoadWidth = RoadSampling.getConfiguredRoadWidth(Config),
+		sampleStep = Config.authoredRoadSampleStepStuds,
+	})) do
+		local simplified = simplifySamples(chain.samples)
+		for i = 1, #simplified - 1 do
+			addRoadSegment(segments, bounds, simplified[i], simplified[i + 1], chain.width)
 		end
 	end
 
-	local junctionsFolder = dataRoot:FindFirstChild("Junctions")
-	if junctionsFolder and junctionsFolder:IsA("Folder") then
-		for _, junctionData in ipairs(sortedChildren(junctionsFolder, "Vector3Value")) do
-			local radius = math.max(tonumber(junctionData:GetAttribute("Radius")) or DEFAULT_ROAD_WIDTH * 0.5, 2)
-			table.insert(junctions, {
-				x = junctionData.Value.X,
-				z = junctionData.Value.Z,
-				radius = radius,
-			})
-			includePosition(bounds, junctionData.Value, radius)
-		end
+	for _, junction in ipairs(RoadSplineData.collectJunctions(dataRoot, {
+		defaultRadius = DEFAULT_ROAD_WIDTH * 0.5,
+		minRadius = 2,
+	})) do
+		table.insert(junctions, {
+			x = junction.center.X,
+			z = junction.center.Z,
+			radius = junction.radius,
+		})
+		includePosition(bounds, junction.center, junction.radius)
 	end
 
 	return {
