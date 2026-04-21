@@ -120,7 +120,12 @@ local function nonNegativeNumber(value, fallback)
 end
 
 local function integerNumber(value, fallback)
-	return math.floor(finiteNumber(value, fallback) + 0.5)
+	local numeric = finiteNumber(value, fallback)
+	if numeric >= 0 then
+		return math.floor(numeric + 0.5)
+	end
+
+	return math.ceil(numeric - 0.5)
 end
 
 local function stringValue(value, fallback)
