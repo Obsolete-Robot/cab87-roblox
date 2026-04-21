@@ -78,7 +78,38 @@ function ShiftService.new(options)
 		timeRemaining = 0,
 		broadcastElapsed = 0,
 		lastBroadcastSecond = nil,
+		phaseChangedListeners = {},
 	}, ShiftService)
+end
+
+function ShiftService:onPhaseChanged(listener)
+	if type(listener) ~= "function" then
+		return function() end
+	end
+
+	table.insert(self.phaseChangedListeners, listener)
+	local removed = false
+	return function()
+		if removed then
+			return
+		end
+		removed = true
+		for index = #self.phaseChangedListeners, 1, -1 do
+			if self.phaseChangedListeners[index] == listener then
+				table.remove(self.phaseChangedListeners, index)
+				break
+			end
+		end
+	end
+end
+
+function ShiftService:_emitPhaseChanged(snapshot)
+	for _, listener in ipairs(self.phaseChangedListeners) do
+		local ok, err = pcall(listener, snapshot)
+		if not ok then
+			warn("[cab87] Shift phase listener failed: " .. tostring(err))
+		end
+	end
 end
 
 function ShiftService:_getBroadcastInterval()
@@ -191,6 +222,7 @@ function ShiftService:_beginPhase(phase, duration)
 	end
 
 	self:_publishState()
+	self:_emitPhaseChanged(self:_getSnapshot())
 end
 
 function ShiftService:_advancePhase()

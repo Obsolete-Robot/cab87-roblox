@@ -7,10 +7,6 @@ local FareRules = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild(
 local FareService = {}
 FareService.__index = FareService
 
-local function roundNumber(value)
-	return math.floor((value or 0) + 0.5)
-end
-
 function FareService.new(options)
 	options = options or {}
 	return setmetatable({
@@ -32,6 +28,26 @@ function FareService.new(options)
 	}, FareService)
 end
 
+function FareService:_getDriverPlayer()
+	if not self.car then
+		return nil
+	end
+
+	local seat = self.car:FindFirstChild("DriverSeat")
+	local humanoid = seat and seat:IsA("VehicleSeat") and seat.Occupant or nil
+	return humanoid and Players:GetPlayerFromCharacter(humanoid.Parent) or nil
+end
+
+function FareService:_getCurrentDamagePoints()
+	return math.max(self:_getNumberAttribute(self.config.carDamagePenaltyAttribute, 0), 0)
+end
+
+function FareService:_resetDamageForFare()
+	if self.car and type(self.config.carDamagePenaltyAttribute) == "string" and self.config.carDamagePenaltyAttribute ~= "" then
+		self.car:SetAttribute(self.config.carDamagePenaltyAttribute, 0)
+	end
+end
+
 function FareService:_getNumberAttribute(name, fallback)
 	if not self.car or type(name) ~= "string" or name == "" then
 		return fallback
@@ -51,11 +67,14 @@ end
 
 function FareService:beginFare(routeDistance)
 	local estimate = FareRules.buildEstimate(self.config, routeDistance)
+	local startDamage = self:_getCurrentDamagePoints()
 	self.activeFare = {
 		routeDistance = routeDistance,
 		startedAt = Workspace:GetServerTimeNow(),
 		estimatedPayout = estimate.estimatedPayout,
+		startDamage = startDamage,
 	}
+	self:_resetDamageForFare()
 	self:_setLastResult({
 		status = "active",
 		estimatedPayout = estimate.estimatedPayout,
@@ -95,21 +114,18 @@ function FareService:completeFare()
 	end
 
 	local elapsed = math.max(Workspace:GetServerTimeNow() - self.activeFare.startedAt, 0)
-	local damageInput = self:_getNumberAttribute(self.config.carDamagePenaltyAttribute, 0)
+	local currentDamage = self:_getCurrentDamagePoints()
+	local damageInput = math.max(currentDamage - (self.activeFare.startDamage or 0), 0)
 	local result = FareRules.finalizeFare(self.config, self.activeFare.routeDistance, elapsed, damageInput)
 	local payout = result.finalPayout
-	local player
-	if self.car then
-		local seat = self.car:FindFirstChild("DriverSeat")
-		local humanoid = seat and seat:IsA("VehicleSeat") and seat.Occupant or nil
-		player = humanoid and Players:GetPlayerFromCharacter(humanoid.Parent) or nil
-	end
+	local player = self:_getDriverPlayer()
 
 	if self.shiftService and player and self.shiftService.addShiftMoney then
 		self.shiftService:addShiftMoney(player, payout)
 	end
 
 	self.activeFare = nil
+	self:_resetDamageForFare()
 	self:_setLastResult({
 		status = "completed",
 		estimatedPayout = result.estimatedPayout,
@@ -131,7 +147,9 @@ function FareService:failFare()
 	end
 
 	local elapsed = math.max(Workspace:GetServerTimeNow() - self.activeFare.startedAt, 0)
+	local routeDistance = self.activeFare.routeDistance
 	self.activeFare = nil
+	self:_resetDamageForFare()
 	self:_setLastResult({
 		status = "failed",
 		estimatedPayout = 0,
@@ -141,13 +159,25 @@ function FareService:failFare()
 		speedBonus = 0,
 		damagePenalty = 0,
 		durationSeconds = elapsed,
-		routeDistance = 0,
+		routeDistance = routeDistance,
 	})
 
 	return self.lastResult
 end
 
 function FareService:getLastResult()
+	return self.lastResult
+end
+
+function FareService:hasActiveFare()
+	return self.activeFare ~= nil
+end
+
+function FareService:onShiftPhaseChanged(phase)
+	if phase ~= "Active" and self.activeFare then
+		return self:failFare()
+	end
+
 	return self.lastResult
 end
 
