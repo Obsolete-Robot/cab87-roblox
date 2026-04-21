@@ -1,9 +1,11 @@
 local Players = game:GetService("Players")
+local InsertService = game:GetService("InsertService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local CarProfiles = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("CarProfiles"))
 local AuthoredRoadRuntime = require(script.Parent:WaitForChild("AuthoredRoadRuntime"))
 local GpsService = require(script.Parent:WaitForChild("GpsService"))
 local MapGenerator = require(script.Parent:WaitForChild("MapGenerator"))
@@ -12,6 +14,13 @@ local FareService = require(script.Parent:WaitForChild("Services"):WaitForChild(
 
 local NORMAL_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(210, 210, 210))
 local BOOST_DRIFT_SMOKE_COLOR = ColorSequence.new(Color3.fromRGB(65, 185, 255))
+local CAB_CONTROLLER_SIZE = Vector3.new(10, 2, 16)
+local CAB_WHEEL_OFFSETS = {
+	Vector3.new(4.4, -1.2, 5.6),
+	Vector3.new(-4.4, -1.2, 5.6),
+	Vector3.new(4.4, -1.2, -5.6),
+	Vector3.new(-4.4, -1.2, -5.6),
+}
 
 local function yawToForward(yaw)
 	return Vector3.new(math.sin(yaw), 0, math.cos(yaw))
@@ -34,7 +43,7 @@ local function moveAngleToward(fromAngle, toAngle, maxDelta)
 	return fromAngle + math.clamp(delta, -maxDelta, maxDelta)
 end
 
-local driveInputHandler = nil
+local driveInputHandlersBySeat = {}
 
 local function getOrCreateRemoteEvent(name)
 	local remote = ReplicatedStorage:FindFirstChild(name)
@@ -284,17 +293,236 @@ local function addDriftSmoke(wheel, emitters)
 	table.insert(emitters, emitter)
 end
 
-local function createCab(world, spawnPose)
-	local spawnPosition = (spawnPose and spawnPose.position) or Config.carSpawn
-	local spawnYaw = (spawnPose and spawnPose.yaw) or 0
-	local car = Instance.new("Model")
-	car.Name = "Cab87Taxi"
-	car.Parent = world
-	local driftEmitters = {}
+local function getNumberConfig(key, fallback, configSource)
+	local value = (configSource or Config)[key]
+	if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+		return value
+	end
 
-	local body = makePart(car, {
+	return fallback
+end
+
+local function getVector3Config(key, fallback, configSource)
+	local value = (configSource or Config)[key]
+	if typeof(value) == "Vector3" then
+		return value
+	end
+
+	return fallback
+end
+
+local function createCarConfig(profileName, overrides)
+	local profile = CarProfiles.get(profileName or Config.carDefaultProfileName)
+	local carConfig = setmetatable({}, {
+		__index = Config,
+	})
+
+	for key, value in pairs(profile) do
+		carConfig[key] = value
+	end
+
+	if type(overrides) == "table" then
+		for key, value in pairs(overrides) do
+			carConfig[key] = value
+		end
+	end
+
+	carConfig.profileName = carConfig.profileName or profileName or Config.carDefaultProfileName
+	return carConfig
+end
+
+local function canUseAttributeValue(value)
+	local valueType = typeof(value)
+	return valueType == "boolean"
+		or valueType == "number"
+		or valueType == "string"
+		or valueType == "Vector3"
+		or valueType == "Color3"
+		or valueType == "CFrame"
+end
+
+local function getAttributeSafeValue(value)
+	if canUseAttributeValue(value) then
+		return value
+	end
+
+	if type(value) == "table" then
+		local parts = {}
+		for _, item in ipairs(value) do
+			if type(item) == "string" and item ~= "" then
+				table.insert(parts, item)
+			end
+		end
+
+		if #parts > 0 then
+			return table.concat(parts, ",")
+		end
+	end
+
+	return nil
+end
+
+local function setCabConfigAttributes(car, carConfig)
+	local profileAttribute = Config.carProfileAttribute or "Cab87CarProfile"
+	local configPrefix = Config.carConfigAttributePrefix or "Cab87CarConfig_"
+	car:SetAttribute(profileAttribute, carConfig.profileName or Config.carDefaultProfileName)
+
+	for _, key in ipairs(CarProfiles.visualAttributeKeys or {}) do
+		local value = getAttributeSafeValue(carConfig[key])
+		if value ~= nil then
+			car:SetAttribute(configPrefix .. key, value)
+		end
+	end
+end
+
+local function getCabModelAssetId(configSource)
+	local assetId = (configSource or Config).carModelAssetId
+	if type(assetId) == "string" then
+		assetId = tonumber(assetId)
+	end
+
+	if type(assetId) ~= "number" or assetId <= 0 or assetId ~= assetId then
+		return nil
+	end
+
+	return math.floor(assetId)
+end
+
+local function sanitizeCabAssetVisual(root)
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("Script") or descendant:IsA("LocalScript") or descendant:IsA("ModuleScript") then
+			descendant:Destroy()
+		elseif descendant:IsA("Seat") or descendant:IsA("VehicleSeat") then
+			descendant:Destroy()
+		elseif descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanTouch = false
+			descendant.CanQuery = false
+			descendant.Massless = true
+		end
+	end
+end
+
+local function countBaseParts(root)
+	local count = 0
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			count += 1
+		end
+	end
+
+	return count
+end
+
+local function alignCabAssetVisual(visual, spawnPosition, carConfig)
+	local yawOffset = math.rad(getNumberConfig("carModelAssetYawOffsetDegrees", 0, carConfig))
+	visual:PivotTo(CFrame.new(spawnPosition) * CFrame.Angles(0, yawOffset, 0))
+
+	if carConfig.carModelAssetGroundAlign ~= false then
+		local boundsCFrame, boundsSize = visual:GetBoundingBox()
+		local groundY = spawnPosition.Y - getNumberConfig("carRideHeight", 2.3, carConfig)
+		local targetCenter = Vector3.new(
+			spawnPosition.X,
+			groundY + boundsSize.Y * 0.5,
+			spawnPosition.Z
+		)
+		visual:PivotTo(CFrame.new(targetCenter - boundsCFrame.Position) * visual:GetPivot())
+	end
+
+	local offset = getVector3Config("carModelAssetOffset", Vector3.new(0, 0, 0), carConfig)
+	if offset.Magnitude > 0 then
+		visual:PivotTo(visual:GetPivot() * CFrame.new(offset))
+	end
+end
+
+local function loadCabAssetVisual(car, spawnPosition, carConfig)
+	local assetId = getCabModelAssetId(carConfig)
+	if not assetId then
+		return nil
+	end
+
+	local ok, loadedAsset = pcall(function()
+		return InsertService:LoadAsset(assetId)
+	end)
+	if not ok or not loadedAsset then
+		warn("[cab87] Failed to load cab model asset " .. tostring(assetId) .. "; using procedural cab.")
+		return nil
+	end
+
+	local visual = Instance.new("Model")
+	visual.Name = "CabAssetVisual"
+
+	for _, child in ipairs(loadedAsset:GetChildren()) do
+		child.Parent = visual
+	end
+	loadedAsset:Destroy()
+
+	visual.Parent = car
+	sanitizeCabAssetVisual(visual)
+
+	local partCount = countBaseParts(visual)
+	if partCount <= 0 then
+		warn("[cab87] Cab model asset " .. tostring(assetId) .. " has no BaseParts; using procedural cab.")
+		visual:Destroy()
+		return nil
+	end
+
+	local scale = getNumberConfig("carModelAssetScale", 1, carConfig)
+	if scale > 0 and math.abs(scale - 1) > 0.001 then
+		local okScale, scaleError = pcall(function()
+			visual:ScaleTo(scale)
+		end)
+		if not okScale then
+			warn("[cab87] Cab model asset scale failed: " .. tostring(scaleError))
+		end
+	end
+
+	alignCabAssetVisual(visual, spawnPosition, carConfig)
+	visual:SetAttribute("GeneratedBy", "Cab87CabAsset")
+
+	return visual
+end
+
+local function createDriverSeat(car, spawnPosition, hasAssetVisual, carConfig)
+	local seatOffset = getVector3Config("carDriverSeatOffset", Vector3.new(0, 1.5, 1), carConfig)
+	local seatYaw = math.rad(getNumberConfig("carDriverSeatYawOffsetDegrees", 180, carConfig))
+	local seat = Instance.new("VehicleSeat")
+	seat.Name = "DriverSeat"
+	seat.Anchored = true
+	seat.Size = Vector3.new(3.5, 1, 4)
+	seat.CFrame = CFrame.new(spawnPosition + seatOffset) * CFrame.Angles(0, seatYaw, 0)
+	seat.Transparency = if hasAssetVisual then 1 else 0.2
+	seat.Color = Color3.fromRGB(35, 35, 40)
+	seat.MaxSpeed = 0
+	seat.Torque = 0
+	seat.TurnSpeed = 0
+	seat.Parent = car
+
+	return seat
+end
+
+local function addAssetDriftSmokeAnchors(car, spawnPosition, emitters)
+	for i, offset in ipairs(CAB_WHEEL_OFFSETS) do
+		if offset.Z < 0 then
+			local anchor = makePart(car, {
+				Name = "DriftSmokeAnchor" .. i,
+				Size = Vector3.new(0.4, 0.4, 0.4),
+				Position = spawnPosition + offset,
+				Transparency = 1,
+				CanQuery = false,
+				CanCollide = false,
+				CanTouch = false,
+			})
+			addDriftSmoke(anchor, emitters)
+		end
+	end
+end
+
+local function createProceduralCabVisual(car, spawnPosition, driftEmitters)
+	makePart(car, {
 		Name = "Body",
-		Size = Vector3.new(10, 2, 16),
+		Size = CAB_CONTROLLER_SIZE,
 		Position = spawnPosition,
 		Color = Color3.fromRGB(255, 206, 38),
 		Material = Enum.Material.SmoothPlastic,
@@ -308,44 +536,6 @@ local function createCab(world, spawnPose)
 		Material = Enum.Material.SmoothPlastic,
 	})
 
-	local seat = Instance.new("VehicleSeat")
-	seat.Name = "DriverSeat"
-	seat.Anchored = true
-	seat.Size = Vector3.new(3.5, 1, 4)
-	seat.CFrame = CFrame.new(spawnPosition + Vector3.new(0, 1.5, 1))
-		* CFrame.Angles(0, math.rad(180), 0)
-	seat.Transparency = 0.2
-	seat.Color = Color3.fromRGB(35, 35, 40)
-	seat.MaxSpeed = 0
-	seat.Torque = 0
-	seat.TurnSpeed = 0
-	seat.Parent = car
-
-	local entryPrompt = Instance.new("ProximityPrompt")
-	entryPrompt.Name = "DrivePrompt"
-	entryPrompt.ActionText = "Drive"
-	entryPrompt.ObjectText = "Cab"
-	entryPrompt.KeyboardKeyCode = Enum.KeyCode.E
-	entryPrompt.GamepadKeyCode = Enum.KeyCode.ButtonY
-	entryPrompt.HoldDuration = 0
-	entryPrompt.MaxActivationDistance = 12
-	entryPrompt.RequiresLineOfSight = false
-	entryPrompt.Parent = seat
-	entryPrompt.Triggered:Connect(function(player)
-		if seat.Occupant then
-			return
-		end
-
-		local character = player.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			seat:Sit(humanoid)
-		end
-	end)
-	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
-		entryPrompt.Enabled = seat.Occupant == nil
-	end)
-
 	makePart(car, {
 		Name = "CabSign",
 		Size = Vector3.new(3.2, 0.8, 1.4),
@@ -354,14 +544,7 @@ local function createCab(world, spawnPose)
 		Material = Enum.Material.Neon,
 	})
 
-	local wheelOffsets = {
-		Vector3.new(4.4, -1.2, 5.6),
-		Vector3.new(-4.4, -1.2, 5.6),
-		Vector3.new(4.4, -1.2, -5.6),
-		Vector3.new(-4.4, -1.2, -5.6),
-	}
-
-	for i, offset in ipairs(wheelOffsets) do
+	for i, offset in ipairs(CAB_WHEEL_OFFSETS) do
 		local wheel = makePart(car, {
 			Name = "Wheel" .. i,
 			Shape = Enum.PartType.Cylinder,
@@ -376,8 +559,66 @@ local function createCab(world, spawnPose)
 			addDriftSmoke(wheel, driftEmitters)
 		end
 	end
+end
 
-	car.PrimaryPart = body
+local function createCab(world, spawnPose, carConfig)
+	local Config = carConfig or createCarConfig()
+	local spawnPosition = (spawnPose and spawnPose.position) or Config.carSpawn
+	local spawnYaw = (spawnPose and spawnPose.yaw) or 0
+	local car = Instance.new("Model")
+	car.Name = "Cab87Taxi"
+	car.Parent = world
+	setCabConfigAttributes(car, Config)
+	local driftEmitters = {}
+
+	local controllerRoot = makePart(car, {
+		Name = "ControlRoot",
+		Size = CAB_CONTROLLER_SIZE,
+		Position = spawnPosition,
+		Transparency = 1,
+		CanQuery = false,
+		CanCollide = false,
+		CanTouch = false,
+		Material = Enum.Material.SmoothPlastic,
+	})
+
+	local assetVisual = loadCabAssetVisual(car, spawnPosition, Config)
+	if assetVisual then
+		addAssetDriftSmokeAnchors(car, spawnPosition, driftEmitters)
+	else
+		createProceduralCabVisual(car, spawnPosition, driftEmitters)
+	end
+
+	local seat = createDriverSeat(car, spawnPosition, assetVisual ~= nil, Config)
+
+	if Config.drivePromptEnabled ~= false then
+		local entryPrompt = Instance.new("ProximityPrompt")
+		entryPrompt.Name = "DrivePrompt"
+		entryPrompt.ActionText = "Drive"
+		entryPrompt.ObjectText = "Cab"
+		entryPrompt.KeyboardKeyCode = Enum.KeyCode.E
+		entryPrompt.GamepadKeyCode = Enum.KeyCode.ButtonY
+		entryPrompt.HoldDuration = 0
+		entryPrompt.MaxActivationDistance = 12
+		entryPrompt.RequiresLineOfSight = false
+		entryPrompt.Parent = seat
+		entryPrompt.Triggered:Connect(function(player)
+			if seat.Occupant then
+				return
+			end
+
+			local character = player.Character
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				seat:Sit(humanoid)
+			end
+		end)
+		seat:GetPropertyChangedSignal("Occupant"):Connect(function()
+			entryPrompt.Enabled = seat.Occupant == nil
+		end)
+	end
+
+	car.PrimaryPart = controllerRoot
 	car:PivotTo(CFrame.new(spawnPosition) * CFrame.Angles(0, spawnYaw, 0))
 
 	local serverPivot = Instance.new("CFrameValue")
@@ -401,7 +642,13 @@ local function createCab(world, spawnPose)
 	return car, seat, driftEmitters
 end
 
-local function runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose, fareService)
+local function runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose, options)
+	options = options or {}
+	local Config = options.config or Config
+	local driverMode = options.driverMode or Config.driverMode or "Player"
+	local inputProvider = options.inputProvider
+	local fareService = options.fareService
+
 	local defaultSpawnPose = spawnPose or {
 		position = Config.carSpawn,
 		yaw = 0,
@@ -460,7 +707,7 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 	car:SetAttribute("Cab87LastResetY", position.Y)
 	car:SetAttribute("Cab87GroundContacts", 0)
 	car:SetAttribute("Cab87Grounded", grounded)
-	car:SetAttribute("Cab87HasDriver", false)
+	car:SetAttribute("Cab87HasDriver", driverMode == "AI")
 	car:SetAttribute(Config.carDamageLastEventIdAttribute or "Cab87DamageEventId", 0)
 	car:SetAttribute(Config.carDamageLastEventTypeAttribute or "Cab87DamageEventType", "")
 	car:SetAttribute(Config.carDamageLastEventSeverityAttribute or "Cab87DamageEventSeverity", 0)
@@ -599,7 +846,7 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 		end)
 	end
 
-	driveInputHandler = function(player, action, throttle, steer, drift, airPitch)
+	local function handlePlayerDriveInput(player, action, throttle, steer, drift, airPitch)
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if humanoid ~= seat.Occupant then
@@ -631,6 +878,15 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 			input.drift = throttle
 			driverInput[player] = input
 		end
+	end
+
+	if driverMode == "Player" then
+		driveInputHandlersBySeat[seat] = handlePlayerDriveInput
+		car.Destroying:Connect(function()
+			if driveInputHandlersBySeat[seat] == handlePlayerDriveInput then
+				driveInputHandlersBySeat[seat] = nil
+			end
+		end)
 	end
 
 	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
@@ -1111,7 +1367,13 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 		car:SetAttribute("Cab87LastResetY", position.Y)
 	end
 
-	RunService.Heartbeat:Connect(function(dt)
+	local heartbeatConnection
+	heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
+		if not car.Parent then
+			heartbeatConnection:Disconnect()
+			return
+		end
+
 		dt = math.min(dt, Config.carMaxDeltaTime)
 		elapsedTime += dt
 		fallResetCooldown = math.max(fallResetCooldown - dt, 0)
@@ -1123,16 +1385,40 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 		local forwardSpeed = velocity:Dot(forward)
 		local lateralSpeed = velocity:Dot(right)
 
-		local driverCharacter = seat.Occupant and seat.Occupant.Parent
-		local driver = driverCharacter and Players:GetPlayerFromCharacter(driverCharacter)
-		local input = driver and driverInput[driver]
-		local throttle = input and input.throttle or seat.ThrottleFloat
-		local steer = input and input.steer or seat.SteerFloat
-		local airPitchInput = input and input.airPitch or 0
+		local driver = nil
+		local input = nil
+		if driverMode == "AI" then
+			local providedInput = inputProvider and inputProvider({
+				car = car,
+				seat = seat,
+				position = position,
+				yaw = yaw,
+				velocity = velocity,
+				grounded = grounded,
+				elapsedTime = elapsedTime,
+			}, dt)
+			if type(providedInput) == "table" then
+				input = providedInput
+			end
+		else
+			local driverCharacter = seat.Occupant and seat.Occupant.Parent
+			driver = driverCharacter and Players:GetPlayerFromCharacter(driverCharacter)
+			input = driver and driverInput[driver]
+		end
+
+		local throttle = if input and type(input.throttle) == "number"
+			then math.clamp(input.throttle, -1, 1)
+			else seat.ThrottleFloat
+		local steer = if input and type(input.steer) == "number"
+			then math.clamp(input.steer, -1, 1)
+			else seat.SteerFloat
+		local airPitchInput = if input and type(input.airPitch) == "number"
+			then math.clamp(input.airPitch, -1, 1)
+			else 0
 
 		if seat.Occupant ~= lastOccupant then
 			lastOccupant = seat.Occupant
-			car:SetAttribute("Cab87HasDriver", seat.Occupant ~= nil)
+			car:SetAttribute("Cab87HasDriver", driverMode == "AI" or seat.Occupant ~= nil)
 			grounded = true
 			verticalVelocity = 0
 			visualPitch = 0
@@ -1163,7 +1449,8 @@ local function runCarController(car, seat, driftEmitters, cameraEventRemote, dri
 
 		local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
 		local canDrive = grounded
-		local driftHeld = canDrive and driver ~= nil and input ~= nil and input.drift == true
+		local driftHeld = canDrive and input ~= nil and input.drift == true
+			and (driverMode == "AI" or driver ~= nil)
 		local releasedDrift = canDrive and driftInputWasHeld and not driftHeld
 		local boostTriggered = false
 
@@ -1486,14 +1773,45 @@ end
 
 local driveInputRemote = getOrCreateDriveInputRemote()
 driveInputRemote.OnServerEvent:Connect(function(player, ...)
-	if driveInputHandler then
-		driveInputHandler(player, ...)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seatPart = humanoid and humanoid.SeatPart
+	local handler = seatPart and driveInputHandlersBySeat[seatPart]
+	if handler then
+		handler(player, ...)
 	end
 end)
 getOrCreateShiftStateRemote()
 local cameraEventRemote = getOrCreateCameraEventRemote()
 local debugTuneRemote = getOrCreateDebugTuneRemote()
 runDebugTuning(debugTuneRemote)
+
+local function spawnCarController(options)
+	options = options or {}
+	local carConfig = options.config or createCarConfig(options.profileName, options.configOverrides)
+	local car, seat, driftEmitters = createCab(options.world, options.spawnPose, carConfig)
+	runCarController(
+		car,
+		seat,
+		driftEmitters,
+		options.cameraEventRemote or cameraEventRemote,
+		options.driveSurfaces,
+		options.crashObstacles,
+		options.spawnPose,
+		{
+			config = carConfig,
+			driverMode = options.driverMode or carConfig.driverMode,
+			inputProvider = options.inputProvider,
+			fareService = options.fareService,
+		}
+	)
+
+	return {
+		car = car,
+		seat = seat,
+		config = carConfig,
+	}
+end
 
 local function startShiftService()
 	local runtimeFolder = script.Parent:FindFirstChild("Runtime")
@@ -1602,7 +1920,8 @@ else
 	createGeneratedWorld()
 end
 
-local car, seat, driftEmitters = createCab(world, spawnPose)
+local playerCabConfig = createCarConfig(Config.carDefaultProfileName)
+local car, seat, driftEmitters = createCab(world, spawnPose, playerCabConfig)
 local gpsService = GpsService.start({
 	world = world,
 	car = car,
@@ -1621,7 +1940,20 @@ if shiftService and shiftService.onPhaseChanged then
 		end
 	end)
 end
-runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose, fareService)
+runCarController(
+	car,
+	seat,
+	driftEmitters,
+	cameraEventRemote,
+	driveSurfaces,
+	crashObstacles,
+	spawnPose,
+	{
+		config = playerCabConfig,
+		driverMode = "Player",
+		fareService = fareService,
+	}
+)
 PassengerService.start({
 	world = world,
 	car = car,
