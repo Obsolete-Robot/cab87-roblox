@@ -27,28 +27,17 @@ local function loadSharedModule(moduleName)
 	return result
 end
 
-local function getRemoteNames(config)
-	config = config or loadSharedModule("Config") or {}
+local function getRemoteNames()
 	local Remotes = loadSharedModule("Remotes") or {}
 	local serverToClient = Remotes.serverToClient or {}
 	local clientToServer = Remotes.clientToServer or {}
 
 	return {
-		driveInput = clientToServer.driveInput
-			or config.driveInputRemoteName
-			or DEFAULT_REMOTE_NAMES.driveInput,
-		cameraEvent = serverToClient.cameraEvent
-			or config.cameraEventRemoteName
-			or DEFAULT_REMOTE_NAMES.cameraEvent,
-		debugTune = clientToServer.debugTune
-			or config.debugTuneRemoteName
-			or DEFAULT_REMOTE_NAMES.debugTune,
-		gameplayStateUpdated = serverToClient.gameplayStateUpdated
-			or config.gameplayStateRemoteName
-			or DEFAULT_REMOTE_NAMES.gameplayStateUpdated,
-		shiftStateUpdated = serverToClient.shiftStateUpdated
-			or config.shiftStateRemoteName
-			or DEFAULT_REMOTE_NAMES.shiftStateUpdated,
+		driveInput = clientToServer.driveInput or DEFAULT_REMOTE_NAMES.driveInput,
+		cameraEvent = serverToClient.cameraEvent or DEFAULT_REMOTE_NAMES.cameraEvent,
+		debugTune = clientToServer.debugTune or DEFAULT_REMOTE_NAMES.debugTune,
+		gameplayStateUpdated = serverToClient.gameplayStateUpdated or DEFAULT_REMOTE_NAMES.gameplayStateUpdated,
+		shiftStateUpdated = serverToClient.shiftStateUpdated or DEFAULT_REMOTE_NAMES.shiftStateUpdated,
 	}
 end
 
@@ -77,7 +66,7 @@ end
 function RemoteRegistry.ensure(options)
 	options = options or {}
 	local config = options.config or loadSharedModule("Config") or {}
-	local remoteNames = getRemoteNames(config)
+	local remoteNames = getRemoteNames()
 
 	return {
 		driveInput = getOrCreateRemoteEvent(remoteNames.driveInput),

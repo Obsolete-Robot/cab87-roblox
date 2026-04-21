@@ -6,7 +6,6 @@ local domainConfigs = {
 	{ name = "FareConfig", values = require(script.Parent.FareConfig) },
 	{ name = "ShiftConfig", values = require(script.Parent.ShiftConfig) },
 	{ name = "GameplayStateConfig", values = require(script.Parent.GameplayStateConfig) },
-	{ name = "RemoteConfig", values = require(script.Parent.RemoteConfig) },
 	{ name = "CameraConfig", values = require(script.Parent.CameraConfig) },
 	{ name = "MinimapConfig", values = require(script.Parent.MinimapConfig) },
 	{ name = "DebugTuningConfig", values = require(script.Parent.DebugTuningConfig) },

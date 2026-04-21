@@ -2,7 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
 
 local InputController = {}
 
@@ -54,7 +54,9 @@ function InputController.start()
 		forceSendAccumulator = 0,
 	}
 
-	local driveInputRemote = ReplicatedStorage:WaitForChild(Config.driveInputRemoteName)
+	local driveInputRemoteName = Remotes.clientToServer and Remotes.clientToServer.driveInput
+		or "Cab87DriveInput"
+	local driveInputRemote = ReplicatedStorage:WaitForChild(driveInputRemoteName)
 
 	local function connect(signal, callback)
 		local connection = signal:Connect(callback)
