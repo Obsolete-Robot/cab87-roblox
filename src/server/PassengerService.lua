@@ -2,15 +2,16 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
-local StateContracts = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("StateContracts"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared:WaitForChild("Config"))
+local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
+local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
+local StateContracts = require(Shared:WaitForChild("StateContracts"))
 local PassengerVisuals = require(script.Parent:WaitForChild("PassengerVisuals"))
 
 local PassengerService = {}
 
-local ROAD_SPLINE_DATA_NAME = "AuthoredRoadSplineData"
-local ROAD_SPLINES_NAME = "Splines"
-local ROAD_POINTS_NAME = "RoadPoints"
+local ROAD_SPLINE_DATA_NAME = RoadSplineData.RUNTIME_DATA_NAME
 
 local function getConfigNumber(key, fallback)
 	local value = Config[key]
@@ -40,11 +41,7 @@ local function setAttributeIfChanged(instance, attributeName, value)
 	end
 end
 
-local function horizontalDistance(a, b)
-	local dx = a.X - b.X
-	local dz = a.Z - b.Z
-	return math.sqrt(dx * dx + dz * dz)
-end
+local horizontalDistance = RoadSampling.distanceXZ
 
 local function getPassengerStopReservationDistance()
 	local pickupRadius = math.max(getConfigNumber("passengerPickupRadius", 24), 1)
@@ -63,25 +60,6 @@ local function horizontalUnit(vector)
 	return horizontal / magnitude
 end
 
-local function sortedChildren(parent, className)
-	local children = {}
-	if not parent then
-		return children
-	end
-
-	for _, child in ipairs(parent:GetChildren()) do
-		if not className or child:IsA(className) then
-			table.insert(children, child)
-		end
-	end
-
-	table.sort(children, function(a, b)
-		return a.Name < b.Name
-	end)
-
-	return children
-end
-
 local function addCandidate(candidates, position, minSeparation)
 	for _, candidate in ipairs(candidates) do
 		if horizontalDistance(candidate, position) < minSeparation then
@@ -97,19 +75,15 @@ local function collectAuthoredRoadCandidates(world, minSeparation)
 	local candidates = {}
 	local spacing = math.max(getConfigNumber("passengerStopSpacing", 160), 24)
 	local dataRoot = world:FindFirstChild(ROAD_SPLINE_DATA_NAME)
-	local splinesFolder = dataRoot and dataRoot:FindFirstChild(ROAD_SPLINES_NAME)
-	if not (splinesFolder and splinesFolder:IsA("Folder")) then
+	if not dataRoot then
 		return candidates
 	end
 
-	for _, spline in ipairs(sortedChildren(splinesFolder, "Model")) do
-		local pointsFolder = spline:FindFirstChild(ROAD_POINTS_NAME)
-		local points = sortedChildren(pointsFolder, "Vector3Value")
+	for _, record in ipairs(RoadSplineData.collectSplineRecords(dataRoot)) do
 		local distanceSinceLastStop = spacing
 		local previousPosition = nil
 
-		for _, point in ipairs(points) do
-			local position = point.Value
+		for _, position in ipairs(record.positions) do
 			if previousPosition then
 				distanceSinceLastStop += horizontalDistance(position, previousPosition)
 			end

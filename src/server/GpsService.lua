@@ -2,13 +2,15 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared:WaitForChild("Config"))
+local RoadGraph = require(Shared:WaitForChild("RoadGraph"))
+local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
+local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
 local GpsService = {}
 
-local ROAD_SPLINE_DATA_NAME = "AuthoredRoadSplineData"
-local ROAD_SPLINES_NAME = "Splines"
-local ROAD_POINTS_NAME = "RoadPoints"
+local ROAD_SPLINE_DATA_NAME = RoadSplineData.RUNTIME_DATA_NAME
 local GPS_BASE_TRANSPARENCY_ATTR = "Cab87BaseTransparency"
 
 local function getConfigNumber(key, fallback)
@@ -38,36 +40,7 @@ local function getConfigColor(key, fallback)
 	return fallback
 end
 
-local function horizontalDistance(a, b)
-	local dx = a.X - b.X
-	local dz = a.Z - b.Z
-	return math.sqrt(dx * dx + dz * dz)
-end
-
-local function horizontalDistanceSquared(a, b)
-	local dx = a.X - b.X
-	local dz = a.Z - b.Z
-	return dx * dx + dz * dz
-end
-
-local function sortedChildren(parent, className)
-	local children = {}
-	if not parent then
-		return children
-	end
-
-	for _, child in ipairs(parent:GetChildren()) do
-		if not className or child:IsA(className) then
-			table.insert(children, child)
-		end
-	end
-
-	table.sort(children, function(a, b)
-		return a.Name < b.Name
-	end)
-
-	return children
-end
+local horizontalDistance = RoadSampling.distanceXZ
 
 local function setPartRuntimeDefaults(part)
 	part.Anchored = true
@@ -134,165 +107,32 @@ local function recreateModel(parent, name)
 	return model
 end
 
-local function getRoutePointPosition(point)
-	if point:IsA("BasePart") then
-		return point.Position
-	end
-
-	return point.Value
-end
-
-local function getRouteBucketKey(ix, iz)
-	return tostring(ix) .. ":" .. tostring(iz)
-end
-
 local function newRouteGraph()
-	local mergeDistance = math.max(getConfigNumber("passengerRouteGraphNodeMergeDistance", 5), 0)
-	local bucketSize = math.max(mergeDistance, 4)
-	return {
-		nodes = {},
-		edges = {},
-		edgeLookup = {},
-		nodeBuckets = {},
-		bucketSize = bucketSize,
-		mergeDistance = mergeDistance,
-		maxMergeHeight = math.max(getConfigNumber("passengerRouteGraphMaxMergeHeight", 7), 0),
-	}
+	return RoadGraph.new({
+		mergeDistance = getConfigNumber("passengerRouteGraphNodeMergeDistance", 5),
+		maxMergeHeight = getConfigNumber("passengerRouteGraphMaxMergeHeight", 7),
+	})
 end
 
-local function getNearbyRouteNodeIds(graph, position, radius)
-	local bucketSize = graph.bucketSize
-	local bucketRadius = math.max(1, math.ceil(radius / bucketSize))
-	local centerX = math.floor(position.X / bucketSize)
-	local centerZ = math.floor(position.Z / bucketSize)
-	local nodeIds = {}
-
-	for x = centerX - bucketRadius, centerX + bucketRadius do
-		for z = centerZ - bucketRadius, centerZ + bucketRadius do
-			local bucket = graph.nodeBuckets[getRouteBucketKey(x, z)]
-			if bucket then
-				for _, nodeId in ipairs(bucket) do
-					table.insert(nodeIds, nodeId)
-				end
-			end
-		end
-	end
-
-	return nodeIds
-end
-
-local function addRouteNode(graph, position)
-	local mergeDistance = graph.mergeDistance
-	if mergeDistance > 0 then
-		for _, nodeId in ipairs(getNearbyRouteNodeIds(graph, position, mergeDistance)) do
-			local node = graph.nodes[nodeId]
-			if node
-				and math.abs(node.position.Y - position.Y) <= graph.maxMergeHeight
-				and horizontalDistance(node.position, position) <= mergeDistance
-			then
-				return nodeId
-			end
-		end
-	end
-
-	local nodeId = #graph.nodes + 1
-	graph.nodes[nodeId] = {
-		position = position,
-		neighbors = {},
-	}
-
-	local ix = math.floor(position.X / graph.bucketSize)
-	local iz = math.floor(position.Z / graph.bucketSize)
-	local key = getRouteBucketKey(ix, iz)
-	local bucket = graph.nodeBuckets[key]
-	if not bucket then
-		bucket = {}
-		graph.nodeBuckets[key] = bucket
-	end
-	table.insert(bucket, nodeId)
-
-	return nodeId
-end
-
-local function addRouteEdge(graph, a, b)
-	if not a or not b or a == b then
-		return
-	end
-
-	local key = if a < b then tostring(a) .. ":" .. tostring(b) else tostring(b) .. ":" .. tostring(a)
-	if graph.edgeLookup[key] then
-		return
-	end
-
-	local aPosition = graph.nodes[a].position
-	local bPosition = graph.nodes[b].position
-	local cost = horizontalDistance(aPosition, bPosition)
-	if cost <= 0.1 then
-		return
-	end
-
-	graph.edgeLookup[key] = true
-	table.insert(graph.nodes[a].neighbors, { id = b, cost = cost })
-	table.insert(graph.nodes[b].neighbors, { id = a, cost = cost })
-	table.insert(graph.edges, { a = a, b = b, cost = cost })
-end
-
-local function connectRouteJunction(graph, center, radius)
-	local junctionId = addRouteNode(graph, center)
-	local connectRadius = math.max(radius + getConfigNumber("passengerRouteJunctionExtraRadius", 10), graph.mergeDistance)
-
-	for _, nodeId in ipairs(getNearbyRouteNodeIds(graph, center, connectRadius)) do
-		local node = graph.nodes[nodeId]
-		if nodeId ~= junctionId
-			and node
-			and math.abs(node.position.Y - center.Y) <= graph.maxMergeHeight
-			and horizontalDistance(node.position, center) <= connectRadius
-		then
-			addRouteEdge(graph, junctionId, nodeId)
-		end
-	end
-end
+local addRouteNode = RoadGraph.addNode
+local addRouteEdge = RoadGraph.addEdge
 
 local function buildAuthoredRouteGraph(world)
 	local dataRoot = world:FindFirstChild(ROAD_SPLINE_DATA_NAME)
-	local splinesFolder = dataRoot and dataRoot:FindFirstChild(ROAD_SPLINES_NAME)
-	if not (splinesFolder and splinesFolder:IsA("Folder")) then
+	if not dataRoot then
+		return nil
+	end
+
+	local records = RoadSplineData.collectSplineRecords(dataRoot)
+	if #records == 0 then
 		return nil
 	end
 
 	local graph = newRouteGraph()
-	for _, spline in ipairs(sortedChildren(splinesFolder, "Model")) do
-		local pointsFolder = spline:FindFirstChild(ROAD_POINTS_NAME)
-		local points = sortedChildren(pointsFolder, nil)
-		local firstNodeId = nil
-		local previousNodeId = nil
+	RoadGraph.addSplineRecords(graph, records)
 
-		for _, point in ipairs(points) do
-			if point:IsA("BasePart") or point:IsA("Vector3Value") then
-				local nodeId = addRouteNode(graph, getRoutePointPosition(point))
-				if not firstNodeId then
-					firstNodeId = nodeId
-				end
-
-				if previousNodeId then
-					addRouteEdge(graph, previousNodeId, nodeId)
-				end
-
-				previousNodeId = nodeId
-			end
-		end
-
-		if firstNodeId and previousNodeId and firstNodeId ~= previousNodeId and spline:GetAttribute("ClosedCurve") == true then
-			addRouteEdge(graph, previousNodeId, firstNodeId)
-		end
-	end
-
-	local junctionsFolder = dataRoot:FindFirstChild("Junctions")
-	if junctionsFolder and junctionsFolder:IsA("Folder") then
-		for _, junctionData in ipairs(sortedChildren(junctionsFolder, "Vector3Value")) do
-			local radius = math.max(tonumber(junctionData:GetAttribute("Radius")) or 0, 0)
-			connectRouteJunction(graph, junctionData.Value, radius)
-		end
+	for _, junction in ipairs(RoadSplineData.collectJunctions(dataRoot, { defaultRadius = 0, minRadius = 0 })) do
+		RoadGraph.connectJunction(graph, junction.center, junction.radius, getConfigNumber("passengerRouteJunctionExtraRadius", 10))
 	end
 
 	if #graph.nodes == 0 or #graph.edges == 0 then
@@ -542,232 +382,6 @@ local function getSurfacePosition(service, position, fallbackY)
 	return Vector3.new(position.X, fallbackY or position.Y, position.Z)
 end
 
-local function projectPointToRouteSegment(position, a, b)
-	local dx = b.X - a.X
-	local dz = b.Z - a.Z
-	local lengthSquared = dx * dx + dz * dz
-	if lengthSquared <= 0.001 then
-		return a, 0, horizontalDistance(position, a)
-	end
-
-	local alpha = math.clamp(((position.X - a.X) * dx + (position.Z - a.Z) * dz) / lengthSquared, 0, 1)
-	local projected = Vector3.new(
-		a.X + dx * alpha,
-		a.Y + (b.Y - a.Y) * alpha,
-		a.Z + dz * alpha
-	)
-	return projected, alpha, horizontalDistance(position, projected)
-end
-
-local function findNearestRouteEdge(graph, position)
-	if not graph then
-		return nil
-	end
-
-	local best = nil
-	local bestScore = math.huge
-	for _, edge in ipairs(graph.edges) do
-		local a = graph.nodes[edge.a].position
-		local b = graph.nodes[edge.b].position
-		local projected, alpha, distance = projectPointToRouteSegment(position, a, b)
-		local verticalPenalty = math.abs(position.Y - projected.Y) * 0.08
-		local score = distance + verticalPenalty
-		if score < bestScore then
-			bestScore = score
-			best = {
-				edge = edge,
-				position = projected,
-				alpha = alpha,
-				distance = distance,
-			}
-		end
-	end
-
-	return best
-end
-
-local function findNearestRouteNode(graph, position)
-	local bestNodeId = nil
-	local bestScore = math.huge
-
-	for nodeId, node in ipairs(graph.nodes) do
-		local score = horizontalDistanceSquared(position, node.position)
-		if score < bestScore then
-			bestScore = score
-			bestNodeId = nodeId
-		end
-	end
-
-	return bestNodeId
-end
-
-local function addTemporaryRouteConnection(neighbors, a, b, cost)
-	if not a or not b or a == b then
-		return
-	end
-
-	neighbors[a] = neighbors[a] or {}
-	neighbors[b] = neighbors[b] or {}
-	table.insert(neighbors[a], { id = b, cost = cost })
-	table.insert(neighbors[b], { id = a, cost = cost })
-end
-
-local function connectTemporaryRouteNode(graph, neighbors, nodeId, position)
-	local snap = findNearestRouteEdge(graph, position)
-	if snap then
-		local a = graph.nodes[snap.edge.a].position
-		local b = graph.nodes[snap.edge.b].position
-		addTemporaryRouteConnection(neighbors, nodeId, snap.edge.a, horizontalDistance(snap.position, a))
-		addTemporaryRouteConnection(neighbors, nodeId, snap.edge.b, horizontalDistance(snap.position, b))
-		return snap
-	end
-
-	local nearestNodeId = findNearestRouteNode(graph, position)
-	if nearestNodeId then
-		addTemporaryRouteConnection(neighbors, nodeId, nearestNodeId, horizontalDistance(position, graph.nodes[nearestNodeId].position))
-	end
-
-	return nil
-end
-
-local function heapPush(heap, item)
-	table.insert(heap, item)
-	local index = #heap
-	while index > 1 do
-		local parent = math.floor(index * 0.5)
-		if heap[parent].cost <= item.cost then
-			break
-		end
-		heap[index] = heap[parent]
-		index = parent
-	end
-	heap[index] = item
-end
-
-local function heapPop(heap)
-	local root = heap[1]
-	if not root then
-		return nil
-	end
-
-	local last = table.remove(heap)
-	if #heap == 0 then
-		return root
-	end
-
-	local index = 1
-	while true do
-		local left = index * 2
-		local right = left + 1
-		if left > #heap then
-			break
-		end
-
-		local child = left
-		if right <= #heap and heap[right].cost < heap[left].cost then
-			child = right
-		end
-
-		if heap[child].cost >= last.cost then
-			break
-		end
-
-		heap[index] = heap[child]
-		index = child
-	end
-
-	heap[index] = last
-	return root
-end
-
-local function getRouteNodePosition(graph, temporaryPositions, nodeId)
-	return temporaryPositions[nodeId] or graph.nodes[nodeId].position
-end
-
-local function findRoutePath(graph, startPosition, targetPosition)
-	if not graph or #graph.nodes == 0 or #graph.edges == 0 then
-		return nil
-	end
-
-	local startId = #graph.nodes + 1
-	local targetId = #graph.nodes + 2
-	local temporaryPositions = {
-		[startId] = startPosition,
-		[targetId] = targetPosition,
-	}
-	local temporaryNeighbors = {}
-	local startSnap = connectTemporaryRouteNode(graph, temporaryNeighbors, startId, startPosition)
-	local targetSnap = connectTemporaryRouteNode(graph, temporaryNeighbors, targetId, targetPosition)
-
-	if startSnap then
-		temporaryPositions[startId] = startSnap.position
-	end
-	if targetSnap then
-		temporaryPositions[targetId] = targetSnap.position
-	end
-	if startSnap and targetSnap and startSnap.edge == targetSnap.edge then
-		addTemporaryRouteConnection(
-			temporaryNeighbors,
-			startId,
-			targetId,
-			horizontalDistance(temporaryPositions[startId], temporaryPositions[targetId])
-		)
-	end
-
-	local distances = {
-		[startId] = 0,
-	}
-	local previous = {}
-	local heap = {}
-	heapPush(heap, { id = startId, cost = 0 })
-
-	local function relax(fromId, neighbor)
-		local nextCost = distances[fromId] + neighbor.cost
-		if not distances[neighbor.id] or nextCost < distances[neighbor.id] then
-			distances[neighbor.id] = nextCost
-			previous[neighbor.id] = fromId
-			heapPush(heap, { id = neighbor.id, cost = nextCost })
-		end
-	end
-
-	while #heap > 0 do
-		local current = heapPop(heap)
-		if current and current.cost == distances[current.id] then
-			if current.id == targetId then
-				break
-			end
-
-			if current.id <= #graph.nodes then
-				for _, neighbor in ipairs(graph.nodes[current.id].neighbors) do
-					relax(current.id, neighbor)
-				end
-			end
-
-			for _, neighbor in ipairs(temporaryNeighbors[current.id] or {}) do
-				relax(current.id, neighbor)
-			end
-		end
-	end
-
-	if not distances[targetId] then
-		return nil
-	end
-
-	local reversed = {}
-	local nodeId = targetId
-	while nodeId do
-		table.insert(reversed, getRouteNodePosition(graph, temporaryPositions, nodeId))
-		nodeId = previous[nodeId]
-	end
-
-	local path = {}
-	for i = #reversed, 1, -1 do
-		table.insert(path, reversed[i])
-	end
-
-	return path
-end
-
 local function getHorizontalDirection(fromPosition, toPosition)
 	local delta = Vector3.new(toPosition.X - fromPosition.X, 0, toPosition.Z - fromPosition.Z)
 	if delta.Magnitude <= 0.001 then
@@ -837,7 +451,7 @@ local function updateRouteLine(service, cabPosition, targetPosition)
 		return
 	end
 
-	local routePath = findRoutePath(service.routeGraph, cabPosition, targetPosition)
+	local routePath = RoadGraph.findPath(service.routeGraph, cabPosition, targetPosition)
 	if not routePath or #routePath < 2 then
 		for _, segment in ipairs(guide.segments) do
 			setRouteSegmentVisible(segment, false)
