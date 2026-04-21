@@ -484,6 +484,66 @@ shiftDetailsLabel.TextXAlignment = Enum.TextXAlignment.Left
 shiftDetailsLabel.TextTruncate = Enum.TextTruncate.AtEnd
 shiftDetailsLabel.Parent = shiftPanel
 
+local payoutPanel = Instance.new("Frame")
+payoutPanel.Name = "PayoutPanel"
+payoutPanel.AnchorPoint = Vector2.new(0.5, 0.5)
+payoutPanel.Position = UDim2.fromScale(0.5, 0.5)
+payoutPanel.Size = UDim2.fromOffset(480, 300)
+payoutPanel.BackgroundColor3 = Color3.fromRGB(14, 16, 20)
+payoutPanel.BackgroundTransparency = 0.08
+payoutPanel.BorderSizePixel = 0
+payoutPanel.Visible = false
+payoutPanel.ZIndex = 20
+payoutPanel.Parent = gui
+
+local payoutPanelCorner = Instance.new("UICorner")
+payoutPanelCorner.CornerRadius = UDim.new(0, 10)
+payoutPanelCorner.Parent = payoutPanel
+
+local payoutPanelStroke = Instance.new("UIStroke")
+payoutPanelStroke.Color = Color3.fromRGB(255, 206, 38)
+payoutPanelStroke.Transparency = 0.08
+payoutPanelStroke.Thickness = 2
+payoutPanelStroke.Parent = payoutPanel
+
+local payoutTitle = Instance.new("TextLabel")
+payoutTitle.BackgroundTransparency = 1
+payoutTitle.Position = UDim2.fromOffset(20, 16)
+payoutTitle.Size = UDim2.new(1, -40, 0, 28)
+payoutTitle.Font = Enum.Font.GothamBold
+payoutTitle.Text = "END OF SHIFT PAYOUT"
+payoutTitle.TextColor3 = Color3.fromRGB(255, 206, 38)
+payoutTitle.TextSize = 22
+payoutTitle.TextXAlignment = Enum.TextXAlignment.Left
+payoutTitle.ZIndex = 21
+payoutTitle.Parent = payoutPanel
+
+local payoutBreakdown = Instance.new("TextLabel")
+payoutBreakdown.BackgroundTransparency = 1
+payoutBreakdown.Position = UDim2.fromOffset(20, 58)
+payoutBreakdown.Size = UDim2.new(1, -40, 0, 186)
+payoutBreakdown.Font = Enum.Font.GothamSemibold
+payoutBreakdown.TextColor3 = Color3.fromRGB(240, 243, 247)
+payoutBreakdown.TextSize = 20
+payoutBreakdown.TextXAlignment = Enum.TextXAlignment.Left
+payoutBreakdown.TextYAlignment = Enum.TextYAlignment.Top
+payoutBreakdown.TextWrapped = true
+payoutBreakdown.Text = ""
+payoutBreakdown.ZIndex = 21
+payoutBreakdown.Parent = payoutPanel
+
+local payoutDismiss = Instance.new("TextLabel")
+payoutDismiss.BackgroundTransparency = 1
+payoutDismiss.Position = UDim2.new(0, 20, 1, -34)
+payoutDismiss.Size = UDim2.new(1, -40, 0, 20)
+payoutDismiss.Font = Enum.Font.Gotham
+payoutDismiss.Text = "Press Enter / Space / A to continue"
+payoutDismiss.TextColor3 = Color3.fromRGB(190, 196, 203)
+payoutDismiss.TextSize = 14
+payoutDismiss.TextXAlignment = Enum.TextXAlignment.Left
+payoutDismiss.ZIndex = 21
+payoutDismiss.Parent = payoutPanel
+
 local displayedSpeed = 0
 local lastSpeedText = nil
 local lastSpeedCab = nil
@@ -496,6 +556,14 @@ local lastShiftHeader = nil
 local lastShiftTimer = nil
 local lastShiftMoney = nil
 local lastShiftDetails = nil
+local payoutSummaryState = {
+	eventId = 0,
+	visible = false,
+	dismissAt = 0,
+	displayGross = 0,
+	displayNet = 0,
+	target = nil,
+}
 
 local function formatShiftClock(seconds)
 	local clamped = math.max(0, math.floor((seconds or 0) + 0.5))
@@ -678,10 +746,81 @@ local function updateShiftPanel()
 	shiftPanelStroke.Color = phaseColor
 end
 
+local function hidePayoutPanel()
+	payoutSummaryState.visible = false
+	payoutPanel.Visible = false
+end
+
+local function updatePayoutPanel(dt)
+	local eventId = player:GetAttribute(Config.shiftPayoutSummaryEventIdAttribute)
+	if type(eventId) == "number" and eventId > payoutSummaryState.eventId then
+		payoutSummaryState.eventId = eventId
+		payoutSummaryState.target = {
+			fareTotals = math.max(player:GetAttribute(Config.shiftPayoutFareTotalsAttribute) or 0, 0),
+			bonuses = math.max(player:GetAttribute(Config.shiftPayoutBonusesAttribute) or 0, 0),
+			damagePenalties = math.max(player:GetAttribute(Config.shiftPayoutDamagePenaltiesAttribute) or 0, 0),
+			medallionFeeRate = math.max(player:GetAttribute(Config.shiftPayoutMedallionFeeRateAttribute) or 0, 0),
+			medallionFeeAmount = math.max(player:GetAttribute(Config.shiftPayoutMedallionFeeAmountAttribute) or 0, 0),
+			netDeposit = math.max(player:GetAttribute(Config.shiftPayoutNetDepositAttribute) or 0, 0),
+			grossEarnings = math.max(player:GetAttribute(Config.shiftGrossMoneyAttribute) or 0, 0),
+		}
+		payoutSummaryState.displayGross = 0
+		payoutSummaryState.displayNet = 0
+		payoutSummaryState.visible = true
+		payoutSummaryState.dismissAt = os.clock() + math.max(Config.shiftPayoutDismissSeconds or 10, 3)
+		payoutPanel.Visible = true
+	end
+
+	if not payoutSummaryState.visible or not payoutSummaryState.target then
+		return
+	end
+
+	if os.clock() >= payoutSummaryState.dismissAt then
+		hidePayoutPanel()
+		return
+	end
+
+	local alpha = getAlpha(6, math.min(dt, 0.1))
+	payoutSummaryState.displayGross += (payoutSummaryState.target.grossEarnings - payoutSummaryState.displayGross) * alpha
+	payoutSummaryState.displayNet += (payoutSummaryState.target.netDeposit - payoutSummaryState.displayNet) * alpha
+
+	local grossDisplay = math.floor(payoutSummaryState.displayGross + 0.5)
+	local netDisplay = math.floor(payoutSummaryState.displayNet + 0.5)
+	local feeRatePercent = math.floor(payoutSummaryState.target.medallionFeeRate * 100 + 0.5)
+
+	payoutBreakdown.Text = string.format(
+		"Gross shift earnings:  $%d\nFare totals:            $%d\nBonuses:                +$%d\nDamage penalties:       -$%d\nMedallion fee (%d%%):    -$%d\n\nNet bank deposit:       $%d",
+		grossDisplay,
+		math.floor(payoutSummaryState.target.fareTotals + 0.5),
+		math.floor(payoutSummaryState.target.bonuses + 0.5),
+		math.floor(payoutSummaryState.target.damagePenalties + 0.5),
+		feeRatePercent,
+		math.floor(payoutSummaryState.target.medallionFeeAmount + 0.5),
+		netDisplay
+	)
+
+	local remaining = math.max(0, math.ceil(payoutSummaryState.dismissAt - os.clock()))
+	payoutDismiss.Text = string.format("Press Enter / Space / A to continue (%ds)", remaining)
+end
+
 RunService.RenderStepped:Connect(function(dt)
 	updateSpeedometer(dt)
 	updateFarePanel()
 	updateShiftPanel()
+	updatePayoutPanel(dt)
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed or not payoutSummaryState.visible then
+		return
+	end
+
+	if input.KeyCode == Enum.KeyCode.Return
+		or input.KeyCode == Enum.KeyCode.Space
+		or input.KeyCode == Enum.KeyCode.ButtonA
+	then
+		hidePayoutPanel()
+	end
 end)
 
 local function isDebugPanelAvailable()

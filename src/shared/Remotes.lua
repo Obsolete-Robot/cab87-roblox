@@ -6,6 +6,7 @@ local Remotes = {
 	actions = {
 		shiftStateSnapshot = "Snapshot",
 		shiftStateUpdated = "State",
+		shiftPayoutSummary = "PayoutSummary",
 	},
 }
 
