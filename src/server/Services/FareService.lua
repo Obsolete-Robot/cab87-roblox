@@ -13,13 +13,21 @@ end
 
 function FareService.new(options)
 	options = options or {}
+	local ownerPlayer = options.ownerPlayer
+	local ownerUserId = options.ownerUserId
+	if typeof(ownerPlayer) == "Instance" and ownerPlayer:IsA("Player") then
+		ownerUserId = ownerPlayer.UserId
+	end
+
 	return setmetatable({
 		config = options.config or {},
 		car = options.car,
 		shiftService = options.shiftService,
+		ownerUserId = ownerUserId,
 		activeFare = nil,
 		lastDamageEvent = nil,
 		lastResult = {
+			ownerUserId = ownerUserId,
 			status = "idle",
 			estimatedPayout = 0,
 			activeValue = 0,
@@ -36,7 +44,31 @@ function FareService.new(options)
 	}, FareService)
 end
 
+function FareService:setOwnerPlayer(player)
+	if typeof(player) == "Instance" and player:IsA("Player") then
+		self.ownerUserId = player.UserId
+		return
+	end
+
+	if type(player) == "number" and player == player and player > 0 then
+		self.ownerUserId = math.floor(player)
+	end
+end
+
+function FareService:_getOwnerPlayer()
+	if type(self.ownerUserId) == "number" and self.ownerUserId > 0 then
+		return Players:GetPlayerByUserId(self.ownerUserId)
+	end
+
+	return nil
+end
+
 function FareService:_getDriverPlayer()
+	local ownerPlayer = self:_getOwnerPlayer()
+	if ownerPlayer then
+		return ownerPlayer
+	end
+
 	if not self.car then
 		return nil
 	end
@@ -158,7 +190,11 @@ function FareService:_setLastResult(result)
 	self.lastResult = result
 end
 
-function FareService:beginFare(routeDistance)
+function FareService:beginFare(routeDistance, ownerPlayer)
+	if ownerPlayer then
+		self:setOwnerPlayer(ownerPlayer)
+	end
+
 	local estimate = FareRules.buildEstimate(self.config, routeDistance)
 	self.activeFare = {
 		routeDistance = routeDistance,
@@ -166,11 +202,13 @@ function FareService:beginFare(routeDistance)
 		estimatedPayout = estimate.estimatedPayout,
 		damage = self:_emptyDamageSnapshot(),
 		lastDamageAt = nil,
+		ownerUserId = self.ownerUserId,
 	}
 	self.lastDamageEvent = nil
 	self:_writeDamageAttributes(self.activeFare.damage)
 	self:_setLastResult({
 		status = "active",
+		ownerUserId = self.ownerUserId,
 		estimatedPayout = estimate.estimatedPayout,
 		activeValue = estimate.estimatedPayout,
 		payout = 0,
@@ -194,6 +232,7 @@ function FareService:getActiveSnapshot()
 
 	return {
 		status = "active",
+		ownerUserId = self.activeFare.ownerUserId or self.ownerUserId,
 		estimatedPayout = self.activeFare.estimatedPayout,
 		activeValue = math.max(self.activeFare.estimatedPayout - roundNumber(self.activeFare.damage.points), 0),
 		payout = 0,
@@ -217,7 +256,10 @@ function FareService:completeFare()
 	local damageInput = self.activeFare.damage and self.activeFare.damage.points or 0
 	local result = FareRules.finalizeFare(self.config, self.activeFare.routeDistance, elapsed, damageInput)
 	local payout = result.finalPayout
-	local player = self:_getDriverPlayer()
+	local ownerUserId = self.activeFare.ownerUserId or self.ownerUserId
+	local player = if type(ownerUserId) == "number" and ownerUserId > 0
+		then Players:GetPlayerByUserId(ownerUserId)
+		else self:_getDriverPlayer()
 
 	if self.shiftService and player and self.shiftService.addShiftMoney then
 		self.shiftService:addShiftMoney(player, payout, {
@@ -232,6 +274,7 @@ function FareService:completeFare()
 	self:_writeDamageAttributes(self:_emptyDamageSnapshot())
 	self:_setLastResult({
 		status = "completed",
+		ownerUserId = ownerUserId,
 		estimatedPayout = result.estimatedPayout,
 		activeValue = result.estimatedPayout,
 		payout = payout,
@@ -255,11 +298,13 @@ function FareService:failFare()
 
 	local elapsed = math.max(Workspace:GetServerTimeNow() - self.activeFare.startedAt, 0)
 	local routeDistance = self.activeFare.routeDistance
+	local ownerUserId = self.activeFare.ownerUserId or self.ownerUserId
 	self.activeFare = nil
 	self.lastDamageEvent = nil
 	self:_writeDamageAttributes(self:_emptyDamageSnapshot())
 	self:_setLastResult({
 		status = "failed",
+		ownerUserId = ownerUserId,
 		estimatedPayout = 0,
 		activeValue = 0,
 		payout = 0,
