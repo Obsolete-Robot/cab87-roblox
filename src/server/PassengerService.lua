@@ -854,6 +854,10 @@ local function completeBoarding(service, passenger)
 	passenger.status = "inCab"
 	service.mode = "delivery"
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
+	if service.fareService and service.fareService.beginFare then
+		local routeDistance = horizontalDistance(passenger.pickupStop.position, passenger.targetStop.position)
+		service.fareService:beginFare(routeDistance)
+	end
 	removeWaitingPassengersNearStop(service, passenger.targetStop)
 	setModelVisible(passenger.model, false)
 	setModelVisible(passenger.deliveryMarker, true)
@@ -866,6 +870,10 @@ local function completeDelivery(service)
 	local passenger = service.activePassenger
 	if not passenger then
 		return
+	end
+
+	if service.fareService and service.fareService.completeFare then
+		service.fareService:completeFare()
 	end
 
 	removeWaitingPassengersNearStop(service, passenger.targetStop)
@@ -995,6 +1003,15 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 	local destinationAttr = getConfigString("passengerDestinationAttribute", "Cab87FareDestination")
 	local completedAttr = getConfigString("passengerFareCompletedAttribute", "Cab87FaresCompleted")
 	local waitingAttr = getConfigString("passengerWaitingCountAttribute", "Cab87WaitingPassengers")
+	local fareEstimateAttr = getConfigString("passengerFareEstimateAttribute", "Cab87FareEstimate")
+	local fareActiveAttr = getConfigString("passengerFareActiveValueAttribute", "Cab87FareActiveValue")
+	local farePayoutAttr = getConfigString("passengerFarePayoutAttribute", "Cab87FarePayout")
+	local fareTimeComponentAttr = getConfigString("passengerFareTimeComponentAttribute", "Cab87FareTimeComponent")
+	local fareSpeedBonusAttr = getConfigString("passengerFareSpeedBonusAttribute", "Cab87FareSpeedBonus")
+	local fareDamagePenaltyAttr = getConfigString("passengerFareDamagePenaltyAttribute", "Cab87FareDamagePenalty")
+	local fareResultStatusAttr = getConfigString("passengerFareResultStatusAttribute", "Cab87FareResultStatus")
+	local fareDurationAttr = getConfigString("passengerFareDurationAttribute", "Cab87FareDuration")
+	local fareRouteDistanceAttr = getConfigString("passengerFareRouteDistanceAttribute", "Cab87FareRouteDistance")
 	local stoppedSpeed = getConfigNumber("passengerStoppedSpeed", 1.25)
 	local status = "Find a pickup"
 	local distance = getNearestPickupDistance(service, cabPosition)
@@ -1029,6 +1046,36 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 	service.car:SetAttribute(destinationAttr, destination)
 	service.car:SetAttribute(completedAttr, service.faresCompleted)
 	service.car:SetAttribute(waitingAttr, countWaitingPassengers(service))
+
+	local fareSnapshot = nil
+	if service.fareService and service.fareService.getActiveSnapshot then
+		fareSnapshot = service.fareService:getActiveSnapshot()
+	end
+	if not fareSnapshot and service.fareService and service.fareService.getLastResult then
+		fareSnapshot = service.fareService:getLastResult()
+	end
+
+	fareSnapshot = fareSnapshot or {
+		status = "idle",
+		estimatedPayout = 0,
+		activeValue = 0,
+		payout = 0,
+		timeComponent = 0,
+		speedBonus = 0,
+		damagePenalty = 0,
+		durationSeconds = 0,
+		routeDistance = 0,
+	}
+
+	service.car:SetAttribute(fareEstimateAttr, math.max(math.floor((fareSnapshot.estimatedPayout or 0) + 0.5), 0))
+	service.car:SetAttribute(fareActiveAttr, math.max(math.floor((fareSnapshot.activeValue or 0) + 0.5), 0))
+	service.car:SetAttribute(farePayoutAttr, math.max(math.floor((fareSnapshot.payout or 0) + 0.5), 0))
+	service.car:SetAttribute(fareTimeComponentAttr, math.floor((fareSnapshot.timeComponent or 0) + 0.5))
+	service.car:SetAttribute(fareSpeedBonusAttr, math.max(math.floor((fareSnapshot.speedBonus or 0) + 0.5), 0))
+	service.car:SetAttribute(fareDamagePenaltyAttr, math.max(math.floor((fareSnapshot.damagePenalty or 0) + 0.5), 0))
+	service.car:SetAttribute(fareResultStatusAttr, tostring(fareSnapshot.status or "idle"))
+	service.car:SetAttribute(fareDurationAttr, math.max(fareSnapshot.durationSeconds or 0, 0))
+	service.car:SetAttribute(fareRouteDistanceAttr, math.max(fareSnapshot.routeDistance or 0, 0))
 end
 
 local function updateService(service, dt)
@@ -1101,6 +1148,7 @@ function PassengerService.start(options)
 		elapsedTime = 0,
 		lastDeltaTime = 0,
 		gpsService = options.gpsService,
+		fareService = options.fareService,
 		previousCabPosition = nil,
 		previousCabMotionDirection = nil,
 	}
@@ -1125,6 +1173,9 @@ function PassengerService.start(options)
 
 	function service.stop()
 		clearGpsDestination(service)
+		if service.fareService and service.fareService.failFare and service.mode == "delivery" then
+			service.fareService:failFare()
+		end
 
 		if service.heartbeatConnection then
 			service.heartbeatConnection:Disconnect()
