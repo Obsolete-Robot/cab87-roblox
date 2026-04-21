@@ -896,6 +896,30 @@ local function completeDelivery(service)
 	setPickupMarkersVisible(service, true)
 end
 
+local function failActiveDelivery(service)
+	local passenger = service.activePassenger
+	if not passenger then
+		return
+	end
+
+	removeWaitingPassengersNearStop(service, passenger.targetStop)
+	service.activePassenger = nil
+	service.mode = "pickup"
+	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
+	clearGpsDestination(service)
+
+	destroyPassenger(passenger)
+	for i = #service.passengers, 1, -1 do
+		if service.passengers[i] == passenger then
+			table.remove(service.passengers, i)
+			break
+		end
+	end
+
+	ensureWaitingPassengerCount(service)
+	setPickupMarkersVisible(service, true)
+end
+
 local function finishExiting(service, passenger)
 	if passenger.model and passenger.model.Parent then
 		passenger.model:Destroy()
@@ -1020,6 +1044,14 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 	local distance = getNearestPickupDistance(service, cabPosition)
 	local destination = nil
 
+	local fareSnapshot = nil
+	if service.fareService and service.fareService.getActiveSnapshot then
+		fareSnapshot = service.fareService:getActiveSnapshot()
+	end
+	if not fareSnapshot and service.fareService and service.fareService.getLastResult then
+		fareSnapshot = service.fareService:getLastResult()
+	end
+
 	if service.mode == "boarding" then
 		status = "Passenger boarding"
 		local passenger = service.activePassenger
@@ -1043,20 +1075,20 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 		status = "Stop to board"
 	end
 
+	if service.mode == "pickup" and fareSnapshot then
+		if fareSnapshot.status == "completed" then
+			status = "Fare completed"
+		elseif fareSnapshot.status == "failed" then
+			status = "Fare failed"
+		end
+	end
+
 	service.car:SetAttribute(modeAttr, service.mode)
 	service.car:SetAttribute(statusAttr, status)
 	service.car:SetAttribute(distanceAttr, math.floor(distance + 0.5))
 	service.car:SetAttribute(destinationAttr, destination)
 	service.car:SetAttribute(completedAttr, service.faresCompleted)
 	service.car:SetAttribute(waitingAttr, countWaitingPassengers(service))
-
-	local fareSnapshot = nil
-	if service.fareService and service.fareService.getActiveSnapshot then
-		fareSnapshot = service.fareService:getActiveSnapshot()
-	end
-	if not fareSnapshot and service.fareService and service.fareService.getLastResult then
-		fareSnapshot = service.fareService:getLastResult()
-	end
 
 	fareSnapshot = fareSnapshot or {
 		status = "idle",
@@ -1129,6 +1161,16 @@ local function updateService(service, dt)
 		local passenger = service.activePassenger
 		if passenger and horizontalDistance(cabPosition, passenger.targetStop.position) <= getConfigNumber("passengerDeliveryRadius", 28) then
 			completeDelivery(service)
+		end
+	end
+
+	if service.mode == "delivery" and service.activePassenger and service.fareService then
+		local hasActiveFare = service.fareService.hasActiveFare and service.fareService:hasActiveFare() or false
+		if not hasActiveFare then
+			local lastResult = service.fareService.getLastResult and service.fareService:getLastResult() or nil
+			if lastResult and lastResult.status == "failed" then
+				failActiveDelivery(service)
+			end
 		end
 	end
 

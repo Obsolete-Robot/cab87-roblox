@@ -1614,6 +1614,13 @@ local fareService = FareService.new({
 	car = car,
 	shiftService = shiftService,
 })
+if shiftService and shiftService.onPhaseChanged then
+	shiftService:onPhaseChanged(function(snapshot)
+		if fareService and fareService.onShiftPhaseChanged then
+			fareService:onShiftPhaseChanged(snapshot and snapshot.phase)
+		end
+	end)
+end
 runCarController(car, seat, driftEmitters, cameraEventRemote, driveSurfaces, crashObstacles, spawnPose, fareService)
 PassengerService.start({
 	world = world,

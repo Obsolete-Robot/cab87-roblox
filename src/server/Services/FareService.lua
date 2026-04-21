@@ -36,6 +36,16 @@ function FareService.new(options)
 	}, FareService)
 end
 
+function FareService:_getDriverPlayer()
+	if not self.car then
+		return nil
+	end
+
+	local seat = self.car:FindFirstChild("DriverSeat")
+	local humanoid = seat and seat:IsA("VehicleSeat") and seat.Occupant or nil
+	return humanoid and Players:GetPlayerFromCharacter(humanoid.Parent) or nil
+end
+
 function FareService:_getConfigNumber(name, fallback)
 	local value = self.config and self.config[name]
 	if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
@@ -207,12 +217,7 @@ function FareService:completeFare()
 	local damageInput = self.activeFare.damage and self.activeFare.damage.points or 0
 	local result = FareRules.finalizeFare(self.config, self.activeFare.routeDistance, elapsed, damageInput)
 	local payout = result.finalPayout
-	local player
-	if self.car then
-		local seat = self.car:FindFirstChild("DriverSeat")
-		local humanoid = seat and seat:IsA("VehicleSeat") and seat.Occupant or nil
-		player = humanoid and Players:GetPlayerFromCharacter(humanoid.Parent) or nil
-	end
+	local player = self:_getDriverPlayer()
 
 	if self.shiftService and player and self.shiftService.addShiftMoney then
 		self.shiftService:addShiftMoney(player, payout)
@@ -245,6 +250,7 @@ function FareService:failFare()
 	end
 
 	local elapsed = math.max(Workspace:GetServerTimeNow() - self.activeFare.startedAt, 0)
+	local routeDistance = self.activeFare.routeDistance
 	self.activeFare = nil
 	self.lastDamageEvent = nil
 	self:_writeDamageAttributes(self:_emptyDamageSnapshot())
@@ -260,13 +266,25 @@ function FareService:failFare()
 		damageSeverity = 0,
 		damagePoints = 0,
 		durationSeconds = elapsed,
-		routeDistance = 0,
+		routeDistance = routeDistance,
 	})
 
 	return self.lastResult
 end
 
 function FareService:getLastResult()
+	return self.lastResult
+end
+
+function FareService:hasActiveFare()
+	return self.activeFare ~= nil
+end
+
+function FareService:onShiftPhaseChanged(phase)
+	if phase ~= "Active" and self.activeFare then
+		return self:failFare()
+	end
+
 	return self.lastResult
 end
 
