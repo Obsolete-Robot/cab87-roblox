@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 local CarProfiles = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("CarProfiles"))
+local VehicleCatalog = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VehicleCatalog"))
 
 local CabFactory = {}
 CabFactory.__index = CabFactory
@@ -76,11 +77,32 @@ local function getVector3Config(key, fallback, configSource)
 	return fallback
 end
 
-local function createCarConfig(profileName, overrides, baseConfig, carProfiles)
+local function createCarConfig(profileName, overrides, baseConfig, carProfiles, vehicleCatalog)
 	baseConfig = baseConfig or Config
 	carProfiles = carProfiles or CarProfiles
+	vehicleCatalog = vehicleCatalog or VehicleCatalog
 
-	local profile = carProfiles.get(profileName or baseConfig.carDefaultProfileName)
+	local resolvedTaxi
+	local resolvedTaxiId
+	local fallbackUsed = false
+	if type(profileName) == "string" and vehicleCatalog.isKnownTaxiId(profileName) then
+		resolvedTaxi, resolvedTaxiId, fallbackUsed = vehicleCatalog.resolve(profileName)
+	elseif profileName == nil then
+		resolvedTaxi, resolvedTaxiId, fallbackUsed = vehicleCatalog.resolve(baseConfig.carDefaultTaxiId)
+	else
+		resolvedTaxi, resolvedTaxiId, fallbackUsed = nil, nil, false
+	end
+
+	if fallbackUsed and type(profileName) == "string" then
+		warn(string.format("[cab87] Unknown taxi id %q; using %q", profileName, resolvedTaxiId))
+	end
+
+	local selectedProfileName = profileName
+	if resolvedTaxi then
+		selectedProfileName = resolvedTaxi.profileName or baseConfig.carDefaultProfileName
+	end
+
+	local profile = carProfiles.get(selectedProfileName or baseConfig.carDefaultProfileName)
 	local carConfig = setmetatable({}, {
 		__index = baseConfig,
 	})
@@ -95,7 +117,31 @@ local function createCarConfig(profileName, overrides, baseConfig, carProfiles)
 		end
 	end
 
-	carConfig.profileName = carConfig.profileName or profileName or baseConfig.carDefaultProfileName
+	if resolvedTaxi then
+		local stats = resolvedTaxi.stats or {}
+		carConfig.taxiId = resolvedTaxi.id or resolvedTaxiId
+		carConfig.taxiDisplayName = resolvedTaxi.displayName
+		carConfig.taxiFuelCapacity = stats.fuelCapacity
+		carConfig.taxiUnlockPrice = resolvedTaxi.unlockPrice
+
+		if type(stats.speed) == "number" then
+			carConfig.carMaxForward = stats.speed
+		end
+
+		if type(stats.acceleration) == "number" then
+			carConfig.carAccel = stats.acceleration
+		end
+
+		if type(stats.handling) == "number" then
+			carConfig.carTurnRate = stats.handling
+		end
+
+		if type(resolvedTaxi.modelAssetId) == "number" then
+			carConfig.carModelAssetId = resolvedTaxi.modelAssetId
+		end
+	end
+
+	carConfig.profileName = carConfig.profileName or selectedProfileName or baseConfig.carDefaultProfileName
 	return carConfig
 end
 
@@ -459,11 +505,12 @@ function CabFactory.new(options)
 	return setmetatable({
 		config = options.config or Config,
 		carProfiles = options.carProfiles or CarProfiles,
+		vehicleCatalog = options.vehicleCatalog or VehicleCatalog,
 	}, CabFactory)
 end
 
 function CabFactory:createConfig(profileName, overrides)
-	return createCarConfig(profileName or self.config.carDefaultProfileName, overrides, self.config, self.carProfiles)
+	return createCarConfig(profileName, overrides, self.config, self.carProfiles, self.vehicleCatalog)
 end
 
 function CabFactory:createCab(world, spawnPose, carConfig)

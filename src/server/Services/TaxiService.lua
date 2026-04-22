@@ -1,6 +1,8 @@
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local TaxiController = require(script.Parent.Parent:WaitForChild("Controllers"):WaitForChild("TaxiController"))
+local VehicleCatalog = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VehicleCatalog"))
 
 local OWNER_USER_ID_ATTRIBUTE_FALLBACK = "Cab87OwnerUserId"
 
@@ -280,7 +282,17 @@ function TaxiService:createCab(options)
 
 	local cabFactory = assert(self.cabFactory, "TaxiService requires a cabFactory")
 	local profileName = options.profileName or options.taxiId
-	local carConfig = options.config or cabFactory:createConfig(profileName, options.configOverrides)
+	local configKey = profileName
+	if type(options.taxiId) == "string" then
+		if VehicleCatalog.isKnownTaxiId(options.taxiId) then
+			configKey = options.taxiId
+		else
+			local fallbackTaxiId = VehicleCatalog.getStarterTaxiId()
+			warn(string.format("[cab87] Unknown taxi id %q; falling back to %q", options.taxiId, fallbackTaxiId))
+			configKey = fallbackTaxiId
+		end
+	end
+	local carConfig = options.config or cabFactory:createConfig(configKey, options.configOverrides)
 	local ownerPlayer = options.ownerPlayer
 	local ownerUserId = getOwnerUserId(ownerPlayer) or getOwnerUserId(options.ownerUserId)
 	if ownerUserId and not options.allowDuplicate and self:_getActiveCabForUserId(ownerUserId) then
@@ -290,7 +302,7 @@ function TaxiService:createCab(options)
 	local resolvedSpawnPose = self:_resolveSpawnPose(options.spawnPose, ownerPlayer, carConfig)
 	local car, seat, driftEmitters = cabFactory:createCab(options.world or self.world, resolvedSpawnPose, carConfig)
 	local handle = {
-		taxiId = options.taxiId or profileName,
+		taxiId = carConfig.taxiId or options.taxiId or profileName,
 		car = car,
 		seat = seat,
 		driftEmitters = driftEmitters,

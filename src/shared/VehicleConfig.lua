@@ -5,6 +5,7 @@ local carRideHeight = 2.3
 local VehicleConfig = {
 	carRideHeight = carRideHeight,
 	carSpawn = Vector3.new(0, MapConfig.roadSurfaceY + carRideHeight, 0),
+	carDefaultTaxiId = "starter_taxi",
 	carDefaultProfileName = "PlayerTaxi",
 	carConfigAttributePrefix = "Cab87CarConfig_",
 	carProfileAttribute = "Cab87CarProfile",
