@@ -19,6 +19,7 @@ local CabCompanyService = require(servicesFolder:WaitForChild("CabCompanyService
 local DebugTuningService = require(servicesFolder:WaitForChild("DebugTuningService"))
 local EconomyService = require(servicesFolder:WaitForChild("EconomyService"))
 local FareService = require(servicesFolder:WaitForChild("FareService"))
+local FuelService = require(servicesFolder:WaitForChild("FuelService"))
 local GameplayStateReplicator = require(servicesFolder:WaitForChild("GameplayStateReplicator"))
 local PersistenceService = require(servicesFolder:WaitForChild("PersistenceService"))
 local ShiftService = require(servicesFolder:WaitForChild("ShiftService"))
@@ -93,6 +94,52 @@ local function buildStuntFeatures(world, driveSurfaces)
 	for _, feature in ipairs(features) do
 		trackPart(driveSurfaces, makeRamp(world, feature.base, feature.yaw))
 		trackPart(driveSurfaces, makeLandingPlatform(world, feature.base, feature.yaw))
+	end
+end
+
+local function buildRefuelStations(world)
+	local stations = Config.fuelStations or {}
+	if #stations == 0 then
+		return
+	end
+
+	local root = world:FindFirstChild("RefuelStations")
+	if root and not root:IsA("Folder") then
+		root:Destroy()
+		root = nil
+	end
+	if not root then
+		root = Instance.new("Folder")
+		root.Name = "RefuelStations"
+		root.Parent = world
+	end
+
+	for _, station in ipairs(stations) do
+		if typeof(station.position) == "Vector3" and type(station.id) == "string" and station.id ~= "" then
+			local marker = root:FindFirstChild(station.id)
+			if marker and not marker:IsA("Part") then
+				marker:Destroy()
+				marker = nil
+			end
+			if not marker then
+				marker = Instance.new("Part")
+				marker.Name = station.id
+				marker.Parent = root
+			end
+
+			local radius = station.kind == "cab_company" and Config.fuelCabCompanyStationRadius or Config.fuelRefuelStationRadius
+			marker.Anchored = true
+			marker.CanCollide = false
+			marker.Shape = Enum.PartType.Cylinder
+			marker.Size = Vector3.new(radius * 2, 0.4, radius * 2)
+			marker.CFrame = CFrame.new(station.position + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
+			marker.Transparency = 0.45
+			marker.Material = Enum.Material.Neon
+			marker.Color = station.kind == "cab_company" and Color3.fromRGB(95, 255, 160) or Color3.fromRGB(91, 169, 255)
+			marker:SetAttribute("StationId", station.id)
+			marker:SetAttribute("RefuelMode", station.kind == "cab_company" and "cab_company" or "paid")
+			marker:SetAttribute("DisplayName", station.name or station.id)
+		end
 	end
 end
 
@@ -206,6 +253,7 @@ local function bootstrap()
 		remotes = remotes,
 	})
 	local world, driveSurfaces, crashObstacles, spawnPose = createRuntimeWorld()
+	buildRefuelStations(world)
 	local persistenceService = PersistenceService.new({
 		config = Config,
 		vehicleCatalog = VehicleCatalog,
@@ -241,6 +289,15 @@ local function bootstrap()
 		stopReleasedControllersOnPlayerRemoving = true,
 	})
 	taxiService:start()
+
+	local fuelService = FuelService.new({
+		config = Config,
+		economyService = economyService,
+		taxiService = taxiService,
+		remote = remotes.requestRefuel,
+		stateRemote = remotes.fuelStateUpdated,
+	})
+	fuelService:start()
 
 	local shiftService = startShiftService(remotes, stateReplicator, economyService)
 	local activeCabRuntime = nil

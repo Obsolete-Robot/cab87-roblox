@@ -3,6 +3,7 @@ local Remotes = {
 		driveInput = "Cab87DriveInput",
 		requestCab = "Cab87RequestCab",
 		vehicleInventoryAction = "Cab87VehicleInventoryAction",
+		requestRefuel = "Cab87RequestRefuel",
 		debugTune = "Cab87DebugTune",
 	},
 
@@ -11,6 +12,7 @@ local Remotes = {
 		gameplayStateUpdated = "Cab87GameplayStateUpdated",
 		shiftStateUpdated = "Cab87ShiftStateUpdated",
 		vehicleInventoryUpdated = "Cab87VehicleInventoryUpdated",
+		fuelStateUpdated = "Cab87FuelStateUpdated",
 	},
 
 	actions = {

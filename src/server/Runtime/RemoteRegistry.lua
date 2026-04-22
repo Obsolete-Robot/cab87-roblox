@@ -29,11 +29,13 @@ local function getRemoteNames()
 		driveInput = Remotes.getClientToServerName("driveInput"),
 		requestCab = Remotes.getClientToServerName("requestCab"),
 		vehicleInventoryAction = Remotes.getClientToServerName("vehicleInventoryAction"),
+		requestRefuel = Remotes.getClientToServerName("requestRefuel"),
 		cameraEvent = Remotes.getServerToClientName("cameraEvent"),
 		debugTune = Remotes.getClientToServerName("debugTune"),
 		gameplayStateUpdated = Remotes.getServerToClientName("gameplayStateUpdated"),
 		shiftStateUpdated = Remotes.getServerToClientName("shiftStateUpdated"),
 		vehicleInventoryUpdated = Remotes.getServerToClientName("vehicleInventoryUpdated"),
+		fuelStateUpdated = Remotes.getServerToClientName("fuelStateUpdated"),
 	}
 end
 
@@ -68,6 +70,7 @@ function RemoteRegistry.ensure(options)
 		driveInput = getOrCreateRemoteEvent(remoteNames.driveInput),
 		requestCab = getOrCreateRemoteEvent(remoteNames.requestCab),
 		vehicleInventoryAction = getOrCreateRemoteEvent(remoteNames.vehicleInventoryAction),
+		requestRefuel = getOrCreateRemoteEvent(remoteNames.requestRefuel),
 		cameraEvent = getOrCreateRemoteEvent(remoteNames.cameraEvent),
 		debugTune = if RemoteRegistry.isDebugTuningEnabled(config)
 			then getOrCreateRemoteEvent(remoteNames.debugTune)
@@ -75,6 +78,7 @@ function RemoteRegistry.ensure(options)
 		gameplayStateUpdated = getOrCreateRemoteEvent(remoteNames.gameplayStateUpdated),
 		shiftStateUpdated = getOrCreateRemoteEvent(remoteNames.shiftStateUpdated),
 		vehicleInventoryUpdated = getOrCreateRemoteEvent(remoteNames.vehicleInventoryUpdated),
+		fuelStateUpdated = getOrCreateRemoteEvent(remoteNames.fuelStateUpdated),
 	}
 end
 
