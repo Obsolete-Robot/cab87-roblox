@@ -68,6 +68,11 @@ local function sanitizeString(value)
 	return nil
 end
 
+local function promptNameForAction(action)
+	local normalized = string.lower(tostring(action or "claim"))
+	return "RequestCabPrompt_" .. normalized
+end
+
 local function normalizeAction(action)
 	action = string.lower(tostring(action or "claim"))
 	if action == "reset" or action == "recover" then
@@ -361,7 +366,15 @@ function CabCompanyService:_installPrompt(zoneName, action, actionText)
 		return
 	end
 
-	local prompt = zone:FindFirstChild("RequestCabPrompt")
+	local legacyPrompt = zone:FindFirstChild("RequestCabPrompt")
+	if legacyPrompt and legacyPrompt:IsA("ProximityPrompt") then
+		legacyPrompt:Destroy()
+	elseif legacyPrompt then
+		legacyPrompt:Destroy()
+	end
+
+	local promptName = promptNameForAction(action)
+	local prompt = zone:FindFirstChild(promptName)
 	if prompt and not prompt:IsA("ProximityPrompt") then
 		prompt:Destroy()
 		prompt = nil
@@ -369,7 +382,7 @@ function CabCompanyService:_installPrompt(zoneName, action, actionText)
 
 	if not prompt then
 		prompt = Instance.new("ProximityPrompt")
-		prompt.Name = "RequestCabPrompt"
+		prompt.Name = promptName
 		prompt.Parent = zone
 	end
 
@@ -386,8 +399,15 @@ function CabCompanyService:_installPrompt(zoneName, action, actionText)
 end
 
 function CabCompanyService:_installPrompts()
+	local installedKeys = {}
 	for _, definition in ipairs(PROMPT_DEFINITIONS) do
-		self:_installPrompt(definition.zoneName, definition.action, definition.actionText)
+		local key = string.format("%s|%s", tostring(definition.zoneName), tostring(definition.action))
+		if installedKeys[key] then
+			warn("[cab87] Duplicate prompt definition skipped: " .. key)
+		else
+			installedKeys[key] = true
+			self:_installPrompt(definition.zoneName, definition.action, definition.actionText)
+		end
 	end
 end
 
