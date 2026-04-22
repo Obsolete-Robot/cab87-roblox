@@ -1,4 +1,5 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 
@@ -220,6 +221,7 @@ local function bootstrap()
 		world = world,
 		spawnPose = spawnPose,
 		profileName = Config.carDefaultProfileName,
+		ownerPlayer = Players:GetPlayers()[1],
 	})
 	local car = playerCab.car
 	local gpsService = GpsService.start({
@@ -242,9 +244,10 @@ local function bootstrap()
 	end
 
 	taxiService:startCabController(playerCab, {
-		spawnPose = spawnPose,
+		spawnPose = playerCab.spawnPose or spawnPose,
 		driverMode = "Player",
 		fareService = fareService,
+		ownerPlayer = playerCab.ownerPlayer,
 	})
 
 	passengerService = PassengerService.start({
