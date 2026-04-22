@@ -410,6 +410,20 @@ function TaxiService:spawnCab(options)
 	return handle
 end
 
+function TaxiService:getCabForPlayer(player)
+	if not player then
+		return nil
+	end
+
+	for _, handle in ipairs(self.cabHandles) do
+		if handle.ownerPlayer == player then
+			return handle.car, handle
+		end
+	end
+
+	return nil
+end
+
 function TaxiService:spawnCabForPlayer(player, taxiId, spawnPose, options)
 	options = options or {}
 	local ownerUserId = getOwnerUserId(player)

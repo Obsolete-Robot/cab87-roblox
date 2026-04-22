@@ -45,8 +45,11 @@ local VehicleConfig = {
 	carVisualLandingSpeedAttribute = "Cab87VisualLandingSpeed",
 	carSpeedAttribute = "Cab87Speed",
 	carFuelCurrentAttribute = "Cab87FuelCurrent",
+	carFuelAmountAttribute = "Cab87FuelAmount",
 	carFuelCapacityAttribute = "Cab87FuelCapacity",
 	carFuelOutAttribute = "Cab87FuelOut",
+	carRefuelStateAttribute = "Cab87RefuelState",
+	carRefuelStationAttribute = "Cab87RefuelStation",
 	carFuelCapacity = 100,
 	carFuelIdleBurnPerSecond = 0.8,
 	carFuelDriveBurnPerSecond = 6.0,
@@ -154,6 +157,22 @@ local VehicleConfig = {
 	carLandingBounceSpring = 70,
 	carLandingBounceDamping = 12.0,
 	carLandingBounceMaxOffset = 1.8,
+
+	fuelCapacity = 100,
+	fuelBurnPerSecondAtMaxSpeed = 0.38,
+	fuelOutOfGasSpeedMultiplier = 0.33,
+	fuelPaidRefuelDurationSeconds = 2.5,
+	fuelCabCompanyRefuelDurationSeconds = 6.5,
+	fuelPaidPricePerUnit = 2,
+	fuelRefuelStationRadius = 28,
+	fuelCabCompanyStationRadius = 34,
+	fuelRefuelCancelDistanceBuffer = 8,
+	fuelRefuelCooldownSeconds = 1,
+	fuelStations = {
+		{ id = "gas-west", kind = "paid", name = "West Gas", position = Vector3.new(-320, MapConfig.roadSurfaceY, 0) },
+		{ id = "gas-east", kind = "paid", name = "East Gas", position = Vector3.new(320, MapConfig.roadSurfaceY, 0) },
+		{ id = "cab-company", kind = "cab_company", name = "Cab Company", position = Vector3.new(0, MapConfig.roadSurfaceY, -320) },
+	},
 }
 
 return VehicleConfig
