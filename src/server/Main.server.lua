@@ -508,6 +508,9 @@ local function bootstrap()
 		end
 	end)
 	for _, player in ipairs(Players:GetPlayers()) do
+		player.CharacterAdded:Connect(function(character)
+			placeCharacterAtSpawn(player, character, playerSpawnPose)
+		end)
 		if player.Character then
 			placeCharacterAtSpawn(player, player.Character, playerSpawnPose)
 		end
