@@ -47,6 +47,18 @@ function FuelService:_fuelCapacity()
 	return math.max(toNumber(self.config.fuelCapacity, 100), 1)
 end
 
+function FuelService:_fuelCapacityForPlayer(player)
+	local cab = self.taxiService and self.taxiService:getCabForPlayer(player)
+	if cab then
+		local capacity = toNumber(cab:GetAttribute(self.config.carFuelCapacityAttribute or "Cab87FuelCapacity"), nil)
+		if capacity then
+			return math.max(capacity, 1)
+		end
+	end
+
+	return self:_fuelCapacity()
+end
+
 function FuelService:_buildStations()
 	self.stationsById = {}
 	for _, station in ipairs(self.config.fuelStations or {}) do
@@ -71,7 +83,7 @@ function FuelService:_ensurePlayerState(player)
 	end
 
 	state = {
-		fuel = self:_fuelCapacity(),
+		fuel = self:_fuelCapacityForPlayer(player),
 		state = STATES.idle,
 		stationId = nil,
 		startedAt = 0,
@@ -80,7 +92,7 @@ function FuelService:_ensurePlayerState(player)
 		paidCharged = false,
 		cooldownUntil = 0,
 		nextBurnPublishAt = 0,
-		lastPublishedFuel = self:_fuelCapacity(),
+		lastPublishedFuel = self:_fuelCapacityForPlayer(player),
 	}
 	self.stateByPlayer[player] = state
 	self:_publish(player)
@@ -95,10 +107,12 @@ end
 
 function FuelService:_publish(player, reason)
 	local state = self:_ensurePlayerState(player)
+	local capacity = self:_fuelCapacityForPlayer(player)
+	state.fuel = math.clamp(state.fuel, 0, capacity)
 	local station = state.stationId and self.stationsById[state.stationId] or nil
 	local payload = {
 		fuel = state.fuel,
-		capacity = self:_fuelCapacity(),
+		capacity = capacity,
 		state = state.state,
 		stationId = state.stationId,
 		stationName = station and station.name or nil,
@@ -173,7 +187,8 @@ function FuelService:requestRefuel(player, stationId, mode)
 		return false, "mode_mismatch"
 	end
 
-	local capacity = self:_fuelCapacity()
+	local capacity = self:_fuelCapacityForPlayer(player)
+	state.fuel = math.clamp(state.fuel, 0, capacity)
 	local missing = math.max(capacity - state.fuel, 0)
 	if missing <= 0.01 then
 		state.state = STATES.failed
@@ -225,7 +240,7 @@ end
 function FuelService:_complete(player)
 	local state = self:_ensurePlayerState(player)
 	state.state = STATES.completed
-	state.fuel = self:_fuelCapacity()
+	state.fuel = self:_fuelCapacityForPlayer(player)
 	state.stationId = nil
 	state.startedAt = 0
 	state.completeAt = 0
@@ -276,6 +291,8 @@ function FuelService:_tickFuelBurn(player, state, dt)
 	local speed = toNumber(cab:GetAttribute(self.config.carSpeedAttribute), 0)
 	local maxSpeed = math.max(toNumber(self.config.carMaxForward, 120), 1)
 	local burnRate = math.max(toNumber(self.config.fuelBurnPerSecondAtMaxSpeed, 0.38), 0)
+	local capacity = self:_fuelCapacityForPlayer(player)
+	state.fuel = math.clamp(state.fuel, 0, capacity)
 	local burn = math.clamp(speed / maxSpeed, 0, 1) * burnRate * dt
 	local previousFuel = state.fuel
 	if burn > 0 then
@@ -289,7 +306,7 @@ function FuelService:_tickFuelBurn(player, state, dt)
 	cab:SetAttribute(self.config.carConfigAttributePrefix .. "carMaxForward", maxSpeed * multiplier)
 
 	local now = Workspace:GetServerTimeNow()
-	local crossedLowFuel = previousFuel > (self:_fuelCapacity() * 0.2) and state.fuel <= (self:_fuelCapacity() * 0.2)
+	local crossedLowFuel = previousFuel > (capacity * 0.2) and state.fuel <= (capacity * 0.2)
 	local crossedOutOfFuel = previousFuel > 0.001 and state.fuel <= 0.001
 	if crossedOutOfFuel or crossedLowFuel then
 		self:_publish(player, "fuel_tick")
