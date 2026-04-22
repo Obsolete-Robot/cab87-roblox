@@ -73,6 +73,24 @@ function EconomyService:spendBankMoney(player, amount)
 	return true
 end
 
+function EconomyService:creditBankMoney(player, amount)
+	if type(amount) ~= "number" or amount ~= amount or amount <= 0 then
+		return false, "invalidAmount"
+	end
+
+	local roundedAmount = math.max(math.floor(amount + 0.5), 0)
+	local currentBank = self:_ensurePlayerBank(player)
+	local nextBank = currentBank + roundedAmount
+	self.bankByPlayer[player] = nextBank
+	setAttributeIfNamed(player, self.config.shiftBankMoneyAttribute, nextBank)
+
+	if self.persistenceService and self.persistenceService.setBankMoney then
+		self.persistenceService:setBankMoney(player, nextBank)
+	end
+
+	return true
+end
+
 function EconomyService:createShiftPayoutSummary(player, grossEarnings, breakdown)
 	if not player then
 		return nil

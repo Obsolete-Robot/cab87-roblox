@@ -77,6 +77,7 @@ function FuelService:_ensurePlayerState(player)
 		startedAt = 0,
 		completeAt = 0,
 		price = 0,
+		paidCharged = false,
 		cooldownUntil = 0,
 		nextBurnPublishAt = 0,
 		lastPublishedFuel = self:_fuelCapacity(),
@@ -196,6 +197,7 @@ function FuelService:requestRefuel(player, stationId, mode)
 	state.stationId = station.id
 	state.startedAt = now
 	state.price = price
+	state.paidCharged = price > 0
 	local duration = isCabCompany and toNumber(self.config.fuelCabCompanyRefuelDurationSeconds, 6.5)
 		or toNumber(self.config.fuelPaidRefuelDurationSeconds, 2.5)
 	state.completeAt = now + math.max(duration, 0.2)
@@ -206,11 +208,16 @@ end
 
 function FuelService:_cancel(player, reason)
 	local state = self:_ensurePlayerState(player)
+	if state.paidCharged and state.price > 0 and self.economyService and self.economyService.creditBankMoney then
+		self.economyService:creditBankMoney(player, state.price)
+	end
+
 	state.state = STATES.cancelled
 	state.stationId = nil
 	state.startedAt = 0
 	state.completeAt = 0
 	state.price = 0
+	state.paidCharged = false
 	state.cooldownUntil = Workspace:GetServerTimeNow() + math.max(toNumber(self.config.fuelRefuelCooldownSeconds, 1), 0)
 	self:_publish(player, reason or "cancelled")
 end
@@ -223,6 +230,7 @@ function FuelService:_complete(player)
 	state.startedAt = 0
 	state.completeAt = 0
 	state.price = 0
+	state.paidCharged = false
 	state.cooldownUntil = Workspace:GetServerTimeNow() + math.max(toNumber(self.config.fuelRefuelCooldownSeconds, 1), 0)
 	self:_publish(player, "completed")
 end
