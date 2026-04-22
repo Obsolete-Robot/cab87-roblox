@@ -22,6 +22,7 @@ local function mirrorShiftState(snapshot)
 	setAttributeIfPresent(Config.shiftTimeRemainingAttribute, snapshot.timeRemaining, "number")
 	setAttributeIfPresent(Config.shiftDurationAttribute, snapshot.duration, "number")
 	setAttributeIfPresent(Config.shiftGrossMoneyAttribute, snapshot.grossMoney, "number")
+	setAttributeIfPresent(Config.shiftBankMoneyAttribute, snapshot.bankMoney, "number")
 end
 
 local function mirrorPayoutSummary(summary)
@@ -36,6 +37,7 @@ local function mirrorPayoutSummary(summary)
 	setAttributeIfPresent(Config.shiftPayoutMedallionFeeRateAttribute, summary.medallionFeeRate, "number")
 	setAttributeIfPresent(Config.shiftPayoutMedallionFeeAmountAttribute, summary.medallionFeeAmount, "number")
 	setAttributeIfPresent(Config.shiftPayoutNetDepositAttribute, summary.netDeposit, "number")
+	setAttributeIfPresent(Config.shiftBankMoneyAttribute, summary.bankBalance, "number")
 	setAttributeIfPresent(Config.shiftGrossMoneyAttribute, summary.grossEarnings, "number")
 end
 

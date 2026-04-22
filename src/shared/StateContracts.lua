@@ -53,6 +53,7 @@ export type ShiftHudState = {
 	phaseElapsed: number,
 	serverTime: number,
 	grossMoney: number,
+	bankMoney: number,
 }
 
 export type PayoutSummary = {
@@ -66,6 +67,7 @@ export type PayoutSummary = {
 	medallionFeeRate: number,
 	medallionFeeAmount: number,
 	netDeposit: number,
+	bankBalance: number,
 }
 
 local DEFAULT_FARE = {
@@ -91,6 +93,7 @@ local DEFAULT_SHIFT = {
 	phaseElapsed = 0,
 	serverTime = 0,
 	grossMoney = 0,
+	bankMoney = 0,
 }
 
 local DEFAULT_PAYOUT = {
@@ -104,6 +107,7 @@ local DEFAULT_PAYOUT = {
 	medallionFeeRate = 0,
 	medallionFeeAmount = 0,
 	netDeposit = 0,
+	bankBalance = 0,
 }
 
 local function finiteNumber(value, fallback)
@@ -190,6 +194,7 @@ function StateContracts.normalizeShiftHudState(snapshot)
 		phaseElapsed = nonNegativeNumber(snapshot.phaseElapsed, DEFAULT_SHIFT.phaseElapsed),
 		serverTime = nonNegativeNumber(snapshot.serverTime, DEFAULT_SHIFT.serverTime),
 		grossMoney = nonNegativeNumber(snapshot.grossMoney, DEFAULT_SHIFT.grossMoney),
+		bankMoney = nonNegativeNumber(snapshot.bankMoney, DEFAULT_SHIFT.bankMoney),
 	}
 end
 
@@ -207,6 +212,7 @@ function StateContracts.normalizePayoutSummary(summary)
 		medallionFeeRate = nonNegativeNumber(summary.medallionFeeRate, DEFAULT_PAYOUT.medallionFeeRate),
 		medallionFeeAmount = nonNegativeNumber(summary.medallionFeeAmount, DEFAULT_PAYOUT.medallionFeeAmount),
 		netDeposit = nonNegativeNumber(summary.netDeposit, DEFAULT_PAYOUT.netDeposit),
+		bankBalance = nonNegativeNumber(summary.bankBalance, DEFAULT_PAYOUT.bankBalance),
 	}
 end
 

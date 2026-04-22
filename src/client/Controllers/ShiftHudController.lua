@@ -107,6 +107,7 @@ function ShiftHudController.start(parentGui, cabTracker)
 		local phase = shiftState and shiftState.phase or "Preparing"
 		local timeRemaining = shiftState and shiftState.timeRemaining or 0
 		local shiftMoney = shiftState and shiftState.grossMoney or 0
+		local bankMoney = shiftState and shiftState.bankMoney or 0
 
 		ui.root.Visible = shiftState ~= nil or cab ~= nil
 
@@ -122,8 +123,9 @@ function ShiftHudController.start(parentGui, cabTracker)
 
 		local timerText = formatShiftClock(type(timeRemaining) == "number" and timeRemaining or 0)
 		local moneyText = string.format(
-			"Shift $%d",
-			math.max(0, math.floor((type(shiftMoney) == "number" and shiftMoney or 0) + 0.5))
+			"Shift $%d  •  Bank $%d",
+			math.max(0, math.floor((type(shiftMoney) == "number" and shiftMoney or 0) + 0.5)),
+			math.max(0, math.floor((type(bankMoney) == "number" and bankMoney or 0) + 0.5))
 		)
 
 		local activeFare = fareState and fareState.activeValue or 0
