@@ -2,6 +2,7 @@ local Remotes = {
 	clientToServer = {
 		driveInput = "Cab87DriveInput",
 		requestCab = "Cab87RequestCab",
+		vehicleInventoryAction = "Cab87VehicleInventoryAction",
 		debugTune = "Cab87DebugTune",
 	},
 
@@ -9,6 +10,7 @@ local Remotes = {
 		cameraEvent = "Cab87CameraEvent",
 		gameplayStateUpdated = "Cab87GameplayStateUpdated",
 		shiftStateUpdated = "Cab87ShiftStateUpdated",
+		vehicleInventoryUpdated = "Cab87VehicleInventoryUpdated",
 	},
 
 	actions = {
