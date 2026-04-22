@@ -274,6 +274,7 @@ function FareService:completeFare()
 		self.shiftService:addShiftMoney(player, payout, {
 			fareTotals = result.estimatedPayout,
 			bonuses = math.max(result.timeComponent, 0) + math.max(result.speedBonus, 0),
+			timePenalties = math.max(-result.timeComponent, 0),
 			damagePenalties = math.max(result.damagePenalty, 0),
 		})
 	end
