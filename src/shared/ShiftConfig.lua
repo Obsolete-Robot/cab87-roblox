@@ -10,6 +10,7 @@ local ShiftConfig = {
 	shiftTimeRemainingAttribute = "Cab87ShiftTimeRemaining",
 	shiftDurationAttribute = "Cab87ShiftDuration",
 	shiftGrossMoneyAttribute = "Cab87ShiftGrossMoney",
+	shiftBankMoneyAttribute = "Cab87BankMoney",
 	shiftPayoutSummaryEventIdAttribute = "Cab87ShiftPayoutSummaryEventId",
 	shiftPayoutFareTotalsAttribute = "Cab87ShiftPayoutFareTotals",
 	shiftPayoutBonusesAttribute = "Cab87ShiftPayoutBonuses",

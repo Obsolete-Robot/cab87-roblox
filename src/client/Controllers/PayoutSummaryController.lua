@@ -112,6 +112,7 @@ function PayoutSummaryController.start(parentGui)
 			medallionFeeRate = math.max(summary.medallionFeeRate or 0, 0),
 			medallionFeeAmount = math.max(summary.medallionFeeAmount or 0, 0),
 			netDeposit = math.max(summary.netDeposit or 0, 0),
+			bankBalance = math.max(summary.bankBalance or 0, 0),
 			grossEarnings = math.max(summary.grossEarnings or 0, 0),
 		}
 		state.displayGross = 0
@@ -147,14 +148,15 @@ function PayoutSummaryController.start(parentGui)
 		local feeRatePercent = math.floor(state.target.medallionFeeRate * 100 + 0.5)
 
 		ui.breakdown.Text = string.format(
-			"Gross shift earnings:  $%d\nFare totals:            $%d\nBonuses:                +$%d\nDamage penalties:       -$%d\nMedallion fee (%d%%):    -$%d\n\nNet bank deposit:       $%d",
+			"Gross shift earnings:  $%d\nFare totals:            $%d\nBonuses:                +$%d\nDamage penalties:       -$%d\nMedallion fee (%d%%):    -$%d\n\nNet bank deposit:       $%d\nBank balance:           $%d",
 			grossDisplay,
 			math.floor(state.target.fareTotals + 0.5),
 			math.floor(state.target.bonuses + 0.5),
 			math.floor(state.target.damagePenalties + 0.5),
 			feeRatePercent,
 			math.floor(state.target.medallionFeeAmount + 0.5),
-			netDisplay
+			netDisplay,
+			math.floor(state.target.bankBalance + 0.5)
 		)
 
 		local remaining = math.max(0, math.ceil(state.dismissAt - os.clock()))

@@ -15,6 +15,7 @@ local PassengerService = require(serverRoot:WaitForChild("PassengerService"))
 local RemoteRegistry = require(runtimeFolder:WaitForChild("RemoteRegistry"))
 local CabFactory = require(factoriesFolder:WaitForChild("CabFactory"))
 local DebugTuningService = require(servicesFolder:WaitForChild("DebugTuningService"))
+local EconomyService = require(servicesFolder:WaitForChild("EconomyService"))
 local FareService = require(servicesFolder:WaitForChild("FareService"))
 local GameplayStateReplicator = require(servicesFolder:WaitForChild("GameplayStateReplicator"))
 local ShiftService = require(servicesFolder:WaitForChild("ShiftService"))
@@ -171,11 +172,12 @@ local function createRuntimeWorld()
 	return createGeneratedWorld()
 end
 
-local function startShiftService(remotes, stateReplicator)
+local function startShiftService(remotes, stateReplicator, economyService)
 	local shiftService = ShiftService.new({
 		config = Config,
 		remotes = remotes,
 		stateReplicator = stateReplicator,
+		economyService = economyService,
 	})
 	shiftService:start()
 	return shiftService
@@ -190,6 +192,10 @@ local function bootstrap()
 		remotes = remotes,
 	})
 	local world, driveSurfaces, crashObstacles, spawnPose = createRuntimeWorld()
+	local economyService = EconomyService.new({
+		config = Config,
+	})
+	economyService:start()
 
 	local cabFactory = CabFactory.new({
 		config = Config,
@@ -229,7 +235,7 @@ local function bootstrap()
 		car = car,
 		driveSurfaces = driveSurfaces,
 	})
-	local shiftService = startShiftService(remotes, stateReplicator)
+	local shiftService = startShiftService(remotes, stateReplicator, economyService)
 	local fareService = FareService.new({
 		config = Config,
 		car = car,

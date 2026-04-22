@@ -84,6 +84,7 @@ function ShiftService.new(options)
 		broadcastElapsed = 0,
 		lastBroadcastSecond = nil,
 		phaseChangedListeners = {},
+		economyService = options.economyService,
 	}, ShiftService)
 end
 
@@ -145,7 +146,6 @@ function ShiftService:_ensurePlayerState(player)
 			fareTotals = 0,
 			bonuses = 0,
 			damagePenalties = 0,
-			lastPayoutEventId = 0,
 		}
 		self.playerStates[player] = state
 	end
@@ -189,37 +189,32 @@ function ShiftService:_publishPayoutSummary(player, summary)
 end
 
 function ShiftService:_finalizeShiftPayouts()
-	local medallionFeeRate = math.clamp(getConfigNumber(self.config, "shiftMedallionFeeRate", 0.2), 0, 1)
-
 	for _, player in ipairs(self.players:GetPlayers()) do
 		local state = self:_ensurePlayerState(player)
-		state.lastPayoutEventId = (state.lastPayoutEventId or 0) + 1
+		local summary = nil
 
-		local grossEarnings = math.max(math.floor((state.grossMoney or 0) + 0.5), 0)
-		local fareTotals = math.max(math.floor((state.fareTotals or 0) + 0.5), 0)
-		local bonuses = math.max(math.floor((state.bonuses or 0) + 0.5), 0)
-		local damagePenalties = math.max(math.floor((state.damagePenalties or 0) + 0.5), 0)
-		local medallionFeeAmount = math.max(math.floor(grossEarnings * medallionFeeRate + 0.5), 0)
-		local netDeposit = math.max(grossEarnings - medallionFeeAmount, 0)
+		if self.economyService and self.economyService.createShiftPayoutSummary then
+			summary = self.economyService:createShiftPayoutSummary(player, state.grossMoney, {
+				fareTotals = state.fareTotals,
+				bonuses = state.bonuses,
+				damagePenalties = state.damagePenalties,
+			})
+		end
 
-		local summary = {
-			eventId = state.lastPayoutEventId,
-			grossEarnings = grossEarnings,
-			fareTotals = fareTotals,
-			bonuses = bonuses,
-			damagePenalties = damagePenalties,
-			medallionFeeRate = medallionFeeRate,
-			medallionFeeAmount = medallionFeeAmount,
-			netDeposit = netDeposit,
-		}
-
-		setAttributeIfNamed(player, self.config.shiftPayoutSummaryEventIdAttribute, summary.eventId)
-		setAttributeIfNamed(player, self.config.shiftPayoutFareTotalsAttribute, summary.fareTotals)
-		setAttributeIfNamed(player, self.config.shiftPayoutBonusesAttribute, summary.bonuses)
-		setAttributeIfNamed(player, self.config.shiftPayoutDamagePenaltiesAttribute, summary.damagePenalties)
-		setAttributeIfNamed(player, self.config.shiftPayoutMedallionFeeRateAttribute, summary.medallionFeeRate)
-		setAttributeIfNamed(player, self.config.shiftPayoutMedallionFeeAmountAttribute, summary.medallionFeeAmount)
-		setAttributeIfNamed(player, self.config.shiftPayoutNetDepositAttribute, summary.netDeposit)
+		if not summary then
+			local grossEarnings = math.max(math.floor((state.grossMoney or 0) + 0.5), 0)
+			summary = {
+				eventId = 0,
+				grossEarnings = grossEarnings,
+				fareTotals = math.max(math.floor((state.fareTotals or 0) + 0.5), 0),
+				bonuses = math.max(math.floor((state.bonuses or 0) + 0.5), 0),
+				damagePenalties = math.max(math.floor((state.damagePenalties or 0) + 0.5), 0),
+				medallionFeeRate = 0,
+				medallionFeeAmount = 0,
+				netDeposit = grossEarnings,
+				bankBalance = grossEarnings,
+			}
+		end
 
 		self:_publishPayoutSummary(player, summary)
 	end
@@ -236,6 +231,9 @@ function ShiftService:_getSnapshot(player)
 		phaseElapsed = self.phaseElapsed,
 		serverTime = Workspace:GetServerTimeNow(),
 		grossMoney = playerState and playerState.grossMoney or 0,
+		bankMoney = (player and self.economyService and self.economyService.getBankMoney)
+				and self.economyService:getBankMoney(player)
+			or 0,
 	}
 end
 
