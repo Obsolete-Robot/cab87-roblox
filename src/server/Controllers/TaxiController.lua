@@ -190,7 +190,11 @@ function TaxiController:start()
 	local scrapeDamageCooldown = 0
 	local damageEventSequence = 0
 	local fuelCapacity = math.max((type(Config.taxiFuelCapacity) == "number" and Config.taxiFuelCapacity) or Config.carFuelCapacity or 100, 0)
-	local currentFuel = fuelCapacity
+	local fuelAmountAttribute = Config.carFuelAmountAttribute or "Cab87FuelAmount"
+	local initialFuelAmount = car:GetAttribute(fuelAmountAttribute)
+	local currentFuel = if type(initialFuelAmount) == "number"
+		then math.clamp(initialFuelAmount, 0, fuelCapacity)
+		else fuelCapacity
 
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
@@ -957,22 +961,11 @@ function TaxiController:start()
 		local airPitchInput = if input and type(input.airPitch) == "number"
 			then math.clamp(input.airPitch, -1, 1)
 			else 0
-		local hasDriver = driverMode == "AI" or seat.Occupant ~= nil
-		local fuelOut = currentFuel <= 0
-
-		if hasDriver and currentFuel > 0 then
-			local moveSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
-			local driveBurnMinSpeed = math.max(Config.carFuelMinSpeedForDriveBurn or 0, 0)
-			local speedAlpha = 0
-			if moveSpeed > driveBurnMinSpeed then
-				speedAlpha = math.clamp(moveSpeed / math.max(Config.carMaxForward, 1), 0, 1)
-			end
-
-			local idleBurn = math.max(Config.carFuelIdleBurnPerSecond or 0, 0)
-			local driveBurn = math.max(Config.carFuelDriveBurnPerSecond or 0, 0) * speedAlpha
-			currentFuel = math.max(currentFuel - (idleBurn + driveBurn) * dt, 0)
-			fuelOut = currentFuel <= 0
+		local syncedFuelAmount = car:GetAttribute(fuelAmountAttribute)
+		if type(syncedFuelAmount) == "number" then
+			currentFuel = math.clamp(syncedFuelAmount, 0, fuelCapacity)
 		end
+		local fuelOut = currentFuel <= 0
 
 		car:SetAttribute(Config.carFuelCurrentAttribute or "Cab87FuelCurrent", currentFuel)
 		car:SetAttribute(Config.carFuelOutAttribute or "Cab87FuelOut", fuelOut)
