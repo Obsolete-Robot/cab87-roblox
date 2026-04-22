@@ -230,10 +230,26 @@ local function addZone(parent, zoneName, center, size, color)
 	return zone
 end
 
+local function yawFromCFrame(cframe)
+	local look = cframe.LookVector
+	local horizontal = Vector3.new(look.X, 0, look.Z)
+	if horizontal.Magnitude <= 0.001 then
+		return 0
+	end
+
+	local unit = horizontal.Unit
+	return math.atan2(unit.X, unit.Z)
+end
+
+local function makeYawCFrame(position, yaw)
+	return CFrame.new(position) * CFrame.Angles(0, yaw, 0)
+end
+
 local function createCabCompany(world, cfg)
 	local baseY = cfg.roadSurfaceY or 0
 	local center = cfg.cabCompanyCenter or Vector3.new(0, baseY, -cfg.blockSize * 5)
 	local spawnYaw = cfg.cabCompanySpawnYaw or 0
+	local playerSpawnYaw = cfg.cabCompanyPlayerSpawnYaw or spawnYaw
 	local freeRefuelOffset = cfg.cabCompanyFreeRefuelOffset or Vector3.new(-50, 0, 40)
 	local freeRefuelCenter = Vector3.new(center.X + freeRefuelOffset.X, baseY + 1, center.Z + freeRefuelOffset.Z)
 
@@ -306,8 +322,23 @@ local function createCabCompany(world, cfg)
 		Material = Enum.Material.Neon,
 		CanCollide = false,
 	})
-	spawnPoint.CFrame = CFrame.new(spawnPoint.Position) * CFrame.Angles(0, spawnYaw, 0)
+	spawnPoint.CFrame = makeYawCFrame(spawnPoint.Position, spawnYaw)
 	spawnPoint:SetAttribute("DriveSurface", true)
+
+	local playerSpawnOffset = cfg.cabCompanyPlayerSpawnOffset or Vector3.new(-26, 1, 36)
+	local playerSpawnPoint = makePart(spawnFolder, {
+		Name = "PlayerSpawnPoint",
+		Size = Vector3.new(8, 1, 8),
+		Position = Vector3.new(
+			center.X + playerSpawnOffset.X,
+			baseY + playerSpawnOffset.Y,
+			center.Z + playerSpawnOffset.Z
+		),
+		Color = Color3.fromRGB(115, 214, 255),
+		Material = Enum.Material.Neon,
+		CanCollide = false,
+	})
+	playerSpawnPoint.CFrame = makeYawCFrame(playerSpawnPoint.Position, playerSpawnYaw)
 
 	addZone(
 		zonesFolder,
@@ -341,7 +372,11 @@ local function createCabCompany(world, cfg)
 	world:SetAttribute("CabCompanySpawnX", spawnPoint.Position.X)
 	world:SetAttribute("CabCompanySpawnY", spawnPoint.Position.Y + 1.5)
 	world:SetAttribute("CabCompanySpawnZ", spawnPoint.Position.Z)
-	world:SetAttribute("CabCompanySpawnYaw", spawnYaw)
+	world:SetAttribute("CabCompanySpawnYaw", yawFromCFrame(spawnPoint.CFrame))
+	world:SetAttribute("CabCompanyPlayerSpawnX", playerSpawnPoint.Position.X)
+	world:SetAttribute("CabCompanyPlayerSpawnY", playerSpawnPoint.Position.Y + 3)
+	world:SetAttribute("CabCompanyPlayerSpawnZ", playerSpawnPoint.Position.Z)
+	world:SetAttribute("CabCompanyPlayerSpawnYaw", yawFromCFrame(playerSpawnPoint.CFrame))
 end
 
 function MapGenerator.Clear()
