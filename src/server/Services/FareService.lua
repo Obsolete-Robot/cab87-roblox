@@ -23,9 +23,28 @@ local function getOwnerUserId(owner)
 	return nil
 end
 
+local function getConfigString(config, key, fallback)
+	local value = config and config[key]
+	if type(value) == "string" and value ~= "" then
+		return value
+	end
+
+	return fallback
+end
+
+local function getCabOwnerUserId(config, car)
+	if not car then
+		return nil
+	end
+
+	return getOwnerUserId(car:GetAttribute(getConfigString(config, "carOwnerUserIdAttribute", "Cab87OwnerUserId")))
+end
+
 function FareService.new(options)
 	options = options or {}
-	local ownerUserId = getOwnerUserId(options.ownerPlayer) or getOwnerUserId(options.ownerUserId)
+	local ownerUserId = getCabOwnerUserId(options.config, options.car)
+		or getOwnerUserId(options.ownerPlayer)
+		or getOwnerUserId(options.ownerUserId)
 
 	return setmetatable({
 		config = options.config or {},
@@ -56,11 +75,14 @@ function FareService:setOwnerPlayer(player)
 	self.ownerUserId = getOwnerUserId(player)
 end
 
+function FareService:setOwnerUserId(ownerUserId)
+	self.ownerUserId = getOwnerUserId(ownerUserId)
+end
+
 function FareService:_getOwnerPlayer(ownerUserId)
-	local userId = ownerUserId
-	if userId == nil then
-		userId = self.ownerUserId
-	end
+	local userId = getOwnerUserId(ownerUserId)
+		or getCabOwnerUserId(self.config, self.car)
+		or self.ownerUserId
 
 	if type(userId) == "number" and userId > 0 then
 		return Players:GetPlayerByUserId(userId)
@@ -197,7 +219,9 @@ function FareService:_setLastResult(result)
 end
 
 function FareService:beginFare(routeDistance, ownerPlayer)
-	local ownerUserId = getOwnerUserId(ownerPlayer)
+	local ownerUserId = getCabOwnerUserId(self.config, self.car)
+		or getOwnerUserId(ownerPlayer)
+		or self.ownerUserId
 	self.ownerUserId = ownerUserId
 
 	local estimate = FareRules.buildEstimate(self.config, routeDistance)

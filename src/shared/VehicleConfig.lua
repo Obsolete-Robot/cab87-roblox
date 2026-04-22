@@ -8,6 +8,7 @@ local VehicleConfig = {
 	carDefaultProfileName = "PlayerTaxi",
 	carConfigAttributePrefix = "Cab87CarConfig_",
 	carProfileAttribute = "Cab87CarProfile",
+	carOwnerUserIdAttribute = "Cab87OwnerUserId",
 	carModelAssetId = 75097386419105,
 	carModelAssetScale = 1,
 	carModelAssetYawOffsetDegrees = 0,
