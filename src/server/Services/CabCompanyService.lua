@@ -11,6 +11,7 @@ local REQUEST_ZONE_ATTRIBUTE = "Cab87CabRequestZone"
 local ACTION_ZONES = {
 	claim = { "CabPickupZone" },
 	recover = { "CabPickupZone", "GarageZone", "ServiceDeskZone" },
+	shop = { "GarageZone", "ServiceDeskZone" },
 }
 
 local PROMPT_DEFINITIONS = {
@@ -25,9 +26,19 @@ local PROMPT_DEFINITIONS = {
 		actionText = "Recover Cab",
 	},
 	{
+		zoneName = "GarageZone",
+		action = "shop",
+		actionText = "Open Garage",
+	},
+	{
 		zoneName = "ServiceDeskZone",
 		action = "recover",
 		actionText = "Recover Cab",
+	},
+	{
+		zoneName = "ServiceDeskZone",
+		action = "shop",
+		actionText = "Open Garage",
 	},
 }
 
@@ -57,10 +68,21 @@ local function sanitizeString(value)
 	return nil
 end
 
+local function promptNameForAction(action)
+	local normalized = string.lower(tostring(action or "claim"))
+	return "RequestCabPrompt_" .. normalized
+end
+
 local function normalizeAction(action)
 	action = string.lower(tostring(action or "claim"))
 	if action == "reset" or action == "recover" then
 		return "recover"
+	end
+	if action == "shop" then
+		return "shop"
+	end
+	if action == "claim" then
+		return "claim"
 	end
 
 	return "claim"
@@ -344,7 +366,15 @@ function CabCompanyService:_installPrompt(zoneName, action, actionText)
 		return
 	end
 
-	local prompt = zone:FindFirstChild("RequestCabPrompt")
+	local legacyPrompt = zone:FindFirstChild("RequestCabPrompt")
+	if legacyPrompt and legacyPrompt:IsA("ProximityPrompt") then
+		legacyPrompt:Destroy()
+	elseif legacyPrompt then
+		legacyPrompt:Destroy()
+	end
+
+	local promptName = promptNameForAction(action)
+	local prompt = zone:FindFirstChild(promptName)
 	if prompt and not prompt:IsA("ProximityPrompt") then
 		prompt:Destroy()
 		prompt = nil
@@ -352,7 +382,7 @@ function CabCompanyService:_installPrompt(zoneName, action, actionText)
 
 	if not prompt then
 		prompt = Instance.new("ProximityPrompt")
-		prompt.Name = "RequestCabPrompt"
+		prompt.Name = promptName
 		prompt.Parent = zone
 	end
 
@@ -369,9 +399,35 @@ function CabCompanyService:_installPrompt(zoneName, action, actionText)
 end
 
 function CabCompanyService:_installPrompts()
+	local installedKeys = {}
 	for _, definition in ipairs(PROMPT_DEFINITIONS) do
-		self:_installPrompt(definition.zoneName, definition.action, definition.actionText)
+		local key = string.format("%s|%s", tostring(definition.zoneName), tostring(definition.action))
+		if installedKeys[key] then
+			warn("[cab87] Duplicate prompt definition skipped: " .. key)
+		else
+			installedKeys[key] = true
+			self:_installPrompt(definition.zoneName, definition.action, definition.actionText)
+		end
 	end
+end
+
+function CabCompanyService:isShopEligible(player)
+	local rootPart = getPlayerRootPart(player)
+	if not rootPart then
+		return false
+	end
+
+	local zone = self:_getValidZoneForAction("shop", rootPart.Position)
+	if zone then
+		return true
+	end
+
+	local zonesFolder = self:_getZonesFolder()
+	if not zonesFolder and self:_isInFallbackCompanyRange(rootPart.Position) then
+		return true
+	end
+
+	return false
 end
 
 function CabCompanyService:requestCab(player, actionOrPayload, taxiId)
@@ -385,6 +441,9 @@ function CabCompanyService:requestCab(player, actionOrPayload, taxiId)
 
 	local payload = getPayload(actionOrPayload, taxiId)
 	local action = normalizeAction(payload.action)
+	if action == "shop" then
+		return nil, "invalidAction"
+	end
 	local isValid, reason, zone = self:_validateRequest(player, action)
 	if not isValid then
 		warn("[cab87] Rejected cab request from " .. player.Name .. ": " .. tostring(reason))

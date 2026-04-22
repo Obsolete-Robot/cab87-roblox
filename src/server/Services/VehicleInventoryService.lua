@@ -31,6 +31,7 @@ function VehicleInventoryService.new(options)
 		vehicleCatalog = options.vehicleCatalog,
 		economyService = options.economyService,
 		persistenceService = options.persistenceService,
+		shopAccessValidator = options.shopAccessValidator,
 		connections = {},
 		running = false,
 	}, VehicleInventoryService)
@@ -125,6 +126,29 @@ function VehicleInventoryService:purchaseTaxi(player, taxiId)
 	return true
 end
 
+function VehicleInventoryService:_isShopAccessAllowed(player)
+	local validator = self.shopAccessValidator
+	if type(validator) ~= "function" then
+		return true
+	end
+
+	local ok, allowed = pcall(validator, player)
+	if not ok then
+		warn("[cab87] Shop access validator failed: " .. tostring(allowed))
+		return false
+	end
+
+	return allowed == true
+end
+
+function VehicleInventoryService:setShopAccessValidator(validator)
+	if type(validator) == "function" then
+		self.shopAccessValidator = validator
+	else
+		self.shopAccessValidator = nil
+	end
+end
+
 function VehicleInventoryService:_handleInventoryAction(player, payload)
 	if type(payload) ~= "table" then
 		self:_fireSnapshot(player, "snapshot", false, "invalidPayload")
@@ -135,6 +159,11 @@ function VehicleInventoryService:_handleInventoryAction(player, payload)
 	local taxiId = payload.taxiId
 
 	if action == "purchase" then
+		if not self:_isShopAccessAllowed(player) then
+			self:_fireSnapshot(player, "purchase", false, "outOfCabCompanyZone")
+			return
+		end
+
 		local ok, reason = self:purchaseTaxi(player, taxiId)
 		if not ok then
 			self:_fireSnapshot(player, "purchase", false, reason)
@@ -143,6 +172,11 @@ function VehicleInventoryService:_handleInventoryAction(player, payload)
 	end
 
 	if action == "equip" then
+		if not self:_isShopAccessAllowed(player) then
+			self:_fireSnapshot(player, "equip", false, "outOfCabCompanyZone")
+			return
+		end
+
 		local ok, reason = self:equipTaxi(player, taxiId)
 		if not ok then
 			self:_fireSnapshot(player, "equip", false, reason)

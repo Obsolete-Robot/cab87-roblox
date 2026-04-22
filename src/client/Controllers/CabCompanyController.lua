@@ -53,8 +53,13 @@ function CabCompanyController.start()
 			return
 		end
 
+		local action = prompt:GetAttribute(REQUEST_ACTION_ATTRIBUTE)
+		if action == "shop" then
+			return
+		end
+
 		requestCabRemote:FireServer({
-			action = prompt:GetAttribute(REQUEST_ACTION_ATTRIBUTE),
+			action = action,
 			zoneName = prompt:GetAttribute(REQUEST_ZONE_ATTRIBUTE),
 			taxiId = getSelectedTaxiId(),
 		})
