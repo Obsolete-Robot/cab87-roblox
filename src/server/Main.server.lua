@@ -30,6 +30,75 @@ local function yawToForward(yaw)
 	return Vector3.new(math.sin(yaw), 0, math.cos(yaw))
 end
 
+local function cframeFromPose(pose)
+	local yaw = (pose and pose.yaw) or 0
+	local position = pose and pose.position
+	if typeof(position) ~= "Vector3" then
+		position = Config.carSpawn
+	end
+
+	return CFrame.lookAt(position, position + yawToForward(yaw))
+end
+
+local function yawFromCFrame(cframe)
+	local look = cframe.LookVector
+	local horizontal = Vector3.new(look.X, 0, look.Z)
+	if horizontal.Magnitude <= 0.001 then
+		return 0
+	end
+
+	local unit = horizontal.Unit
+	return math.atan2(unit.X, unit.Z)
+end
+
+local function resolvePlayerSpawnPose(world, fallbackPose)
+	local cabCompanyRoot = world and world:FindFirstChild("CabCompany")
+	local spawnFolder = cabCompanyRoot and cabCompanyRoot:FindFirstChild("Spawn")
+	local spawnPart = spawnFolder and spawnFolder:FindFirstChild("PlayerSpawnPoint")
+	if spawnPart and spawnPart:IsA("BasePart") then
+		return {
+			position = spawnPart.Position + Vector3.new(0, 3, 0),
+			yaw = yawFromCFrame(spawnPart.CFrame),
+		}
+	end
+
+	local x = world and world:GetAttribute("CabCompanyPlayerSpawnX")
+	local y = world and world:GetAttribute("CabCompanyPlayerSpawnY")
+	local z = world and world:GetAttribute("CabCompanyPlayerSpawnZ")
+	local yaw = world and world:GetAttribute("CabCompanyPlayerSpawnYaw")
+	if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+		return {
+			position = Vector3.new(x, y, z),
+			yaw = type(yaw) == "number" and yaw or 0,
+		}
+	end
+
+	return {
+		position = (fallbackPose and fallbackPose.position or Config.carSpawn) + Vector3.new(0, 3, 0),
+		yaw = (fallbackPose and fallbackPose.yaw) or 0,
+	}
+end
+
+local function placeCharacterAtSpawn(player, character, spawnPose)
+	if not (player and character and spawnPose) then
+		return
+	end
+
+	task.defer(function()
+		local rootPart = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 10)
+		if not rootPart then
+			return
+		end
+		if player.Character ~= character or not character.Parent then
+			return
+		end
+
+		character:PivotTo(cframeFromPose(spawnPose))
+		rootPart.AssemblyLinearVelocity = Vector3.zero
+		rootPart.AssemblyAngularVelocity = Vector3.zero
+	end)
+end
+
 local function makePart(parent, props)
 	local part = Instance.new("Part")
 	part.Anchored = true
@@ -428,6 +497,21 @@ local function bootstrap()
 	vehicleInventoryService:setShopAccessValidator(function(player)
 		return cabCompanyService:isShopEligible(player)
 	end)
+
+	local playerSpawnPose = resolvePlayerSpawnPose(world, spawnPose)
+	Players.PlayerAdded:Connect(function(player)
+		player.CharacterAdded:Connect(function(character)
+			placeCharacterAtSpawn(player, character, playerSpawnPose)
+		end)
+		if player.Character then
+			placeCharacterAtSpawn(player, player.Character, playerSpawnPose)
+		end
+	end)
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player.Character then
+			placeCharacterAtSpawn(player, player.Character, playerSpawnPose)
+		end
+	end
 
 	local initialPlayer = Players:GetPlayers()[1]
 	if initialPlayer then
