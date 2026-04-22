@@ -16,6 +16,7 @@ local MapConfig = {
 
 	-- Cab company home base (milestone 2 foundation).
 	cabCompanyCenter = Vector3.new(0, 0.52, -960),
+	cabCompanyFreeRefuelOffset = Vector3.new(-50, 0, 40),
 	cabCompanySpawnYaw = 0,
 	cabCompanyLotSize = Vector3.new(220, 1, 220),
 	cabCompanyBuildingSize = Vector3.new(110, 50, 70),

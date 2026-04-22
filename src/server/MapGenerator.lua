@@ -234,6 +234,8 @@ local function createCabCompany(world, cfg)
 	local baseY = cfg.roadSurfaceY or 0
 	local center = cfg.cabCompanyCenter or Vector3.new(0, baseY, -cfg.blockSize * 5)
 	local spawnYaw = cfg.cabCompanySpawnYaw or 0
+	local freeRefuelOffset = cfg.cabCompanyFreeRefuelOffset or Vector3.new(-50, 0, 40)
+	local freeRefuelCenter = Vector3.new(center.X + freeRefuelOffset.X, baseY + 1, center.Z + freeRefuelOffset.Z)
 
 	local cabCompanyRoot = Instance.new("Folder")
 	cabCompanyRoot.Name = "CabCompany"
@@ -290,7 +292,7 @@ local function createCabCompany(world, cfg)
 	local refuelIsland = makePart(landmarksFolder, {
 		Name = "CabCompanyRefuelIsland",
 		Size = cfg.cabCompanyRefuelIslandSize,
-		Position = Vector3.new(center.X - 50, baseY + cfg.cabCompanyRefuelIslandSize.Y * 0.5, center.Z + 40),
+		Position = Vector3.new(freeRefuelCenter.X, baseY + cfg.cabCompanyRefuelIslandSize.Y * 0.5, freeRefuelCenter.Z),
 		Color = Color3.fromRGB(156, 171, 191),
 		Material = Enum.Material.Concrete,
 	})
@@ -324,7 +326,7 @@ local function createCabCompany(world, cfg)
 	addZone(
 		zonesFolder,
 		"FreeRefuelZone",
-		Vector3.new(center.X - 50, baseY + 1, center.Z + 40),
+		freeRefuelCenter,
 		Vector3.new(34, 2, 30),
 		Color3.fromRGB(113, 255, 147)
 	)

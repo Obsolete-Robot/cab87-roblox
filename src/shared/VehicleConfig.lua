@@ -171,7 +171,16 @@ local VehicleConfig = {
 	fuelStations = {
 		{ id = "gas-west", kind = "paid", name = "West Gas", position = Vector3.new(-320, MapConfig.roadSurfaceY, 0) },
 		{ id = "gas-east", kind = "paid", name = "East Gas", position = Vector3.new(320, MapConfig.roadSurfaceY, 0) },
-		{ id = "cab-company", kind = "cab_company", name = "Cab Company", position = Vector3.new(0, MapConfig.roadSurfaceY, -320) },
+		{
+			id = "cab-company",
+			kind = "cab_company",
+			name = "Cab Company",
+			position = MapConfig.cabCompanyCenter + Vector3.new(
+				MapConfig.cabCompanyFreeRefuelOffset.X,
+				0,
+				MapConfig.cabCompanyFreeRefuelOffset.Z
+			),
+		},
 	},
 }
 
