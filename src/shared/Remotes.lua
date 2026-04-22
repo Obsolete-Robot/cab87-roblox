@@ -1,6 +1,7 @@
 local Remotes = {
 	clientToServer = {
 		driveInput = "Cab87DriveInput",
+		requestCab = "Cab87RequestCab",
 		debugTune = "Cab87DebugTune",
 	},
 

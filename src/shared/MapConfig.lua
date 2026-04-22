@@ -21,6 +21,10 @@ local MapConfig = {
 	cabCompanyBuildingSize = Vector3.new(110, 50, 70),
 	cabCompanyGarageSize = Vector3.new(140, 24, 60),
 	cabCompanyRefuelIslandSize = Vector3.new(48, 8, 26),
+	cabCompanyRequestCooldownSeconds = 0.75,
+	cabCompanyZonePadding = 8,
+	cabCompanyFallbackRequestRadius = 95,
+	cabCompanyPromptMaxActivationDistance = 14,
 }
 
 return MapConfig
