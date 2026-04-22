@@ -6,12 +6,32 @@ local GameplayStateStore = require(script.Parent.Parent:WaitForChild("GameplaySt
 
 local FareHudController = {}
 
+local function roundSignedMoney(value)
+	local numeric = if type(value) == "number" then value else 0
+	if numeric >= 0 then
+		return math.floor(numeric + 0.5)
+	end
+
+	return math.ceil(numeric - 0.5)
+end
+
+local function formatSignedMoney(value)
+	local rounded = roundSignedMoney(value)
+	if rounded > 0 then
+		return string.format("+$%d", rounded)
+	elseif rounded < 0 then
+		return string.format("-$%d", math.abs(rounded))
+	end
+
+	return "$0"
+end
+
 local function createUi(parentGui)
 	local farePanel = Instance.new("Frame")
 	farePanel.Name = "FarePanel"
 	farePanel.AnchorPoint = Vector2.new(0, 1)
 	farePanel.Position = UDim2.new(0, 18, 1, -182)
-	farePanel.Size = UDim2.fromOffset(260, 78)
+	farePanel.Size = UDim2.fromOffset(300, 78)
 	farePanel.BackgroundColor3 = Color3.fromRGB(15, 17, 20)
 	farePanel.BackgroundTransparency = 0.12
 	farePanel.BorderSizePixel = 0
@@ -73,8 +93,9 @@ local function createUi(parentGui)
 	fareCompleted.Font = Enum.Font.GothamSemibold
 	fareCompleted.Text = "FARES 0"
 	fareCompleted.TextColor3 = Color3.fromRGB(210, 213, 218)
-	fareCompleted.TextSize = 12
+	fareCompleted.TextSize = 11
 	fareCompleted.TextXAlignment = Enum.TextXAlignment.Left
+	fareCompleted.TextTruncate = Enum.TextTruncate.AtEnd
 	fareCompleted.Parent = farePanel
 
 	return {
@@ -111,6 +132,8 @@ function FareHudController.start(parentGui, cabTracker)
 		local fareEstimate = fareState and fareState.estimatedPayout or 0
 		local fareActiveValue = fareState and fareState.activeValue or 0
 		local farePayout = fareState and fareState.payout or 0
+		local fareTimeComponent = fareState and fareState.timeComponent or 0
+		local fareSpeedBonus = fareState and fareState.speedBonus or 0
 		local fareResultStatus = fareState and fareState.status or "idle"
 		local fareDamageCollisions = fareState and fareState.damageCollisions or 0
 		local fareDamagePoints = fareState and fareState.damagePoints or 0
@@ -145,6 +168,7 @@ function FareHudController.start(parentGui, cabTracker)
 		local roundedEstimate = math.max(0, math.floor(fareEstimate + 0.5))
 		local roundedActiveValue = math.max(0, math.floor(fareActiveValue + 0.5))
 		local roundedPayout = math.max(0, math.floor(farePayout + 0.5))
+		local roundedSpeedBonus = math.max(0, math.floor(fareSpeedBonus + 0.5))
 		local roundedDamageCollisions = math.max(0, math.floor(fareDamageCollisions + 0.5))
 		local roundedDamagePoints = math.max(0, math.floor(fareDamagePoints + 0.5))
 		local summary = string.format("FARES %d  •  EST $%d", roundedCompleted, roundedEstimate)
@@ -158,7 +182,15 @@ function FareHudController.start(parentGui, cabTracker)
 			)
 		end
 		if fareResultStatus == "completed" then
-			summary = string.format("FARES %d  •  LAST +$%d", roundedCompleted, roundedPayout)
+			summary = string.format(
+				"FARES %d  •  +$%d  •  TIME %s",
+				roundedCompleted,
+				roundedPayout,
+				formatSignedMoney(fareTimeComponent)
+			)
+			if roundedSpeedBonus > 0 then
+				summary = summary .. string.format("  •  FAST +$%d", roundedSpeedBonus)
+			end
 		elseif fareResultStatus == "failed" then
 			summary = string.format("FARES %d  •  LAST FAILED", roundedCompleted)
 		end

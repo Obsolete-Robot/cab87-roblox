@@ -20,7 +20,7 @@ local function createUi(parentGui)
 	payoutPanel.Name = "PayoutPanel"
 	payoutPanel.AnchorPoint = Vector2.new(0.5, 0.5)
 	payoutPanel.Position = UDim2.fromScale(0.5, 0.5)
-	payoutPanel.Size = UDim2.fromOffset(480, 300)
+	payoutPanel.Size = UDim2.fromOffset(500, 326)
 	payoutPanel.BackgroundColor3 = Color3.fromRGB(14, 16, 20)
 	payoutPanel.BackgroundTransparency = 0.08
 	payoutPanel.BorderSizePixel = 0
@@ -53,10 +53,10 @@ local function createUi(parentGui)
 	local payoutBreakdown = Instance.new("TextLabel")
 	payoutBreakdown.BackgroundTransparency = 1
 	payoutBreakdown.Position = UDim2.fromOffset(20, 58)
-	payoutBreakdown.Size = UDim2.new(1, -40, 0, 186)
+	payoutBreakdown.Size = UDim2.new(1, -40, 0, 214)
 	payoutBreakdown.Font = Enum.Font.GothamSemibold
 	payoutBreakdown.TextColor3 = Color3.fromRGB(240, 243, 247)
-	payoutBreakdown.TextSize = 20
+	payoutBreakdown.TextSize = 18
 	payoutBreakdown.TextXAlignment = Enum.TextXAlignment.Left
 	payoutBreakdown.TextYAlignment = Enum.TextYAlignment.Top
 	payoutBreakdown.TextWrapped = true
@@ -108,6 +108,7 @@ function PayoutSummaryController.start(parentGui)
 		state.target = {
 			fareTotals = math.max(summary.fareTotals or 0, 0),
 			bonuses = math.max(summary.bonuses or 0, 0),
+			timePenalties = math.max(summary.timePenalties or 0, 0),
 			damagePenalties = math.max(summary.damagePenalties or 0, 0),
 			medallionFeeRate = math.max(summary.medallionFeeRate or 0, 0),
 			medallionFeeAmount = math.max(summary.medallionFeeAmount or 0, 0),
@@ -148,10 +149,11 @@ function PayoutSummaryController.start(parentGui)
 		local feeRatePercent = math.floor(state.target.medallionFeeRate * 100 + 0.5)
 
 		ui.breakdown.Text = string.format(
-			"Gross shift earnings:  $%d\nFare totals:            $%d\nBonuses:                +$%d\nDamage penalties:       -$%d\nMedallion fee (%d%%):    -$%d\n\nNet bank deposit:       $%d\nBank balance:           $%d",
+			"Gross shift earnings:  $%d\nFare totals:            $%d\nTime/speed bonuses:     +$%d\nTime penalties:         -$%d\nDamage penalties:       -$%d\nMedallion fee (%d%%):    -$%d\n\nNet bank deposit:       $%d\nBank balance:           $%d",
 			grossDisplay,
 			math.floor(state.target.fareTotals + 0.5),
 			math.floor(state.target.bonuses + 0.5),
+			math.floor(state.target.timePenalties + 0.5),
 			math.floor(state.target.damagePenalties + 0.5),
 			feeRatePercent,
 			math.floor(state.target.medallionFeeAmount + 0.5),

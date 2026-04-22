@@ -145,6 +145,7 @@ function ShiftService:_ensurePlayerState(player)
 			grossMoney = 0,
 			fareTotals = 0,
 			bonuses = 0,
+			timePenalties = 0,
 			damagePenalties = 0,
 		}
 		self.playerStates[player] = state
@@ -164,6 +165,7 @@ function ShiftService:_resetShiftTotals()
 		state.grossMoney = 0
 		state.fareTotals = 0
 		state.bonuses = 0
+		state.timePenalties = 0
 		state.damagePenalties = 0
 		setAttributeIfNamed(player, self.config.shiftGrossMoneyAttribute, state.grossMoney)
 	end
@@ -197,6 +199,7 @@ function ShiftService:_finalizeShiftPayouts()
 			summary = self.economyService:createShiftPayoutSummary(player, state.grossMoney, {
 				fareTotals = state.fareTotals,
 				bonuses = state.bonuses,
+				timePenalties = state.timePenalties,
 				damagePenalties = state.damagePenalties,
 			})
 		end
@@ -208,6 +211,7 @@ function ShiftService:_finalizeShiftPayouts()
 				grossEarnings = grossEarnings,
 				fareTotals = math.max(math.floor((state.fareTotals or 0) + 0.5), 0),
 				bonuses = math.max(math.floor((state.bonuses or 0) + 0.5), 0),
+				timePenalties = math.max(math.floor((state.timePenalties or 0) + 0.5), 0),
 				damagePenalties = math.max(math.floor((state.damagePenalties or 0) + 0.5), 0),
 				medallionFeeRate = 0,
 				medallionFeeAmount = 0,
@@ -363,6 +367,9 @@ function ShiftService:addShiftMoney(player, amount, breakdown)
 		end
 		if type(breakdown.bonuses) == "number" then
 			state.bonuses = math.max((state.bonuses or 0) + breakdown.bonuses, 0)
+		end
+		if type(breakdown.timePenalties) == "number" then
+			state.timePenalties = math.max((state.timePenalties or 0) + breakdown.timePenalties, 0)
 		end
 		if type(breakdown.damagePenalties) == "number" then
 			state.damagePenalties = math.max((state.damagePenalties or 0) + breakdown.damagePenalties, 0)

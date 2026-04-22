@@ -55,6 +55,7 @@ function EconomyService:createShiftPayoutSummary(player, grossEarnings, breakdow
 	local gross = math.max(math.floor((grossEarnings or 0) + 0.5), 0)
 	local fareTotals = math.max(math.floor(((breakdown and breakdown.fareTotals) or 0) + 0.5), 0)
 	local bonuses = math.max(math.floor(((breakdown and breakdown.bonuses) or 0) + 0.5), 0)
+	local timePenalties = math.max(math.floor(((breakdown and breakdown.timePenalties) or 0) + 0.5), 0)
 	local damagePenalties = math.max(math.floor(((breakdown and breakdown.damagePenalties) or 0) + 0.5), 0)
 	local medallionFeeAmount = math.max(math.floor(gross * medallionFeeRate + 0.5), 0)
 	local netDeposit = math.max(gross - medallionFeeAmount, 0)
@@ -68,6 +69,7 @@ function EconomyService:createShiftPayoutSummary(player, grossEarnings, breakdow
 	setAttributeIfNamed(player, self.config.shiftPayoutSummaryEventIdAttribute, eventId)
 	setAttributeIfNamed(player, self.config.shiftPayoutFareTotalsAttribute, fareTotals)
 	setAttributeIfNamed(player, self.config.shiftPayoutBonusesAttribute, bonuses)
+	setAttributeIfNamed(player, self.config.shiftPayoutTimePenaltiesAttribute, timePenalties)
 	setAttributeIfNamed(player, self.config.shiftPayoutDamagePenaltiesAttribute, damagePenalties)
 	setAttributeIfNamed(player, self.config.shiftPayoutMedallionFeeRateAttribute, medallionFeeRate)
 	setAttributeIfNamed(player, self.config.shiftPayoutMedallionFeeAmountAttribute, medallionFeeAmount)
@@ -78,6 +80,7 @@ function EconomyService:createShiftPayoutSummary(player, grossEarnings, breakdow
 		grossEarnings = gross,
 		fareTotals = fareTotals,
 		bonuses = bonuses,
+		timePenalties = timePenalties,
 		damagePenalties = damagePenalties,
 		medallionFeeRate = medallionFeeRate,
 		medallionFeeAmount = medallionFeeAmount,

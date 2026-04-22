@@ -14,6 +14,7 @@ local ShiftConfig = {
 	shiftPayoutSummaryEventIdAttribute = "Cab87ShiftPayoutSummaryEventId",
 	shiftPayoutFareTotalsAttribute = "Cab87ShiftPayoutFareTotals",
 	shiftPayoutBonusesAttribute = "Cab87ShiftPayoutBonuses",
+	shiftPayoutTimePenaltiesAttribute = "Cab87ShiftPayoutTimePenalties",
 	shiftPayoutDamagePenaltiesAttribute = "Cab87ShiftPayoutDamagePenalties",
 	shiftPayoutMedallionFeeRateAttribute = "Cab87ShiftPayoutMedallionFeeRate",
 	shiftPayoutMedallionFeeAmountAttribute = "Cab87ShiftPayoutMedallionFeeAmount",
