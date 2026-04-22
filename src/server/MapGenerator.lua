@@ -214,6 +214,134 @@ local function withBounds(sortedRoads, extent)
 	return out
 end
 
+local function addZone(parent, zoneName, center, size, color)
+	local zone = makePart(parent, {
+		Name = zoneName,
+		Size = size,
+		Position = center,
+		Color = color,
+		Material = Enum.Material.Neon,
+		Transparency = 0.45,
+		CanCollide = false,
+		CanTouch = false,
+	})
+	zone:SetAttribute("ServiceZone", true)
+	zone:SetAttribute("ZoneType", zoneName)
+	return zone
+end
+
+local function createCabCompany(world, cfg)
+	local baseY = cfg.roadSurfaceY or 0
+	local center = cfg.cabCompanyCenter or Vector3.new(0, baseY, -cfg.blockSize * 5)
+	local spawnYaw = cfg.cabCompanySpawnYaw or 0
+
+	local cabCompanyRoot = Instance.new("Folder")
+	cabCompanyRoot.Name = "CabCompany"
+	cabCompanyRoot.Parent = world
+
+	local landmarksFolder = Instance.new("Folder")
+	landmarksFolder.Name = "Landmarks"
+	landmarksFolder.Parent = cabCompanyRoot
+
+	local zonesFolder = Instance.new("Folder")
+	zonesFolder.Name = "ServiceZones"
+	zonesFolder.Parent = cabCompanyRoot
+
+	local spawnFolder = Instance.new("Folder")
+	spawnFolder.Name = "Spawn"
+	spawnFolder.Parent = cabCompanyRoot
+
+	local lot = makePart(landmarksFolder, {
+		Name = "CabCompanyLot",
+		Size = cfg.cabCompanyLotSize,
+		Position = Vector3.new(center.X, baseY + 0.1, center.Z),
+		Color = Color3.fromRGB(53, 56, 64),
+		Material = Enum.Material.Asphalt,
+	})
+	lot:SetAttribute("DriveSurface", true)
+
+	local hq = makePart(landmarksFolder, {
+		Name = "CabCompanyHQ",
+		Size = cfg.cabCompanyBuildingSize,
+		Position = Vector3.new(center.X, baseY + cfg.cabCompanyBuildingSize.Y * 0.5, center.Z - 58),
+		Color = Color3.fromRGB(228, 189, 64),
+		Material = Enum.Material.Concrete,
+	})
+	hq:SetAttribute("CrashObstacle", true)
+
+	local garage = makePart(landmarksFolder, {
+		Name = "CabCompanyGarage",
+		Size = cfg.cabCompanyGarageSize,
+		Position = Vector3.new(center.X + 45, baseY + cfg.cabCompanyGarageSize.Y * 0.5, center.Z + 52),
+		Color = Color3.fromRGB(66, 73, 86),
+		Material = Enum.Material.Metal,
+	})
+	garage:SetAttribute("CrashObstacle", true)
+
+	local beacon = makePart(landmarksFolder, {
+		Name = "CabCompanyBeacon",
+		Size = Vector3.new(8, 90, 8),
+		Position = Vector3.new(center.X - 72, baseY + 45, center.Z - 80),
+		Color = Color3.fromRGB(94, 203, 255),
+		Material = Enum.Material.Neon,
+	})
+	beacon:SetAttribute("CrashObstacle", true)
+
+	local refuelIsland = makePart(landmarksFolder, {
+		Name = "CabCompanyRefuelIsland",
+		Size = cfg.cabCompanyRefuelIslandSize,
+		Position = Vector3.new(center.X - 50, baseY + cfg.cabCompanyRefuelIslandSize.Y * 0.5, center.Z + 40),
+		Color = Color3.fromRGB(156, 171, 191),
+		Material = Enum.Material.Concrete,
+	})
+	refuelIsland:SetAttribute("CrashObstacle", true)
+
+	local spawnPoint = makePart(spawnFolder, {
+		Name = "CabSpawnPoint",
+		Size = Vector3.new(6, 1, 6),
+		Position = Vector3.new(center.X, baseY + 1, center.Z + 75),
+		Color = Color3.fromRGB(255, 205, 69),
+		Material = Enum.Material.Neon,
+		CanCollide = false,
+	})
+	spawnPoint.CFrame = CFrame.new(spawnPoint.Position) * CFrame.Angles(0, spawnYaw, 0)
+	spawnPoint:SetAttribute("DriveSurface", true)
+
+	addZone(
+		zonesFolder,
+		"CabPickupZone",
+		Vector3.new(center.X, baseY + 1, center.Z + 55),
+		Vector3.new(42, 2, 30),
+		Color3.fromRGB(255, 213, 82)
+	)
+	addZone(
+		zonesFolder,
+		"GarageZone",
+		Vector3.new(center.X + 45, baseY + 1, center.Z + 52),
+		Vector3.new(52, 2, 40),
+		Color3.fromRGB(116, 209, 255)
+	)
+	addZone(
+		zonesFolder,
+		"FreeRefuelZone",
+		Vector3.new(center.X - 50, baseY + 1, center.Z + 40),
+		Vector3.new(34, 2, 30),
+		Color3.fromRGB(113, 255, 147)
+	)
+	addZone(
+		zonesFolder,
+		"ServiceDeskZone",
+		Vector3.new(center.X, baseY + 1, center.Z - 20),
+		Vector3.new(48, 2, 36),
+		Color3.fromRGB(234, 126, 255)
+	)
+
+	world:SetAttribute("CabCompanySpawnX", spawnPoint.Position.X)
+	world:SetAttribute("CabCompanySpawnY", spawnPoint.Position.Y + 1.5)
+	world:SetAttribute("CabCompanySpawnZ", spawnPoint.Position.Z)
+	world:SetAttribute("CabCompanySpawnYaw", spawnYaw)
+end
+
 function MapGenerator.Clear()
 	local old = Workspace:FindFirstChild(WORLD_NAME)
 	if old then
@@ -295,6 +423,8 @@ function MapGenerator.Generate(overrides)
 			end
 		end
 	end
+
+	createCabCompany(world, cfg)
 
 	return world, cfg
 end

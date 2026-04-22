@@ -104,7 +104,7 @@ local function collectWorldParts(world)
 				or item.Name == "Road_EW"
 			then
 				table.insert(driveSurfaces, item)
-			elseif item.Name == "Building" then
+			elseif item.Name == "Building" or item:GetAttribute("CrashObstacle") == true then
 				table.insert(crashObstacles, item)
 			end
 		end
@@ -126,10 +126,20 @@ local function createGeneratedWorld()
 	local driveSurfaces, crashObstacles = collectWorldParts(world)
 	buildStuntFeatures(world, driveSurfaces)
 
-	return world, driveSurfaces, crashObstacles, {
+	local spawnPose = {
 		position = Config.carSpawn,
 		yaw = 0,
 	}
+	local spawnX = world:GetAttribute("CabCompanySpawnX")
+	local spawnY = world:GetAttribute("CabCompanySpawnY")
+	local spawnZ = world:GetAttribute("CabCompanySpawnZ")
+	local spawnYaw = world:GetAttribute("CabCompanySpawnYaw")
+	if type(spawnX) == "number" and type(spawnY) == "number" and type(spawnZ) == "number" then
+		spawnPose.position = Vector3.new(spawnX, spawnY, spawnZ)
+		spawnPose.yaw = type(spawnYaw) == "number" and spawnYaw or 0
+	end
+
+	return world, driveSurfaces, crashObstacles, spawnPose
 end
 
 local function createRuntimeWorld()
