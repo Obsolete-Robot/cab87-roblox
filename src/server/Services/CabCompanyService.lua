@@ -11,6 +11,7 @@ local REQUEST_ZONE_ATTRIBUTE = "Cab87CabRequestZone"
 local ACTION_ZONES = {
 	claim = { "CabPickupZone" },
 	recover = { "CabPickupZone", "GarageZone", "ServiceDeskZone" },
+	shop = { "GarageZone", "ServiceDeskZone" },
 }
 
 local PROMPT_DEFINITIONS = {
@@ -25,9 +26,19 @@ local PROMPT_DEFINITIONS = {
 		actionText = "Recover Cab",
 	},
 	{
+		zoneName = "GarageZone",
+		action = "shop",
+		actionText = "Open Garage",
+	},
+	{
 		zoneName = "ServiceDeskZone",
 		action = "recover",
 		actionText = "Recover Cab",
+	},
+	{
+		zoneName = "ServiceDeskZone",
+		action = "shop",
+		actionText = "Open Garage",
 	},
 }
 
@@ -61,6 +72,12 @@ local function normalizeAction(action)
 	action = string.lower(tostring(action or "claim"))
 	if action == "reset" or action == "recover" then
 		return "recover"
+	end
+	if action == "shop" then
+		return "shop"
+	end
+	if action == "claim" then
+		return "claim"
 	end
 
 	return "claim"
@@ -374,6 +391,25 @@ function CabCompanyService:_installPrompts()
 	end
 end
 
+function CabCompanyService:isShopEligible(player)
+	local rootPart = getPlayerRootPart(player)
+	if not rootPart then
+		return false
+	end
+
+	local zone = self:_getValidZoneForAction("shop", rootPart.Position)
+	if zone then
+		return true
+	end
+
+	local zonesFolder = self:_getZonesFolder()
+	if not zonesFolder and self:_isInFallbackCompanyRange(rootPart.Position) then
+		return true
+	end
+
+	return false
+end
+
 function CabCompanyService:requestCab(player, actionOrPayload, taxiId)
 	if not (typeof(player) == "Instance" and player:IsA("Player")) then
 		return nil, "invalidPlayer"
@@ -385,6 +421,9 @@ function CabCompanyService:requestCab(player, actionOrPayload, taxiId)
 
 	local payload = getPayload(actionOrPayload, taxiId)
 	local action = normalizeAction(payload.action)
+	if action == "shop" then
+		return nil, "invalidAction"
+	end
 	local isValid, reason, zone = self:_validateRequest(player, action)
 	if not isValid then
 		warn("[cab87] Rejected cab request from " .. player.Name .. ": " .. tostring(reason))

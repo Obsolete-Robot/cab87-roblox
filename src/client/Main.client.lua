@@ -10,6 +10,7 @@ local FareHudController = require(controllersFolder:WaitForChild("FareHudControl
 local InputController = require(controllersFolder:WaitForChild("InputController"))
 local PayoutSummaryController = require(controllersFolder:WaitForChild("PayoutSummaryController"))
 local ShiftHudController = require(controllersFolder:WaitForChild("ShiftHudController"))
+local ShopController = require(controllersFolder:WaitForChild("ShopController"))
 local SpeedometerController = require(controllersFolder:WaitForChild("SpeedometerController"))
 local MinimapController = require(script.Parent:WaitForChild("MinimapController"))
 
@@ -48,6 +49,7 @@ startController(MinimapController, gui, DrivenCabTracker)
 startController(SpeedometerController, gui, DrivenCabTracker)
 startController(FareHudController, gui, DrivenCabTracker)
 startController(ShiftHudController, gui, DrivenCabTracker)
+startController(ShopController, gui)
 startController(PayoutSummaryController, gui)
 startController(DebugTuningPanel, gui)
 

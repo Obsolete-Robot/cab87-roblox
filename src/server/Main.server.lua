@@ -425,6 +425,9 @@ local function bootstrap()
 		end,
 	})
 	cabCompanyService:start()
+	vehicleInventoryService:setShopAccessValidator(function(player)
+		return cabCompanyService:isShopEligible(player)
+	end)
 
 	local initialPlayer = Players:GetPlayers()[1]
 	if initialPlayer then
