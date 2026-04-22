@@ -54,8 +54,7 @@ function InputController.start()
 		forceSendAccumulator = 0,
 	}
 
-	local driveInputRemoteName = Remotes.clientToServer and Remotes.clientToServer.driveInput
-		or "Cab87DriveInput"
+	local driveInputRemoteName = Remotes.getClientToServerName("driveInput")
 	local driveInputRemote = ReplicatedStorage:WaitForChild(driveInputRemoteName)
 
 	local function connect(signal, callback)

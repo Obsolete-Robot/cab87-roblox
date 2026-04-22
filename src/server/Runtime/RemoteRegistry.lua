@@ -3,14 +3,6 @@ local RunService = game:GetService("RunService")
 
 local RemoteRegistry = {}
 
-local DEFAULT_REMOTE_NAMES = {
-	driveInput = "Cab87DriveInput",
-	cameraEvent = "Cab87CameraEvent",
-	debugTune = "Cab87DebugTune",
-	gameplayStateUpdated = "Cab87GameplayStateUpdated",
-	shiftStateUpdated = "Cab87ShiftStateUpdated",
-}
-
 local function loadSharedModule(moduleName)
 	local shared = ReplicatedStorage:FindFirstChild("Shared")
 	local module = shared and shared:FindFirstChild(moduleName)
@@ -28,16 +20,17 @@ local function loadSharedModule(moduleName)
 end
 
 local function getRemoteNames()
-	local Remotes = loadSharedModule("Remotes") or {}
-	local serverToClient = Remotes.serverToClient or {}
-	local clientToServer = Remotes.clientToServer or {}
+	local Remotes = loadSharedModule("Remotes")
+	if type(Remotes) ~= "table" then
+		error("[cab87] Remotes module is required to register remote events")
+	end
 
 	return {
-		driveInput = clientToServer.driveInput or DEFAULT_REMOTE_NAMES.driveInput,
-		cameraEvent = serverToClient.cameraEvent or DEFAULT_REMOTE_NAMES.cameraEvent,
-		debugTune = clientToServer.debugTune or DEFAULT_REMOTE_NAMES.debugTune,
-		gameplayStateUpdated = serverToClient.gameplayStateUpdated or DEFAULT_REMOTE_NAMES.gameplayStateUpdated,
-		shiftStateUpdated = serverToClient.shiftStateUpdated or DEFAULT_REMOTE_NAMES.shiftStateUpdated,
+		driveInput = Remotes.getClientToServerName("driveInput"),
+		cameraEvent = Remotes.getServerToClientName("cameraEvent"),
+		debugTune = Remotes.getClientToServerName("debugTune"),
+		gameplayStateUpdated = Remotes.getServerToClientName("gameplayStateUpdated"),
+		shiftStateUpdated = Remotes.getServerToClientName("shiftStateUpdated"),
 	}
 end
 

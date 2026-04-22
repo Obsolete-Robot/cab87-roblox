@@ -21,4 +21,26 @@ local Remotes = {
 	},
 }
 
+local function getRemoteName(groupName, remoteKey)
+	local group = Remotes[groupName]
+	if type(group) ~= "table" then
+		error(("[cab87] Remotes.%s must be a table"):format(groupName), 3)
+	end
+
+	local remoteName = group[remoteKey]
+	if type(remoteName) ~= "string" or remoteName == "" then
+		error(("[cab87] Remotes.%s.%s must be a non-empty string"):format(groupName, tostring(remoteKey)), 3)
+	end
+
+	return remoteName
+end
+
+function Remotes.getClientToServerName(remoteKey)
+	return getRemoteName("clientToServer", remoteKey)
+end
+
+function Remotes.getServerToClientName(remoteKey)
+	return getRemoteName("serverToClient", remoteKey)
+end
+
 return Remotes

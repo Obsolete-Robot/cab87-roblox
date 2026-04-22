@@ -324,8 +324,7 @@ local function updateActiveCamera(dt)
 end
 
 task.spawn(function()
-	local cameraEventRemoteName = Remotes.serverToClient and Remotes.serverToClient.cameraEvent
-		or "Cab87CameraEvent"
+	local cameraEventRemoteName = Remotes.getServerToClientName("cameraEvent")
 	local cameraEventRemote = ReplicatedStorage:WaitForChild(cameraEventRemoteName, 10)
 	if cameraEventRemote and cameraEventRemote:IsA("RemoteEvent") then
 		cameraEventRemote.OnClientEvent:Connect(function(action, intensity)

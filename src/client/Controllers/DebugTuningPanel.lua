@@ -103,8 +103,7 @@ function DebugTuningPanel.start(parentGui)
 		return nil
 	end
 
-	local debugTuneRemoteName = Remotes.clientToServer and Remotes.clientToServer.debugTune
-		or "Cab87DebugTune"
+	local debugTuneRemoteName = Remotes.getClientToServerName("debugTune")
 	local debugTuneRemote = ReplicatedStorage:WaitForChild(debugTuneRemoteName, 10)
 	if not debugTuneRemote or not debugTuneRemote:IsA("RemoteEvent") then
 		return nil
