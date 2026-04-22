@@ -44,6 +44,8 @@ function TaxiController.new(options)
 		driverMode = options.driverMode,
 		inputProvider = options.inputProvider,
 		fareService = options.fareService,
+		ownerPlayer = options.ownerPlayer,
+		ownerUserId = options.ownerUserId,
 		connections = {},
 		started = false,
 		_playerInputHandler = nil,
@@ -92,6 +94,10 @@ function TaxiController:start()
 	local Config = self.config
 	local driverMode = self.driverMode or Config.driverMode or "Player"
 	local inputProvider = self.inputProvider
+	local ownerUserId = self.ownerUserId
+	if not ownerUserId and self.ownerPlayer and self.ownerPlayer:IsA("Player") then
+		ownerUserId = self.ownerPlayer.UserId
+	end
 
 	local defaultSpawnPose = spawnPose or {
 		position = Config.carSpawn,
@@ -294,6 +300,10 @@ function TaxiController:start()
 	end
 
 	local function handlePlayerDriveInput(player, action, throttle, steer, drift, airPitch)
+		if ownerUserId and player.UserId ~= ownerUserId then
+			return
+		end
+
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if humanoid ~= seat.Occupant then
@@ -343,6 +353,14 @@ function TaxiController:start()
 	trackConnection(seat:GetPropertyChangedSignal("Occupant"):Connect(function()
 		local occupant = seat.Occupant
 		if occupant then
+			if not ownerUserId then
+				local ownerPlayer = Players:GetPlayerFromCharacter(occupant.Parent)
+				if ownerPlayer then
+					ownerUserId = ownerPlayer.UserId
+					self.ownerUserId = ownerUserId
+				end
+			end
+
 			hideDriverCharacter(occupant)
 		else
 			driverInput = {}

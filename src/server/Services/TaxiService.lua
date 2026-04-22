@@ -39,6 +39,61 @@ function TaxiService:_routeDriveInput(player, ...)
 	end
 end
 
+local function getPlayerRootPart(player)
+	if not (player and player:IsA("Player")) then
+		return nil
+	end
+
+	local character = player.Character
+	if not character then
+		return nil
+	end
+
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if rootPart and rootPart:IsA("BasePart") then
+		return rootPart
+	end
+
+	local primaryPart = character.PrimaryPart
+	if primaryPart and primaryPart:IsA("BasePart") then
+		return primaryPart
+	end
+
+	return nil
+end
+
+local function getYawFromLookVector(lookVector, fallbackYaw)
+	local horizontal = Vector3.new(lookVector.X, 0, lookVector.Z)
+	if horizontal.Magnitude <= 0.001 then
+		return fallbackYaw or 0
+	end
+
+	local unit = horizontal.Unit
+	return math.atan2(unit.X, unit.Z)
+end
+
+function TaxiService:_resolveSpawnPose(spawnPose, ownerPlayer, carConfig)
+	if not ownerPlayer then
+		return spawnPose
+	end
+
+	local rootPart = getPlayerRootPart(ownerPlayer)
+	if not rootPart then
+		return spawnPose
+	end
+
+	local fallbackPose = spawnPose or {
+		position = carConfig.carSpawn,
+		yaw = 0,
+	}
+
+	local fallbackY = (fallbackPose.position and fallbackPose.position.Y) or rootPart.Position.Y
+	return {
+		position = Vector3.new(rootPart.Position.X, fallbackY, rootPart.Position.Z),
+		yaw = getYawFromLookVector(rootPart.CFrame.LookVector, fallbackPose.yaw),
+	}
+end
+
 function TaxiService:start()
 	if self.started then
 		return
@@ -58,14 +113,23 @@ function TaxiService:createCab(options)
 
 	local cabFactory = assert(self.cabFactory, "TaxiService requires a cabFactory")
 	local carConfig = options.config or cabFactory:createConfig(options.profileName, options.configOverrides)
-	local car, seat, driftEmitters = cabFactory:createCab(options.world or self.world, options.spawnPose, carConfig)
+	local ownerPlayer = options.ownerPlayer
+	local resolvedSpawnPose = self:_resolveSpawnPose(options.spawnPose, ownerPlayer, carConfig)
+	local car, seat, driftEmitters = cabFactory:createCab(options.world or self.world, resolvedSpawnPose, carConfig)
 	local handle = {
 		car = car,
 		seat = seat,
 		driftEmitters = driftEmitters,
+		spawnPose = resolvedSpawnPose,
 		config = carConfig,
+		ownerPlayer = ownerPlayer,
+		ownerUserId = ownerPlayer and ownerPlayer.UserId or options.ownerUserId,
 		controller = nil,
 	}
+
+	if type(handle.ownerUserId) == "number" and handle.ownerUserId > 0 then
+		car:SetAttribute("Cab87OwnerUserId", handle.ownerUserId)
+	end
 
 	table.insert(self.cabHandles, handle)
 	return handle
@@ -84,11 +148,13 @@ function TaxiService:startCabController(handle, options)
 		cameraEventRemote = options.cameraEventRemote or self.remotes.cameraEvent,
 		driveSurfaces = options.driveSurfaces or self.driveSurfaces,
 		crashObstacles = options.crashObstacles or self.crashObstacles,
-		spawnPose = options.spawnPose,
+		spawnPose = options.spawnPose or handle.spawnPose,
 		config = handle.config,
 		driverMode = options.driverMode or handle.config.driverMode,
 		inputProvider = options.inputProvider,
 		fareService = options.fareService,
+		ownerPlayer = options.ownerPlayer or handle.ownerPlayer,
+		ownerUserId = options.ownerUserId or handle.ownerUserId,
 	})
 
 	handle.controller = controller
