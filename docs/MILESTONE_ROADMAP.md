@@ -1,6 +1,6 @@
 # Cab87 Milestone Roadmap
 
-Last updated: 2026-04-20
+Last updated: 2026-04-22
 
 This roadmap tracks the major systems still needed to turn Cab87 from a drivable prototype into a complete arcade taxi loop. Tasks are grouped as GitHub-friendly milestones so each section can become a milestone, epic issue, or checklist.
 
@@ -33,42 +33,43 @@ Design decisions for this milestone:
 - Failed fares do not cost money; they only lose the unpaid potential payout.
 - Crash damage resets per passenger/fare when the passenger exits or the fare fails.
 
-- [ ] [#1 Add a server-authoritative shift state machine](https://github.com/Obsolete-Robot/cab87-roblox/issues/1).
-  - [ ] Support configurable shift length, starting at 3 minutes.
-  - [ ] Broadcast shift start, remaining time, overtime/end, and inter-shift states to clients.
-  - [ ] Keep taxi driving available outside active shifts.
-  - [ ] Store per-player shift totals separately from persistent bank money.
-- [ ] [#2 Implement fare pricing](https://github.com/Obsolete-Robot/cab87-roblox/issues/2).
-  - [ ] Calculate base fare from pickup-to-dropoff distance.
-  - [ ] Add time-based bonuses or penalties.
-  - [ ] Add delivery speed bonus rules that reward fast but readable driving.
-  - [ ] Add minimum fare and max payout caps in config.
-  - [ ] Surface fare estimate, active fare value, and final payout in the HUD.
-- [ ] [#3 Implement passenger fare lifecycle](https://github.com/Obsolete-Robot/cab87-roblox/issues/3).
-  - [ ] Pick up passenger.
-  - [ ] Assign destination.
-  - [ ] Track active route and delivery progress.
-  - [ ] Complete fare and award money.
-  - [ ] Expire or fail fare when shift ends, losing only the unpaid potential payout.
-- [ ] [#4 Add crash and damage tracking during active fares](https://github.com/Obsolete-Robot/cab87-roblox/issues/4).
-  - [ ] Track collision count and collision severity while a passenger is in the cab.
-  - [ ] Convert crash damage into fare penalties.
-  - [ ] Show active fare damage in the HUD.
-  - [ ] Reset fare damage cleanly when the passenger exits or the fare fails.
-  - [ ] Add config tuning for damage thresholds, penalty scaling, and forgiveness windows.
-- [ ] [#5 Add end-of-shift payout UI](https://github.com/Obsolete-Robot/cab87-roblox/issues/5).
-  - [ ] Animate the shift gross earnings tally.
-  - [ ] Show fare totals, bonuses, and damage penalties.
-  - [ ] Show the cab company medallion fee deduction.
-  - [ ] Deposit net earnings into the player's persistent bank.
-  - [ ] Keep shift money and bank money visually distinct.
-- [ ] [#6 Update HUD for core loop](https://github.com/Obsolete-Robot/cab87-roblox/issues/6).
-  - [ ] Shift timer.
-  - [ ] Current shift money.
-  - [ ] Active fare payout.
-  - [ ] Destination indicator.
-  - [ ] Fare damage indicator.
-  - [ ] Completed fares count.
+- [x] [#1 Add a server-authoritative shift state machine](https://github.com/Obsolete-Robot/cab87-roblox/issues/1).
+  - [x] Support configurable shift length, starting at 3 minutes.
+  - [x] Broadcast shift start, remaining time, overtime/end, and inter-shift states to clients.
+  - [x] Keep taxi driving available outside active shifts.
+  - [x] Store per-player shift totals separately from persistent bank money.
+- [x] [#2 Implement fare pricing](https://github.com/Obsolete-Robot/cab87-roblox/issues/2).
+  - [x] Calculate base fare from pickup-to-dropoff distance.
+  - [x] Add time-based bonuses or penalties.
+  - [x] Add delivery speed bonus rules that reward fast but readable driving.
+  - [x] Add minimum fare and max payout caps in config.
+  - [x] Surface fare estimate, active fare value, and final payout in the HUD.
+- [x] [#3 Implement passenger fare lifecycle](https://github.com/Obsolete-Robot/cab87-roblox/issues/3).
+  - [x] Pick up passenger.
+  - [x] Assign destination.
+  - [x] Track active route and delivery progress.
+  - [x] Complete fare and award money.
+  - [x] Expire or fail fare when shift ends, losing only the unpaid potential payout.
+- [x] [#4 Add crash and damage tracking during active fares](https://github.com/Obsolete-Robot/cab87-roblox/issues/4).
+  - [x] Track collision count and collision severity while a passenger is in the cab.
+  - [x] Convert crash damage into fare penalties.
+  - [x] Show active fare damage in the HUD.
+  - [x] Reset fare damage cleanly when the passenger exits or the fare fails.
+  - [x] Add config tuning for damage thresholds, penalty scaling, and forgiveness windows.
+- [x] [#5 Add end-of-shift payout UI](https://github.com/Obsolete-Robot/cab87-roblox/issues/5).
+  - [x] Animate the shift gross earnings tally.
+  - [x] Show fare totals, bonuses, and damage penalties.
+  - [x] Show the cab company medallion fee deduction.
+  - [x] Deposit net earnings into the player's persistent bank.
+  - [x] Keep shift money and bank money visually distinct.
+- [x] [#6 Update HUD for core loop](https://github.com/Obsolete-Robot/cab87-roblox/issues/6).
+  - [x] Shift timer.
+  - [x] Current shift money.
+  - [x] Active fare payout.
+  - [x] Destination indicator.
+  - [x] Fare damage indicator.
+  - [x] Completed fares count.
+- [x] [#43 Surface signed fare time penalties in HUD and payout breakdown](https://github.com/Obsolete-Robot/cab87-roblox/issues/43).
 
 Definition of done:
 
@@ -79,143 +80,56 @@ Definition of done:
 
 Goal: add the home base loop where players get a cab, refuel, buy upgrades, and prepare for the next shift.
 
+GitHub milestone: [Milestone 2: Cab Company, Gas, And Vehicle Access](https://github.com/Obsolete-Robot/cab87-roblox/milestone/2)
+
 Design decisions for this milestone:
 
 - Free cab-company gas is always available when the player drives back to the cab company.
 - Free cab-company refuel should take longer than paid gas station refuel.
 - Paid gas stations spend player bank money and should be faster than the free cab-company option.
 
-- [ ] Build the starting cab company area.
+- [ ] [#35 Build cab company home base and service zones](https://github.com/Obsolete-Robot/cab87-roblox/issues/35).
   - [ ] Add a clear spawn point and player orientation.
   - [ ] Add cab pickup or selection zone.
   - [ ] Add garage/refuel/service points.
   - [ ] Add visual landmarks that make the company recognizable from the road.
   - [ ] Keep generated objects grouped under named containers.
-- [ ] Add taxi acquisition flow.
+- [ ] [#36 Implement cab claim, selection, and recovery flow](https://github.com/Obsolete-Robot/cab87-roblox/issues/36).
   - [ ] Let players claim or spawn a cab from the company.
   - [ ] Prevent duplicate active taxis per player unless intentionally supported.
   - [ ] Reset or recover a player cab from the company.
   - [ ] Preserve ownership data for multiplayer.
-- [ ] Implement gas mechanics.
+- [ ] [#37 Add vehicle catalog and taxi stat data](https://github.com/Obsolete-Robot/cab87-roblox/issues/37).
+  - [ ] Define taxi model id/name, speed, acceleration, handling, fuel capacity, and unlock price.
+  - [ ] Support future taxi variants without large conditionals.
+- [ ] [#38 Implement vehicle inventory, purchase, and persistence flow](https://github.com/Obsolete-Robot/cab87-roblox/issues/38).
+  - [ ] Persist purchased taxis and equipped taxi state.
+  - [ ] Spend persistent bank money, not shift money, for taxi purchases.
+  - [ ] Keep purchase and equip validation server-authoritative.
+- [ ] [#39 Implement fuel burn and out-of-gas behavior](https://github.com/Obsolete-Robot/cab87-roblox/issues/39).
   - [ ] Add max fuel, current fuel, burn rate, and idle/driving cost tuning.
   - [ ] Slow the taxi significantly when out of gas.
+- [ ] [#40 Add paid gas stations and cab-company refueling](https://github.com/Obsolete-Robot/cab87-roblox/issues/40).
   - [ ] Add gas stations to the map.
   - [ ] Refuel at paid stations using player money.
   - [ ] Allow free cab-company refuel whenever the player drives back to the cab company.
   - [ ] Make free cab-company refuel take longer than paid station refuel.
   - [ ] Prevent refuel abuse with clear start/cancel/complete states.
-- [ ] Add gas HUD.
+- [ ] [#41 Add fuel HUD and refuel prompts](https://github.com/Obsolete-Robot/cab87-roblox/issues/41).
   - [ ] Fuel gauge.
   - [ ] Out-of-gas warning.
   - [ ] Refueling progress.
   - [ ] Refuel price prompt.
-- [ ] Create vehicle config data.
-  - [ ] Define taxi model id/name, speed, acceleration, handling, fuel capacity, and unlock price.
-  - [ ] Support future taxi variants without large conditionals.
+- [ ] [#42 Add cab company garage and taxi shop UI](https://github.com/Obsolete-Robot/cab87-roblox/issues/42).
+  - [ ] Show owned, equipped, locked, affordable, and unaffordable taxi states.
+  - [ ] Let players request taxi purchases and equip changes through server-validated remotes.
+  - [ ] Coordinate with cab claim/recovery so selected taxis affect the next spawn.
 
 Definition of done:
 
 - A new player can spawn at the cab company, get a taxi, drive a shift, run low on gas, refuel at paid stations or slower free cab-company service, and continue into the next shift.
 
-## Milestone 3: Vehicle And Character Content
-
-Goal: replace prototype geometry with readable arcade assets.
-
-- [ ] Implement first production taxi model.
-  - [ ] Model body, wheels, lights, roof sign, and readable silhouette.
-  - [ ] Define attachment points for VFX, passengers, and hit reactions.
-  - [ ] Keep model structure consistent for future taxi variants.
-  - [ ] Add fallback behavior if a required part is missing.
-- [ ] Implement additional car models.
-  - [ ] Civilian compact.
-  - [ ] Civilian sedan.
-  - [ ] Van or truck.
-  - [ ] Sporty car.
-  - [ ] Service/emergency vehicle placeholder if useful.
-- [ ] Implement real character art.
-  - [ ] Passenger visual variants.
-  - [ ] Driver-visible character or avatar integration rules.
-  - [ ] Pickup/dropoff animations.
-  - [ ] Passenger panic or reaction poses for crashes.
-- [ ] Add asset organization.
-  - [ ] Decide which templates live in Rojo-mapped source versus Studio-authored assets.
-  - [ ] Keep shared previewable assets in ReplicatedStorage.
-  - [ ] Keep server-only templates in ServerStorage if introduced.
-
-Definition of done:
-
-- The default taxi, traffic vehicles, and passengers are visually distinct at driving speed.
-
-## Milestone 4: Traffic And Road Rules
-
-Goal: add ambient traffic that makes the city feel active and creates arcade driving pressure.
-
-Design decisions for this milestone:
-
-- Traffic laws affect AI traffic behavior only.
-- Running red lights should not directly affect score, fare payout, passenger rating, or bank money.
-- Traffic-light HUD feedback, if added, should be for readability/navigation rather than punishment.
-
-- [ ] Implement traffic system foundation.
-  - [ ] Build road graph lanes or waypoint routes from generated/authored roads.
-  - [ ] Spawn civilian cars near active players.
-  - [ ] Despawn cars that are far away or stuck.
-  - [ ] Keep traffic count capped by config.
-  - [ ] Avoid heavy per-frame Workspace scans.
-- [ ] Add traffic driving behavior.
-  - [ ] Follow lanes or route waypoints.
-  - [ ] Slow for turns.
-  - [ ] Avoid simple rear-end collisions.
-  - [ ] Recover from stuck states.
-  - [ ] React to player taxis enough to feel fair.
-- [ ] Add traffic lights.
-  - [ ] Detect or author intersections.
-  - [ ] Place named traffic light models at intersections.
-  - [ ] Cycle right of way between road directions.
-  - [ ] Expose traffic light state for traffic cars.
-  - [ ] Add light timing config.
-  - [ ] Keep client visuals synchronized with server state.
-- [ ] Keep traffic laws gameplay-neutral.
-  - [ ] Use traffic lights to control AI traffic right of way.
-  - [ ] Do not penalize score, fare payout, or passenger rating for player red-light behavior.
-  - [ ] Optional HUD warning is allowed only as navigation/readability feedback.
-
-Definition of done:
-
-- Traffic cars spawn, drive, obey basic traffic lights, and clean themselves up without tanking performance.
-
-## Milestone 5: Level Layout Blocking
-
-Goal: shape the game space around fast taxi readability and repeatable routes.
-
-- [ ] Block out major city districts.
-  - [ ] Cab company district.
-  - [ ] Downtown/high fare district.
-  - [ ] Residential pickup district.
-  - [ ] Industrial or dock district.
-  - [ ] Airport/train/bus landmark district.
-- [ ] Add authored route landmarks.
-  - [ ] Big turns and intersections that are readable at high speed.
-  - [ ] Shortcut opportunities.
-  - [ ] Jump or stunt opportunities if they fit the handling.
-  - [ ] Gas station placement.
-  - [ ] Powerup box placement.
-- [ ] Improve pickup and dropoff placement.
-  - [ ] Keep stops visible from the road.
-  - [ ] Avoid dropoffs that require awkward U-turns unless intentional.
-  - [ ] Balance short, medium, and long fares.
-  - [ ] Add config support for district-weighted passenger spawning.
-- [ ] Add map validation/debug tools.
-  - [ ] Show road graph.
-  - [ ] Show passenger stop candidates.
-  - [ ] Show traffic lanes.
-  - [ ] Show gas stations and powerup spawn points.
-
-Definition of done:
-
-- A playtest route through the level has clear landmarks, enough pickups, refuel options, and traffic pressure.
-
-## Milestone 6: Multiplayer Shift Competition
+## Milestone 3: Multiplayer Shift Competition
 
 Goal: support multiple players competing for the most money per shift while sharing the same city.
 
@@ -256,6 +170,104 @@ Design decisions for this milestone:
 Definition of done:
 
 - Two or more players can complete continuous shifts, see live rankings, receive end-of-shift results, and keep playing into the next shift.
+
+## Milestone 4: Vehicle And Character Content
+
+Goal: replace prototype geometry with readable arcade assets.
+
+- [ ] Implement first production taxi model.
+  - [ ] Model body, wheels, lights, roof sign, and readable silhouette.
+  - [ ] Define attachment points for VFX, passengers, and hit reactions.
+  - [ ] Keep model structure consistent for future taxi variants.
+  - [ ] Add fallback behavior if a required part is missing.
+- [ ] Implement additional car models.
+  - [ ] Civilian compact.
+  - [ ] Civilian sedan.
+  - [ ] Van or truck.
+  - [ ] Sporty car.
+  - [ ] Service/emergency vehicle placeholder if useful.
+- [ ] Implement real character art.
+  - [ ] Passenger visual variants.
+  - [ ] Driver-visible character or avatar integration rules.
+  - [ ] Pickup/dropoff animations.
+  - [ ] Passenger panic or reaction poses for crashes.
+- [ ] Add asset organization.
+  - [ ] Decide which templates live in Rojo-mapped source versus Studio-authored assets.
+  - [ ] Keep shared previewable assets in ReplicatedStorage.
+  - [ ] Keep server-only templates in ServerStorage if introduced.
+
+Definition of done:
+
+- The default taxi, traffic vehicles, and passengers are visually distinct at driving speed.
+
+## Milestone 5: Traffic And Road Rules
+
+Goal: add ambient traffic that makes the city feel active and creates arcade driving pressure.
+
+Design decisions for this milestone:
+
+- Traffic laws affect AI traffic behavior only.
+- Running red lights should not directly affect score, fare payout, passenger rating, or bank money.
+- Traffic-light HUD feedback, if added, should be for readability/navigation rather than punishment.
+
+- [ ] Implement traffic system foundation.
+  - [ ] Build road graph lanes or waypoint routes from generated/authored roads.
+  - [ ] Spawn civilian cars near active players.
+  - [ ] Despawn cars that are far away or stuck.
+  - [ ] Keep traffic count capped by config.
+  - [ ] Avoid heavy per-frame Workspace scans.
+- [ ] Add traffic driving behavior.
+  - [ ] Follow lanes or route waypoints.
+  - [ ] Slow for turns.
+  - [ ] Avoid simple rear-end collisions.
+  - [ ] Recover from stuck states.
+  - [ ] React to player taxis enough to feel fair.
+- [ ] Add traffic lights.
+  - [ ] Detect or author intersections.
+  - [ ] Place named traffic light models at intersections.
+  - [ ] Cycle right of way between road directions.
+  - [ ] Expose traffic light state for traffic cars.
+  - [ ] Add light timing config.
+  - [ ] Keep client visuals synchronized with server state.
+- [ ] Keep traffic laws gameplay-neutral.
+  - [ ] Use traffic lights to control AI traffic right of way.
+  - [ ] Do not penalize score, fare payout, or passenger rating for player red-light behavior.
+  - [ ] Optional HUD warning is allowed only as navigation/readability feedback.
+
+Definition of done:
+
+- Traffic cars spawn, drive, obey basic traffic lights, and clean themselves up without tanking performance.
+
+## Milestone 6: Level Layout Blocking
+
+Goal: shape the game space around fast taxi readability and repeatable routes.
+
+- [ ] Block out major city districts.
+  - [ ] Cab company district.
+  - [ ] Downtown/high fare district.
+  - [ ] Residential pickup district.
+  - [ ] Industrial or dock district.
+  - [ ] Airport/train/bus landmark district.
+- [ ] Add authored route landmarks.
+  - [ ] Big turns and intersections that are readable at high speed.
+  - [ ] Shortcut opportunities.
+  - [ ] Jump or stunt opportunities if they fit the handling.
+  - [ ] Gas station placement.
+  - [ ] Powerup box placement.
+- [ ] Improve pickup and dropoff placement.
+  - [ ] Keep stops visible from the road.
+  - [ ] Avoid dropoffs that require awkward U-turns unless intentional.
+  - [ ] Balance short, medium, and long fares.
+  - [ ] Add config support for district-weighted passenger spawning.
+- [ ] Add map validation/debug tools.
+  - [ ] Show road graph.
+  - [ ] Show passenger stop candidates.
+  - [ ] Show traffic lanes.
+  - [ ] Show gas stations and powerup spawn points.
+
+Definition of done:
+
+- A playtest route through the level has clear landmarks, enough pickups, refuel options, and traffic pressure.
 
 ## Milestone 7: Unlockables And Economy
 
@@ -369,13 +381,13 @@ Definition of done:
 
 - [ ] Split large runtime code into focused server modules.
   - [ ] CityBuilder or MapRuntime.
-  - [ ] TaxiController.
-  - [ ] FareService.
-  - [ ] ShiftService.
+  - [x] TaxiController.
+  - [x] FareService.
+  - [x] ShiftService.
   - [ ] FuelService.
   - [ ] TrafficService.
   - [ ] PowerupService.
-  - [ ] EconomyService.
+  - [x] EconomyService.
 - [ ] Add client presentation controllers.
   - [ ] HudController.
   - [ ] RouteArrowController.
@@ -383,9 +395,9 @@ Definition of done:
   - [ ] AudioController.
   - [ ] LeaderboardController.
 - [ ] Centralize remote names and payload contracts.
-  - [ ] Define request/action remotes.
-  - [ ] Define server-to-client state update remotes.
-  - [ ] Document payload shapes.
+  - [x] Define request/action remotes.
+  - [x] Define server-to-client state update remotes.
+  - [x] Document payload shapes.
   - [ ] Validate all client input on the server.
 - [ ] Add cleanup/restart paths.
   - [ ] Destroy generated worlds cleanly.
@@ -393,9 +405,9 @@ Definition of done:
   - [ ] Reset shift systems without rejoining.
   - [ ] Reset traffic and powerups between map rebuilds.
 - [ ] Add tuning config.
-  - [ ] Shift timing.
-  - [ ] Fare payout formula.
-  - [ ] Damage penalty formula.
+  - [x] Shift timing.
+  - [x] Fare payout formula.
+  - [x] Damage penalty formula.
   - [ ] Fuel burn/refuel rates.
   - [ ] Traffic spawn counts.
   - [ ] Powerup spawn weights.
@@ -410,10 +422,10 @@ Definition of done:
 
 1. Core shift loop, fare payout, and damage HUD.
 2. Cab company, taxi spawning, and gas/refuel loop.
-3. Vehicle model structure and first production taxi.
-4. Level blocking pass with gas stations and stop placement.
+3. Multiplayer state refactor, shared shift competition, and leaderboard.
+4. Vehicle model structure and first production taxi.
 5. Traffic routes and traffic lights.
-6. Multiplayer state refactor and leaderboard.
+6. Level blocking pass with gas stations and stop placement.
 7. Economy, unlocks, and shop UI.
 8. Powerup boxes, held powerups, and combat reactions.
 
