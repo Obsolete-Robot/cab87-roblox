@@ -189,6 +189,8 @@ function TaxiController:start()
 	local crashShakeCooldown = 0
 	local scrapeDamageCooldown = 0
 	local damageEventSequence = 0
+	local fuelCapacity = math.max((type(Config.taxiFuelCapacity) == "number" and Config.taxiFuelCapacity) or Config.carFuelCapacity or 100, 0)
+	local currentFuel = fuelCapacity
 
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
@@ -210,6 +212,9 @@ function TaxiController:start()
 	car:SetAttribute(Config.carVisualLandingPulseAttribute, landingVisualPulse)
 	car:SetAttribute(Config.carVisualLandingSpeedAttribute, 0)
 	car:SetAttribute(Config.carSpeedAttribute, 0)
+	car:SetAttribute(Config.carFuelCapacityAttribute or "Cab87FuelCapacity", fuelCapacity)
+	car:SetAttribute(Config.carFuelCurrentAttribute or "Cab87FuelCurrent", currentFuel)
+	car:SetAttribute(Config.carFuelOutAttribute or "Cab87FuelOut", currentFuel <= 0)
 	car:SetAttribute("Cab87LastResetReason", "")
 	car:SetAttribute("Cab87LastResetY", position.Y)
 	car:SetAttribute("Cab87GroundContacts", 0)
@@ -952,6 +957,25 @@ function TaxiController:start()
 		local airPitchInput = if input and type(input.airPitch) == "number"
 			then math.clamp(input.airPitch, -1, 1)
 			else 0
+		local hasDriver = driverMode == "AI" or seat.Occupant ~= nil
+		local fuelOut = currentFuel <= 0
+
+		if hasDriver and currentFuel > 0 then
+			local moveSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+			local driveBurnMinSpeed = math.max(Config.carFuelMinSpeedForDriveBurn or 0, 0)
+			local speedAlpha = 0
+			if moveSpeed > driveBurnMinSpeed then
+				speedAlpha = math.clamp(moveSpeed / math.max(Config.carMaxForward, 1), 0, 1)
+			end
+
+			local idleBurn = math.max(Config.carFuelIdleBurnPerSecond or 0, 0)
+			local driveBurn = math.max(Config.carFuelDriveBurnPerSecond or 0, 0) * speedAlpha
+			currentFuel = math.max(currentFuel - (idleBurn + driveBurn) * dt, 0)
+			fuelOut = currentFuel <= 0
+		end
+
+		car:SetAttribute(Config.carFuelCurrentAttribute or "Cab87FuelCurrent", currentFuel)
+		car:SetAttribute(Config.carFuelOutAttribute or "Cab87FuelOut", fuelOut)
 
 		if seat.Occupant ~= lastOccupant then
 			lastOccupant = seat.Occupant
@@ -1006,9 +1030,19 @@ function TaxiController:start()
 			and horizontalSpeed > Config.carDriftMinSpeed
 
 		if canDrive then
-			local accel = drifting and Config.carAccel * Config.carDriftAccelMultiplier or Config.carAccel
+			local outOfGasAccelScale = if fuelOut then math.max(Config.carOutOfGasAccelMultiplier or 0, 0) else 1
+			local baseAccel = Config.carAccel * outOfGasAccelScale
+			local accel = drifting and baseAccel * Config.carDriftAccelMultiplier or baseAccel
 			local waitingToReverse = false
-			local boostMaxSpeed = math.max(Config.carMaxForward, Config.carDriftBoostMaxSpeed)
+			local maxForwardSpeed = if fuelOut
+				then math.max(Config.carOutOfGasMaxForward or 0, 0)
+				else Config.carMaxForward
+			local maxReverseSpeed = if fuelOut
+				then math.max(Config.carOutOfGasMaxReverse or 0, 0)
+				else Config.carMaxReverse
+			local boostMaxSpeed = if fuelOut
+				then maxForwardSpeed
+				else math.max(Config.carMaxForward, Config.carDriftBoostMaxSpeed)
 
 			if drifting then
 				driftChargeTime += dt
@@ -1023,7 +1057,7 @@ function TaxiController:start()
 
 			if throttle > 0 then
 				reverseHoldTime = 0
-				forwardSpeed = math.min(forwardSpeed + accel * throttle * dt, boostTimer > 0 and boostMaxSpeed or Config.carMaxForward)
+				forwardSpeed = math.min(forwardSpeed + accel * throttle * dt, boostTimer > 0 and boostMaxSpeed or maxForwardSpeed)
 			elseif throttle < 0 then
 				if forwardSpeed > Config.carReverseStopSpeed then
 					reverseHoldTime = 0
@@ -1038,7 +1072,7 @@ function TaxiController:start()
 						forwardSpeed = 0
 						lateralSpeed = dampToZero(lateralSpeed, Config.carBrake * dt)
 					else
-						forwardSpeed = math.max(forwardSpeed + accel * throttle * dt, -Config.carMaxReverse)
+						forwardSpeed = math.max(forwardSpeed + accel * throttle * dt, -maxReverseSpeed)
 					end
 				end
 			else
@@ -1051,11 +1085,11 @@ function TaxiController:start()
 				lateralSpeed += steer * Config.carDriftSlideForce * dt
 			end
 
-			if boostTriggered then
+			if boostTriggered and not fuelOut then
 				forwardSpeed = math.min(math.max(forwardSpeed, 0) + Config.carDriftBoostImpulse, boostMaxSpeed)
 			end
 
-			if boostTimer > 0 then
+			if boostTimer > 0 and not fuelOut then
 				forwardSpeed = math.min(forwardSpeed + Config.carDriftBoostAccel * dt, boostMaxSpeed)
 				boostTimer = math.max(boostTimer - dt, 0)
 			end
