@@ -320,9 +320,27 @@ local function getCabDoorPosition(car)
 	return pivot:PointToWorldSpace(Vector3.new(-6.3, -rideHeight + 0.15, 0.8))
 end
 
-local function getCabOwnerPlayer(car)
+local function getCabOwnerUserId(car)
 	if not car then
 		return nil
+	end
+
+	local value = car:GetAttribute(getConfigString("carOwnerUserIdAttribute", "Cab87OwnerUserId"))
+	if type(value) == "number" and value == value and value > 0 then
+		return math.floor(value)
+	end
+
+	return nil
+end
+
+local function getCabFareOwner(car)
+	if not car then
+		return nil
+	end
+
+	local ownerUserId = getCabOwnerUserId(car)
+	if ownerUserId then
+		return ownerUserId
 	end
 
 	local seat = car:FindFirstChild("DriverSeat")
@@ -694,7 +712,7 @@ local function completeBoarding(service, passenger)
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
 	if service.fareService and service.fareService.beginFare then
 		local routeDistance = horizontalDistance(passenger.pickupStop.position, passenger.targetStop.position)
-		service.fareService:beginFare(routeDistance, getCabOwnerPlayer(service.car))
+		service.fareService:beginFare(routeDistance, getCabFareOwner(service.car))
 	end
 	removeWaitingPassengersNearStop(service, passenger.targetStop)
 	PassengerVisuals.setPassengerVisible(passenger.visual, false)

@@ -223,12 +223,20 @@ local function bootstrap()
 	end)
 	debugTuningService:start()
 
-	local playerCab = taxiService:createCab({
-		world = world,
-		spawnPose = spawnPose,
-		profileName = Config.carDefaultProfileName,
-		ownerPlayer = Players:GetPlayers()[1],
-	})
+	local initialPlayer = Players:GetPlayers()[1]
+	local playerCab = nil
+	if initialPlayer then
+		playerCab = taxiService:spawnCabForPlayer(initialPlayer, Config.carDefaultProfileName, spawnPose, {
+			world = world,
+			startController = false,
+		})
+	else
+		playerCab = taxiService:createCab({
+			world = world,
+			spawnPose = spawnPose,
+			profileName = Config.carDefaultProfileName,
+		})
+	end
 	local car = playerCab.car
 	local gpsService = GpsService.start({
 		world = world,
@@ -240,6 +248,7 @@ local function bootstrap()
 		config = Config,
 		car = car,
 		shiftService = shiftService,
+		ownerUserId = playerCab.ownerUserId,
 	})
 	if shiftService and shiftService.onPhaseChanged then
 		shiftService:onPhaseChanged(function(snapshot)
@@ -254,6 +263,7 @@ local function bootstrap()
 		driverMode = "Player",
 		fareService = fareService,
 		ownerPlayer = playerCab.ownerPlayer,
+		ownerUserId = playerCab.ownerUserId,
 	})
 
 	passengerService = PassengerService.start({

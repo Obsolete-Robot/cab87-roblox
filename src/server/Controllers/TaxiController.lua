@@ -26,6 +26,27 @@ local function moveAngleToward(fromAngle, toAngle, maxDelta)
 	return fromAngle + math.clamp(delta, -maxDelta, maxDelta)
 end
 
+local function getOwnerUserId(owner)
+	if typeof(owner) == "Instance" and owner:IsA("Player") then
+		return owner.UserId
+	end
+
+	if type(owner) == "number" and owner == owner and owner > 0 then
+		return math.floor(owner)
+	end
+
+	return nil
+end
+
+local function getOwnerAttributeName(config)
+	local attributeName = config and config.carOwnerUserIdAttribute
+	if type(attributeName) == "string" and attributeName ~= "" then
+		return attributeName
+	end
+
+	return "Cab87OwnerUserId"
+end
+
 local TaxiController = {}
 TaxiController.__index = TaxiController
 
@@ -46,6 +67,7 @@ function TaxiController.new(options)
 		fareService = options.fareService,
 		ownerPlayer = options.ownerPlayer,
 		ownerUserId = options.ownerUserId,
+		ownerChanged = options.ownerChanged,
 		connections = {},
 		started = false,
 		_playerInputHandler = nil,
@@ -55,6 +77,40 @@ end
 
 function TaxiController:setFareService(fareService)
 	self.fareService = fareService
+end
+
+function TaxiController:_writeOwnerAttribute()
+	if not self.car then
+		return
+	end
+
+	self.car:SetAttribute(getOwnerAttributeName(self.config), self.ownerUserId)
+end
+
+function TaxiController:setOwner(ownerPlayer, ownerUserId, options)
+	options = options or {}
+	local resolvedUserId = getOwnerUserId(ownerPlayer) or getOwnerUserId(ownerUserId)
+	local previousUserId = self.ownerUserId
+	local resolvedPlayer = nil
+	if resolvedUserId then
+		if typeof(ownerPlayer) == "Instance" and ownerPlayer:IsA("Player") and ownerPlayer.UserId == resolvedUserId then
+			resolvedPlayer = ownerPlayer
+		else
+			resolvedPlayer = Players:GetPlayerByUserId(resolvedUserId)
+		end
+	end
+
+	self.ownerPlayer = resolvedPlayer
+	self.ownerUserId = resolvedUserId
+	self:_writeOwnerAttribute()
+
+	if options.notify ~= false and previousUserId ~= resolvedUserId and self.ownerChanged then
+		self.ownerChanged(self, resolvedPlayer, resolvedUserId, previousUserId)
+	end
+end
+
+function TaxiController:clearOwner(options)
+	self:setOwner(nil, nil, options)
 end
 
 function TaxiController:handleDriveInput(player, ...)
@@ -94,9 +150,10 @@ function TaxiController:start()
 	local Config = self.config
 	local driverMode = self.driverMode or Config.driverMode or "Player"
 	local inputProvider = self.inputProvider
-	local ownerUserId = self.ownerUserId
-	if not ownerUserId and self.ownerPlayer and self.ownerPlayer:IsA("Player") then
-		ownerUserId = self.ownerPlayer.UserId
+	if not self.ownerUserId and typeof(self.ownerPlayer) == "Instance" and self.ownerPlayer:IsA("Player") then
+		self:setOwner(self.ownerPlayer, nil)
+	else
+		self:_writeOwnerAttribute()
 	end
 
 	local defaultSpawnPose = spawnPose or {
@@ -300,6 +357,7 @@ function TaxiController:start()
 	end
 
 	local function handlePlayerDriveInput(player, action, throttle, steer, drift, airPitch)
+		local ownerUserId = self.ownerUserId
 		if ownerUserId and player.UserId ~= ownerUserId then
 			return
 		end
@@ -353,11 +411,10 @@ function TaxiController:start()
 	trackConnection(seat:GetPropertyChangedSignal("Occupant"):Connect(function()
 		local occupant = seat.Occupant
 		if occupant then
-			if not ownerUserId then
+			if not self.ownerUserId then
 				local ownerPlayer = Players:GetPlayerFromCharacter(occupant.Parent)
 				if ownerPlayer then
-					ownerUserId = ownerPlayer.UserId
-					self.ownerUserId = ownerUserId
+					self:setOwner(ownerPlayer, nil)
 				end
 			end
 
@@ -365,6 +422,18 @@ function TaxiController:start()
 		else
 			driverInput = {}
 			restoreHiddenCharacter()
+		end
+	end))
+
+	trackConnection(Players.PlayerRemoving:Connect(function(player)
+		driverInput[player] = nil
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid == seat.Occupant then
+			restoreHiddenCharacter()
+		end
+		if self.ownerUserId == player.UserId then
+			self:clearOwner()
 		end
 	end))
 
