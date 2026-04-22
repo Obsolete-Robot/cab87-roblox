@@ -4,6 +4,7 @@ local player = Players.LocalPlayer
 local controllersFolder = script.Parent:WaitForChild("Controllers")
 
 local DebugTuningPanel = require(controllersFolder:WaitForChild("DebugTuningPanel"))
+local CabCompanyController = require(controllersFolder:WaitForChild("CabCompanyController"))
 local DrivenCabTracker = require(controllersFolder:WaitForChild("DrivenCabTracker"))
 local FareHudController = require(controllersFolder:WaitForChild("FareHudController"))
 local InputController = require(controllersFolder:WaitForChild("InputController"))
@@ -42,6 +43,7 @@ local function startController(controllerModule, ...)
 end
 
 startController(InputController)
+startController(CabCompanyController)
 startController(MinimapController, gui, DrivenCabTracker)
 startController(SpeedometerController, gui, DrivenCabTracker)
 startController(FareHudController, gui, DrivenCabTracker)

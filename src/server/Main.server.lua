@@ -2,6 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local VehicleCatalog = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VehicleCatalog"))
 
 local serverRoot = script.Parent
 local runtimeFolder = serverRoot:WaitForChild("Runtime")
@@ -14,6 +15,7 @@ local MapGenerator = require(serverRoot:WaitForChild("MapGenerator"))
 local PassengerService = require(serverRoot:WaitForChild("PassengerService"))
 local RemoteRegistry = require(runtimeFolder:WaitForChild("RemoteRegistry"))
 local CabFactory = require(factoriesFolder:WaitForChild("CabFactory"))
+local CabCompanyService = require(servicesFolder:WaitForChild("CabCompanyService"))
 local DebugTuningService = require(servicesFolder:WaitForChild("DebugTuningService"))
 local EconomyService = require(servicesFolder:WaitForChild("EconomyService"))
 local FareService = require(servicesFolder:WaitForChild("FareService"))
@@ -217,74 +219,145 @@ local function bootstrap()
 		world = world,
 		driveSurfaces = driveSurfaces,
 		crashObstacles = crashObstacles,
+		destroyOwnedCabsOnPlayerRemoving = true,
+		stopReleasedControllersOnPlayerRemoving = true,
 	})
 	taxiService:start()
+
+	local shiftService = startShiftService(remotes, stateReplicator, economyService)
+	local activeCabRuntime = nil
+	local activePassengerService = nil
+	local activeFareService = nil
+
+	if shiftService and shiftService.onPhaseChanged then
+		shiftService:onPhaseChanged(function(snapshot)
+			if activeFareService and activeFareService.onShiftPhaseChanged then
+				activeFareService:onShiftPhaseChanged(snapshot and snapshot.phase)
+			end
+		end)
+	end
+
+	local function stopActiveCabRuntime()
+		local runtime = activeCabRuntime
+		if not runtime then
+			return
+		end
+
+		activeCabRuntime = nil
+		activePassengerService = nil
+		activeFareService = nil
+
+		if runtime.destroyConnection then
+			runtime.destroyConnection:Disconnect()
+		end
+
+		if runtime.passengerService and runtime.passengerService.stop then
+			runtime.passengerService.stop()
+		end
+
+		if runtime.gpsService and runtime.gpsService.stop then
+			runtime.gpsService:stop()
+		end
+	end
+
+	local function startCabRuntime(handle, runtimeSpawnPose)
+		if not (handle and handle.car and handle.car.Parent) then
+			return nil
+		end
+
+		if activeCabRuntime and activeCabRuntime.handle == handle then
+			return activeCabRuntime
+		end
+
+		stopActiveCabRuntime()
+
+		local gpsService = GpsService.start({
+			world = world,
+			car = handle.car,
+			driveSurfaces = driveSurfaces,
+		})
+		local fareService = FareService.new({
+			config = Config,
+			car = handle.car,
+			shiftService = shiftService,
+			ownerPlayer = handle.ownerPlayer,
+			ownerUserId = handle.ownerUserId,
+		})
+
+		if handle.controller and handle.controller.setFareService then
+			handle.controller:setFareService(fareService)
+		end
+
+		taxiService:startCabController(handle, {
+			spawnPose = handle.spawnPose or runtimeSpawnPose or spawnPose,
+			driverMode = "Player",
+			fareService = fareService,
+			ownerPlayer = handle.ownerPlayer,
+			ownerUserId = handle.ownerUserId,
+		})
+
+		local passengerService = PassengerService.start({
+			world = world,
+			car = handle.car,
+			driveSurfaces = driveSurfaces,
+			spawnPose = handle.spawnPose or runtimeSpawnPose or spawnPose,
+			gpsService = gpsService,
+			fareService = fareService,
+			stateReplicator = stateReplicator,
+		})
+
+		local runtime = {
+			handle = handle,
+			gpsService = gpsService,
+			fareService = fareService,
+			passengerService = passengerService,
+			destroyConnection = nil,
+		}
+		runtime.destroyConnection = handle.car.Destroying:Connect(function()
+			if activeCabRuntime == runtime then
+				stopActiveCabRuntime()
+			end
+		end)
+
+		activeCabRuntime = runtime
+		activePassengerService = passengerService
+		activeFareService = fareService
+
+		return runtime
+	end
 
 	local debugTuningService = DebugTuningService.new({
 		config = Config,
 		remote = remotes.debugTune,
 	})
-	local passengerService = nil
 	debugTuningService:onChanged(function(key, value)
 		taxiService:applyLiveTuning(key, value)
-		if passengerService and passengerService.applyLiveTuning then
-			passengerService.applyLiveTuning(key)
+		if activePassengerService and activePassengerService.applyLiveTuning then
+			activePassengerService.applyLiveTuning(key)
 		end
 	end)
 	debugTuningService:start()
 
+	local cabCompanyService = CabCompanyService.new({
+		config = Config,
+		remotes = remotes,
+		world = world,
+		taxiService = taxiService,
+		vehicleCatalog = VehicleCatalog,
+		onCabReady = function(handle, request)
+			startCabRuntime(handle, request and request.spawnPose or spawnPose)
+		end,
+	})
+	cabCompanyService:start()
+
 	local initialPlayer = Players:GetPlayers()[1]
-	local playerCab = nil
 	if initialPlayer then
-		playerCab = taxiService:spawnCabForPlayer(initialPlayer, Config.carDefaultProfileName, spawnPose, {
+		local playerCab = taxiService:spawnCabForPlayer(initialPlayer, Config.carDefaultTaxiId, spawnPose, {
 			world = world,
 			startController = false,
 		})
-	else
-		playerCab = taxiService:createCab({
-			world = world,
-			spawnPose = spawnPose,
-			profileName = Config.carDefaultProfileName,
-		})
+		startCabRuntime(playerCab, spawnPose)
 	end
-	local car = playerCab.car
-	local gpsService = GpsService.start({
-		world = world,
-		car = car,
-		driveSurfaces = driveSurfaces,
-	})
-	local shiftService = startShiftService(remotes, stateReplicator, economyService)
-	local fareService = FareService.new({
-		config = Config,
-		car = car,
-		shiftService = shiftService,
-		ownerUserId = playerCab.ownerUserId,
-	})
-	if shiftService and shiftService.onPhaseChanged then
-		shiftService:onPhaseChanged(function(snapshot)
-			if fareService and fareService.onShiftPhaseChanged then
-				fareService:onShiftPhaseChanged(snapshot and snapshot.phase)
-			end
-		end)
-	end
-
-	taxiService:startCabController(playerCab, {
-		spawnPose = playerCab.spawnPose or spawnPose,
-		driverMode = "Player",
-		fareService = fareService,
-		ownerPlayer = playerCab.ownerPlayer,
-		ownerUserId = playerCab.ownerUserId,
-	})
-
-	passengerService = PassengerService.start({
-		world = world,
-		car = car,
-		driveSurfaces = driveSurfaces,
-		spawnPose = spawnPose,
-		gpsService = gpsService,
-		fareService = fareService,
-		stateReplicator = stateReplicator,
-	})
 end
 
 local ok, err = xpcall(bootstrap, debug.traceback)

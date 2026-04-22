@@ -27,6 +27,7 @@ local function getRemoteNames()
 
 	return {
 		driveInput = Remotes.getClientToServerName("driveInput"),
+		requestCab = Remotes.getClientToServerName("requestCab"),
 		cameraEvent = Remotes.getServerToClientName("cameraEvent"),
 		debugTune = Remotes.getClientToServerName("debugTune"),
 		gameplayStateUpdated = Remotes.getServerToClientName("gameplayStateUpdated"),
@@ -63,6 +64,7 @@ function RemoteRegistry.ensure(options)
 
 	return {
 		driveInput = getOrCreateRemoteEvent(remoteNames.driveInput),
+		requestCab = getOrCreateRemoteEvent(remoteNames.requestCab),
 		cameraEvent = getOrCreateRemoteEvent(remoteNames.cameraEvent),
 		debugTune = if RemoteRegistry.isDebugTuningEnabled(config)
 			then getOrCreateRemoteEvent(remoteNames.debugTune)

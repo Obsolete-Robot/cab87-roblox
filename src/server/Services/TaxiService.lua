@@ -5,6 +5,7 @@ local TaxiController = require(script.Parent.Parent:WaitForChild("Controllers"):
 local VehicleCatalog = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VehicleCatalog"))
 
 local OWNER_USER_ID_ATTRIBUTE_FALLBACK = "Cab87OwnerUserId"
+local TAXI_ID_ATTRIBUTE_FALLBACK = "Cab87TaxiId"
 
 local TaxiService = {}
 TaxiService.__index = TaxiService
@@ -28,6 +29,15 @@ local function getOwnerAttributeName(config)
 	end
 
 	return OWNER_USER_ID_ATTRIBUTE_FALLBACK
+end
+
+local function getTaxiIdAttributeName(config)
+	local attributeName = config and config.carTaxiIdAttribute
+	if type(attributeName) == "string" and attributeName ~= "" then
+		return attributeName
+	end
+
+	return TAXI_ID_ATTRIBUTE_FALLBACK
 end
 
 local function getPlayerForUserId(players, ownerPlayer, ownerUserId)
@@ -92,6 +102,12 @@ end
 function TaxiService:_setCabOwnerAttribute(handle, ownerUserId)
 	if handle and handle.car then
 		handle.car:SetAttribute(getOwnerAttributeName(self.config), ownerUserId)
+	end
+end
+
+function TaxiService:_setCabTaxiIdAttribute(handle)
+	if handle and handle.car then
+		handle.car:SetAttribute(getTaxiIdAttributeName(self.config), handle.taxiId)
 	end
 end
 
@@ -233,6 +249,10 @@ local function getYawFromLookVector(lookVector, fallbackYaw)
 end
 
 function TaxiService:_resolveSpawnPose(spawnPose, ownerPlayer, carConfig)
+	if spawnPose then
+		return spawnPose
+	end
+
 	if not ownerPlayer then
 		return spawnPose
 	end
@@ -316,6 +336,7 @@ function TaxiService:createCab(options)
 
 	self.handleByCar[car] = handle
 	table.insert(self.cabHandles, handle)
+	self:_setCabTaxiIdAttribute(handle)
 	self:_setHandleOwner(handle, ownerPlayer, ownerUserId, {
 		allowDuplicate = options.allowDuplicate,
 		updateController = false,
