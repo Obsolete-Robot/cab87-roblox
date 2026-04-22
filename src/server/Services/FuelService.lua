@@ -78,6 +78,8 @@ function FuelService:_ensurePlayerState(player)
 		completeAt = 0,
 		price = 0,
 		cooldownUntil = 0,
+		nextBurnPublishAt = 0,
+		lastPublishedFuel = self:_fuelCapacity(),
 	}
 	self.stateByPlayer[player] = state
 	self:_publish(player)
@@ -92,15 +94,21 @@ end
 
 function FuelService:_publish(player, reason)
 	local state = self:_ensurePlayerState(player)
+	local station = state.stationId and self.stationsById[state.stationId] or nil
 	local payload = {
 		fuel = state.fuel,
 		capacity = self:_fuelCapacity(),
 		state = state.state,
 		stationId = state.stationId,
+		stationName = station and station.name or nil,
+		stationKind = station and station.kind or nil,
 		price = state.price,
+		startedAt = state.startedAt,
+		completeAt = state.completeAt,
 		reason = reason,
 		serverTime = Workspace:GetServerTimeNow(),
 	}
+	state.lastPublishedFuel = state.fuel
 	self:_fire(player, payload)
 
 	local cab = self.taxiService and self.taxiService:getCabForPlayer(player)
@@ -261,6 +269,7 @@ function FuelService:_tickFuelBurn(player, state, dt)
 	local maxSpeed = math.max(toNumber(self.config.carMaxForward, 120), 1)
 	local burnRate = math.max(toNumber(self.config.fuelBurnPerSecondAtMaxSpeed, 0.38), 0)
 	local burn = math.clamp(speed / maxSpeed, 0, 1) * burnRate * dt
+	local previousFuel = state.fuel
 	if burn > 0 then
 		state.fuel = math.max(state.fuel - burn, 0)
 	end
@@ -270,6 +279,20 @@ function FuelService:_tickFuelBurn(player, state, dt)
 		multiplier = math.clamp(toNumber(self.config.fuelOutOfGasSpeedMultiplier, 0.33), 0.05, 1)
 	end
 	cab:SetAttribute(self.config.carConfigAttributePrefix .. "carMaxForward", maxSpeed * multiplier)
+
+	local now = Workspace:GetServerTimeNow()
+	local crossedLowFuel = previousFuel > (self:_fuelCapacity() * 0.2) and state.fuel <= (self:_fuelCapacity() * 0.2)
+	local crossedOutOfFuel = previousFuel > 0.001 and state.fuel <= 0.001
+	if crossedOutOfFuel or crossedLowFuel then
+		self:_publish(player, "fuel_tick")
+		state.nextBurnPublishAt = now + 0.2
+		return
+	end
+
+	if math.abs(state.fuel - (state.lastPublishedFuel or previousFuel)) >= 0.1 and now >= (state.nextBurnPublishAt or 0) then
+		self:_publish(player, "fuel_tick")
+		state.nextBurnPublishAt = now + 0.25
+	end
 end
 
 function FuelService:start()
