@@ -1002,6 +1002,7 @@ function PassengerService.start(options)
 		lastCabAttributeMirrorAt = nil,
 		previousCabPosition = nil,
 		previousCabMotionDirection = nil,
+		horizontalDistance = horizontalDistance,
 	}
 	car:SetAttribute(getConfigString("gameplayStateCabIdAttribute", "Cab87GameplayCabId"), service.cabStateId)
 
