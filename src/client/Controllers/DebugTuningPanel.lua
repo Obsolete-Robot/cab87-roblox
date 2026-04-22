@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
 
 local DebugTuningPanel = {}
 
@@ -102,7 +103,9 @@ function DebugTuningPanel.start(parentGui)
 		return nil
 	end
 
-	local debugTuneRemote = ReplicatedStorage:WaitForChild(Config.debugTuneRemoteName, 10)
+	local debugTuneRemoteName = Remotes.clientToServer and Remotes.clientToServer.debugTune
+		or "Cab87DebugTune"
+	local debugTuneRemote = ReplicatedStorage:WaitForChild(debugTuneRemoteName, 10)
 	if not debugTuneRemote or not debugTuneRemote:IsA("RemoteEvent") then
 		return nil
 	end

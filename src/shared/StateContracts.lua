@@ -1,6 +1,5 @@
 local StateContracts = {}
 
-StateContracts.remoteName = "Cab87GameplayStateUpdated"
 StateContracts.defaultCabId = "PlayerCab"
 
 StateContracts.actions = {

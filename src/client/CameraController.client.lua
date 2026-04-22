@@ -3,6 +3,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
 local CabVisuals = require(script.Parent:WaitForChild("CabVisuals"))
 local DrivenCabTracker = require(script.Parent:WaitForChild("Controllers"):WaitForChild("DrivenCabTracker"))
 
@@ -323,7 +324,9 @@ local function updateActiveCamera(dt)
 end
 
 task.spawn(function()
-	local cameraEventRemote = ReplicatedStorage:WaitForChild(Config.cameraEventRemoteName, 10)
+	local cameraEventRemoteName = Remotes.serverToClient and Remotes.serverToClient.cameraEvent
+		or "Cab87CameraEvent"
+	local cameraEventRemote = ReplicatedStorage:WaitForChild(cameraEventRemoteName, 10)
 	if cameraEventRemote and cameraEventRemote:IsA("RemoteEvent") then
 		cameraEventRemote.OnClientEvent:Connect(function(action, intensity)
 			if (action == "Crash" or action == "Land" or action == "Shake") and activeCab then

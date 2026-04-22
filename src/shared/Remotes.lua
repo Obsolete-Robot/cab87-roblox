@@ -1,5 +1,11 @@
 local Remotes = {
+	clientToServer = {
+		driveInput = "Cab87DriveInput",
+		debugTune = "Cab87DebugTune",
+	},
+
 	serverToClient = {
+		cameraEvent = "Cab87CameraEvent",
 		gameplayStateUpdated = "Cab87GameplayStateUpdated",
 		shiftStateUpdated = "Cab87ShiftStateUpdated",
 	},

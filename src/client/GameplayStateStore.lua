@@ -8,8 +8,7 @@ local StateContracts = require(shared:WaitForChild("StateContracts"))
 local GameplayStateStore = {}
 
 local remoteName = Remotes.serverToClient and Remotes.serverToClient.gameplayStateUpdated
-	or Config.gameplayStateRemoteName
-	or StateContracts.remoteName
+	or "Cab87GameplayStateUpdated"
 local remote = ReplicatedStorage:WaitForChild(remoteName)
 local cabIdAttribute = Config.gameplayStateCabIdAttribute or "Cab87GameplayCabId"
 local actions = StateContracts.actions
