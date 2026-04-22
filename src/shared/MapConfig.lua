@@ -13,6 +13,14 @@ local MapConfig = {
 	arterialSpineOffsetBlocks = 3,
 	secondaryRoadEveryBlocks = 3,
 	secondaryRoadChance = 0.35,
+
+	-- Cab company home base (milestone 2 foundation).
+	cabCompanyCenter = Vector3.new(0, 0.52, -960),
+	cabCompanySpawnYaw = 0,
+	cabCompanyLotSize = Vector3.new(220, 1, 220),
+	cabCompanyBuildingSize = Vector3.new(110, 50, 70),
+	cabCompanyGarageSize = Vector3.new(140, 24, 60),
+	cabCompanyRefuelIslandSize = Vector3.new(48, 8, 26),
 }
 
 return MapConfig
