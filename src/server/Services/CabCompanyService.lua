@@ -144,6 +144,7 @@ function CabCompanyService.new(options)
 		world = options.world,
 		taxiService = options.taxiService,
 		vehicleCatalog = options.vehicleCatalog,
+		vehicleInventoryService = options.vehicleInventoryService,
 		onCabReady = options.onCabReady,
 		connections = {},
 		lastRequestAtByUserId = {},
@@ -246,8 +247,22 @@ function CabCompanyService:_resolveTaxiId(player, requestedTaxiId)
 		)
 		or getConfigString(self.config, "carDefaultProfileName", "PlayerTaxi")
 	local taxiId = sanitizeString(requestedTaxiId)
+		or (
+			self.vehicleInventoryService
+			and self.vehicleInventoryService.getEquippedTaxiId
+			and self.vehicleInventoryService:getEquippedTaxiId(player)
+		)
 		or sanitizeString(player and player:GetAttribute(selectedAttribute))
 		or defaultTaxiId
+
+	if self.vehicleInventoryService and not self.vehicleInventoryService:isTaxiOwned(player, taxiId) then
+		taxiId = (
+			self.vehicleInventoryService
+			and self.vehicleInventoryService.getEquippedTaxiId
+			and self.vehicleInventoryService:getEquippedTaxiId(player)
+		)
+			or defaultTaxiId
+	end
 
 	if self:_isKnownTaxiId(taxiId) then
 		return taxiId

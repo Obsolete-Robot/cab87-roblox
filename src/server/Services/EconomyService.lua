@@ -24,6 +24,7 @@ function EconomyService.new(options)
 	return setmetatable({
 		config = options.config or {},
 		players = options.players or Players,
+		persistenceService = options.persistenceService,
 		bankByPlayer = {}, -- session-scoped until PersistenceService milestone lands
 		payoutEventIdByPlayer = {},
 		connections = {},
@@ -34,7 +35,11 @@ end
 function EconomyService:_ensurePlayerBank(player)
 	local bank = self.bankByPlayer[player]
 	if type(bank) ~= "number" then
-		bank = 0
+		if self.persistenceService and self.persistenceService.getBankMoney then
+			bank = self.persistenceService:getBankMoney(player)
+		else
+			bank = 0
+		end
 		self.bankByPlayer[player] = bank
 	end
 
@@ -44,6 +49,28 @@ end
 
 function EconomyService:getBankMoney(player)
 	return self:_ensurePlayerBank(player)
+end
+
+function EconomyService:spendBankMoney(player, amount)
+	if type(amount) ~= "number" or amount ~= amount or amount <= 0 then
+		return false, "invalidAmount"
+	end
+
+	local roundedAmount = math.max(math.floor(amount + 0.5), 0)
+	local currentBank = self:_ensurePlayerBank(player)
+	if currentBank < roundedAmount then
+		return false, "insufficientFunds"
+	end
+
+	local nextBank = currentBank - roundedAmount
+	self.bankByPlayer[player] = nextBank
+	setAttributeIfNamed(player, self.config.shiftBankMoneyAttribute, nextBank)
+
+	if self.persistenceService and self.persistenceService.setBankMoney then
+		self.persistenceService:setBankMoney(player, nextBank)
+	end
+
+	return true
 end
 
 function EconomyService:createShiftPayoutSummary(player, grossEarnings, breakdown)
@@ -66,6 +93,10 @@ function EconomyService:createShiftPayoutSummary(player, grossEarnings, breakdow
 	local bankBalance = self:_ensurePlayerBank(player) + netDeposit
 	self.bankByPlayer[player] = bankBalance
 	setAttributeIfNamed(player, self.config.shiftBankMoneyAttribute, bankBalance)
+	if self.persistenceService and self.persistenceService.setBankMoney then
+		self.persistenceService:setBankMoney(player, bankBalance)
+		self.persistenceService:saveProfile(player)
+	end
 	setAttributeIfNamed(player, self.config.shiftPayoutSummaryEventIdAttribute, eventId)
 	setAttributeIfNamed(player, self.config.shiftPayoutFareTotalsAttribute, fareTotals)
 	setAttributeIfNamed(player, self.config.shiftPayoutBonusesAttribute, bonuses)

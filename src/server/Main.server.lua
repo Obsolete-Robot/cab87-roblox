@@ -20,8 +20,10 @@ local DebugTuningService = require(servicesFolder:WaitForChild("DebugTuningServi
 local EconomyService = require(servicesFolder:WaitForChild("EconomyService"))
 local FareService = require(servicesFolder:WaitForChild("FareService"))
 local GameplayStateReplicator = require(servicesFolder:WaitForChild("GameplayStateReplicator"))
+local PersistenceService = require(servicesFolder:WaitForChild("PersistenceService"))
 local ShiftService = require(servicesFolder:WaitForChild("ShiftService"))
 local TaxiService = require(servicesFolder:WaitForChild("TaxiService"))
+local VehicleInventoryService = require(servicesFolder:WaitForChild("VehicleInventoryService"))
 
 local function yawToForward(yaw)
 	return Vector3.new(math.sin(yaw), 0, math.cos(yaw))
@@ -204,10 +206,26 @@ local function bootstrap()
 		remotes = remotes,
 	})
 	local world, driveSurfaces, crashObstacles, spawnPose = createRuntimeWorld()
+	local persistenceService = PersistenceService.new({
+		config = Config,
+		vehicleCatalog = VehicleCatalog,
+	})
+	persistenceService:start()
+
 	local economyService = EconomyService.new({
 		config = Config,
+		persistenceService = persistenceService,
 	})
 	economyService:start()
+
+	local vehicleInventoryService = VehicleInventoryService.new({
+		config = Config,
+		remotes = remotes,
+		vehicleCatalog = VehicleCatalog,
+		economyService = economyService,
+		persistenceService = persistenceService,
+	})
+	vehicleInventoryService:start()
 
 	local cabFactory = CabFactory.new({
 		config = Config,
@@ -344,6 +362,7 @@ local function bootstrap()
 		world = world,
 		taxiService = taxiService,
 		vehicleCatalog = VehicleCatalog,
+		vehicleInventoryService = vehicleInventoryService,
 		onCabReady = function(handle, request)
 			startCabRuntime(handle, request and request.spawnPose or spawnPose)
 		end,
