@@ -162,6 +162,10 @@ function FuelHudController.start(parentGui, cabTracker)
 		lastReasonText = "",
 		promptStation = nil,
 		lastRefuelRequestAt = 0,
+		lastServerTime = nil,
+		lastServerSampleAt = 0,
+		refuelStartFuel = nil,
+		refuelStartedAt = nil,
 	}
 
 	local function setPromptStation(cab, fuel, capacity)
@@ -235,6 +239,25 @@ function FuelHudController.start(parentGui, cabTracker)
 			if type(payload) ~= "table" then
 				return
 			end
+			local payloadState = payload.state
+			if payloadState == "starting" or payloadState == "refueling" then
+				local startedAt = toNumber(payload.startedAt, nil)
+				if startedAt and (controller.refuelStartedAt == nil or math.abs(startedAt - controller.refuelStartedAt) > 0.001) then
+					controller.refuelStartFuel = toNumber(payload.fuel, nil)
+					controller.refuelStartedAt = startedAt
+				elseif controller.refuelStartFuel == nil then
+					controller.refuelStartFuel = toNumber(payload.fuel, nil)
+				end
+			else
+				controller.refuelStartFuel = nil
+				controller.refuelStartedAt = nil
+			end
+
+			local serverTime = toNumber(payload.serverTime, nil)
+			if serverTime then
+				controller.lastServerTime = serverTime
+				controller.lastServerSampleAt = os.clock()
+			end
 			controller.fuelState = payload
 			local reason = payload.reason
 			if type(reason) == "string" and reason ~= "" and reason ~= "fuel_tick" then
@@ -280,6 +303,7 @@ function FuelHudController.start(parentGui, cabTracker)
 		fuel = fuel or 0
 		capacity = math.max(capacity or toNumber(Config.fuelCapacity, 100), 1)
 		local ratio = math.clamp(fuel / capacity, 0, 1)
+		local displayRatio = ratio
 
 		local strokeColor = Color3.fromRGB(110, 176, 255)
 		local fillColor = Color3.fromRGB(86, 196, 112)
@@ -291,9 +315,17 @@ function FuelHudController.start(parentGui, cabTracker)
 			local progress = nil
 			local startedAt = state and toNumber(state.startedAt, nil)
 			local completeAt = state and toNumber(state.completeAt, nil)
-			local serverTime = state and toNumber(state.serverTime, nil)
+			local serverTime = controller.lastServerTime or (state and toNumber(state.serverTime, nil))
+			if serverTime and controller.lastServerSampleAt > 0 then
+				serverTime += math.max(os.clock() - controller.lastServerSampleAt, 0)
+			end
 			if startedAt and completeAt and serverTime and completeAt > startedAt then
 				progress = math.clamp((serverTime - startedAt) / (completeAt - startedAt), 0, 1)
+			end
+			if progress and controller.refuelStartFuel then
+				local startFuel = math.clamp(controller.refuelStartFuel, 0, capacity)
+				local displayFuel = startFuel + (capacity - startFuel) * progress
+				displayRatio = math.clamp(displayFuel / capacity, 0, 1)
 			end
 			if progress then
 				statusText = string.format("Refueling... %d%%", math.floor(progress * 100 + 0.5))
@@ -325,8 +357,8 @@ function FuelHudController.start(parentGui, cabTracker)
 			promptText = "Stay within the refuel zone"
 		end
 
-		ui.percent.Text = string.format("%d%%", math.floor(ratio * 100 + 0.5))
-		ui.barFill.Size = UDim2.fromScale(ratio, 1)
+		ui.percent.Text = string.format("%d%%", math.floor(displayRatio * 100 + 0.5))
+		ui.barFill.Size = UDim2.fromScale(displayRatio, 1)
 		ui.status.Text = statusText
 		ui.prompt.Text = promptText
 		ui.stroke.Color = strokeColor
