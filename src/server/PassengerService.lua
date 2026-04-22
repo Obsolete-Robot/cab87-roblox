@@ -57,6 +57,15 @@ local function setAttributeIfChanged(instance, attributeName, value)
 	end
 end
 
+local function roundSigned(value)
+	local numeric = value or 0
+	if numeric >= 0 then
+		return math.floor(numeric + 0.5)
+	end
+
+	return math.ceil(numeric - 0.5)
+end
+
 local horizontalDistance = RoadSampling.distanceXZ
 
 local function getPassengerStopReservationDistance()
@@ -956,7 +965,7 @@ local function updateCabFareAttributes(service, cabPosition, cabSpeed)
 		estimatedPayout = math.max(math.floor((fareSnapshot.estimatedPayout or 0) + 0.5), 0),
 		activeValue = math.max(math.floor((fareSnapshot.activeValue or 0) + 0.5), 0),
 		payout = math.max(math.floor((fareSnapshot.payout or 0) + 0.5), 0),
-		timeComponent = math.floor((fareSnapshot.timeComponent or 0) + 0.5),
+		timeComponent = roundSigned(fareSnapshot.timeComponent or 0),
 		speedBonus = math.max(math.floor((fareSnapshot.speedBonus or 0) + 0.5), 0),
 		damagePenalty = math.max(math.floor((fareSnapshot.damagePenalty or 0) + 0.5), 0),
 		damageCollisions = math.max(math.floor((fareSnapshot.damageCollisions or 0) + 0.5), 0),

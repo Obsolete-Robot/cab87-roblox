@@ -13,6 +13,14 @@ local function roundMoney(value)
 	return math.max(0, math.floor(value + 0.5))
 end
 
+local function roundSigned(value)
+	if value >= 0 then
+		return math.floor(value + 0.5)
+	end
+
+	return math.ceil(value - 0.5)
+end
+
 function FareRules.buildEstimate(config, routeDistance)
 	local baseValue = getConfigNumber(config, "fareBaseValue", 10)
 	local distancePerUnit = math.max(getConfigNumber(config, "fareDistanceStudsPerUnit", 45), 1)
@@ -62,7 +70,7 @@ function FareRules.finalizeFare(config, routeDistance, elapsedSeconds, damageInp
 		baseFare = estimate.baseFare,
 		distanceValue = estimate.distanceValue,
 		estimatedPayout = estimate.estimatedPayout,
-		timeComponent = roundMoney(timeComponent),
+		timeComponent = roundSigned(timeComponent),
 		speedBonus = roundMoney(speedBonus),
 		damagePenalty = roundMoney(damagePenalty),
 		finalPayout = roundMoney(finalPayout),
