@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Cab87 Road Curve Editor</title>
+	<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+	<div class="app-shell">
+		<aside class="sidebar">
+			<div class="hero">
+				<p class="eyebrow">Cab87 Tools</p>
+				<h1>Road Curve Editor</h1>
+				<p class="lede">Trace a reference image, shape Catmull-Rom road splines, then export JSON for the Roblox road editor plugin.</p>
+			</div>
+
+			<section class="panel">
+				<div class="panel-header">
+					<h2>Splines</h2>
+					<p>Append points by clicking empty canvas space. Drag points to refine the layout.</p>
+				</div>
+
+				<div class="button-row">
+					<button id="newSplineButton" type="button">New</button>
+					<button id="prevSplineButton" type="button">Prev</button>
+					<button id="nextSplineButton" type="button">Next</button>
+					<button id="deleteSplineButton" type="button" class="danger">Delete</button>
+				</div>
+
+				<div id="splineList" class="spline-list" aria-live="polite"></div>
+
+				<label class="field">
+					<span>Road Width</span>
+					<input id="widthInput" type="number" min="8" max="200" step="1">
+				</label>
+
+				<label class="checkbox-field">
+					<input id="closedToggle" type="checkbox">
+					<span>Closed loop</span>
+				</label>
+
+				<label class="checkbox-field">
+					<input id="meshPreviewToggle" type="checkbox">
+					<span>Roblox Mesh Preview</span>
+				</label>
+
+				<div class="button-row">
+					<button id="deletePointButton" type="button">Delete Point</button>
+					<button id="centerViewButton" type="button">Center View</button>
+				</div>
+			</section>
+
+			<section class="panel">
+				<div class="panel-header">
+					<h2>Trace Image</h2>
+					<p>Import a flat reference image and align it in world X/Z space.</p>
+				</div>
+
+				<label class="file-field">
+					<span>Image File</span>
+					<input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp">
+				</label>
+
+				<label class="field">
+					<span>Image X</span>
+					<input id="imageOffsetXInput" type="number" step="1">
+				</label>
+
+				<label class="field">
+					<span>Image Z</span>
+					<input id="imageOffsetZInput" type="number" step="1">
+				</label>
+
+				<label class="field">
+					<span>Image Scale</span>
+					<input id="imageScaleInput" type="number" min="0.01" step="0.05">
+				</label>
+
+				<label class="field">
+					<span>Opacity</span>
+					<input id="imageOpacityInput" type="range" min="0" max="100" step="1">
+				</label>
+
+				<div class="button-row">
+					<button id="resetImageButton" type="button">Reset Image</button>
+					<button id="clearImageButton" type="button" class="danger">Clear Image</button>
+				</div>
+			</section>
+
+			<section class="panel">
+				<div class="panel-header">
+					<h2>Session JSON</h2>
+					<p>Exports a resumable editor session while keeping the `splines` payload compatible with the Roblox road editor plugin.</p>
+				</div>
+
+				<div class="button-row">
+					<button id="importButton" type="button">Import Session JSON</button>
+					<button id="exportButton" type="button" class="primary">Export Curve JSON</button>
+				</div>
+				<input id="curveJsonInput" type="file" accept=".json,application/json" hidden>
+			</section>
+
+			<section class="panel compact">
+				<div class="panel-header">
+					<h2>Canvas Controls</h2>
+				</div>
+				<ul class="tips">
+					<li>Left click empty space: append point to active spline</li>
+					<li>Left drag point: move point</li>
+					<li>Right drag or middle drag: pan</li>
+					<li>Mouse wheel: zoom</li>
+				</ul>
+			</section>
+
+			<div id="status" class="status" aria-live="polite"></div>
+		</aside>
+
+		<main class="editor-shell">
+			<canvas id="editorCanvas"></canvas>
+			<div class="canvas-hud">
+				<div id="cursorReadout" class="hud-chip">X 0.0 | Z 0.0 | Zoom 1.00x</div>
+				<div class="hud-chip">Sample step: 8 studs</div>
+			</div>
+		</main>
+	</div>
+
+	<script src="app.js"></script>
+</body>
+</html>

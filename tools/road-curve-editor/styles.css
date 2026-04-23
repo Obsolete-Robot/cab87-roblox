@@ -1,0 +1,332 @@
+:root {
+	--bg: #f0eadf;
+	--panel: rgba(255, 250, 240, 0.88);
+	--panel-strong: rgba(252, 247, 238, 0.96);
+	--line: rgba(43, 57, 68, 0.14);
+	--line-strong: rgba(43, 57, 68, 0.28);
+	--text: #23313a;
+	--muted: #6a767f;
+	--accent: #c85b2a;
+	--accent-strong: #8f3b17;
+	--accent-soft: rgba(200, 91, 42, 0.18);
+	--danger: #8f2e1f;
+	--canvas: linear-gradient(180deg, #dbe5e6 0%, #c9d3d6 100%);
+	--road-fill: rgba(32, 39, 48, 0.28);
+	--road-stroke: rgba(24, 29, 36, 0.92);
+	--road-inactive: rgba(54, 66, 78, 0.48);
+	--point: #ffaf45;
+	--point-selected: #d6421a;
+	--point-ring: rgba(255, 255, 255, 0.92);
+	--shadow: 0 22px 60px rgba(54, 42, 24, 0.18);
+	--radius: 18px;
+	--font-heading: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+	--font-body: "Avenir Next", "Gill Sans", "Segoe UI", sans-serif;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+	background:
+		radial-gradient(circle at top left, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0) 38%),
+		linear-gradient(135deg, #efe8da 0%, #dfe8ea 100%);
+	color: var(--text);
+	font-family: var(--font-body);
+	overflow: hidden;
+}
+
+body {
+	height: 100vh;
+}
+
+button,
+input {
+	font: inherit;
+}
+
+.app-shell {
+	display: grid;
+	grid-template-columns: 360px minmax(0, 1fr);
+	height: 100vh;
+	overflow: hidden;
+}
+
+.sidebar {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	padding: 18px;
+	background: rgba(244, 236, 223, 0.86);
+	backdrop-filter: blur(10px);
+	border-right: 1px solid rgba(35, 49, 58, 0.1);
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.hero,
+.panel,
+.status {
+	background: var(--panel);
+	border: 1px solid rgba(35, 49, 58, 0.08);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow);
+}
+
+.hero {
+	padding: 18px 18px 16px;
+	background:
+		linear-gradient(140deg, rgba(255, 247, 234, 0.98) 0%, rgba(249, 237, 219, 0.94) 56%, rgba(239, 225, 210, 0.95) 100%);
+}
+
+.eyebrow {
+	margin: 0 0 8px;
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--accent-strong);
+}
+
+.hero h1 {
+	margin: 0;
+	font-family: var(--font-heading);
+	font-size: 31px;
+	line-height: 1;
+	letter-spacing: -0.04em;
+}
+
+.lede {
+	margin: 12px 0 0;
+	font-size: 14px;
+	line-height: 1.45;
+	color: var(--muted);
+}
+
+.panel {
+	padding: 14px;
+	background: var(--panel-strong);
+}
+
+.panel.compact {
+	padding-bottom: 10px;
+}
+
+.panel-header {
+	margin-bottom: 12px;
+}
+
+.panel-header h2 {
+	margin: 0;
+	font-family: var(--font-heading);
+	font-size: 16px;
+	letter-spacing: -0.03em;
+}
+
+.panel-header p {
+	margin: 6px 0 0;
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--muted);
+}
+
+.button-row {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.button-row:first-of-type {
+	margin-top: 0;
+}
+
+button {
+	appearance: none;
+	border: 0;
+	border-radius: 12px;
+	padding: 10px 12px;
+	background: #27323a;
+	color: #f7f2eb;
+	cursor: pointer;
+	transition: transform 120ms ease, background-color 120ms ease, opacity 120ms ease;
+}
+
+button:hover {
+	transform: translateY(-1px);
+	background: #1d262c;
+}
+
+button:active {
+	transform: translateY(0);
+}
+
+button.primary {
+	background: linear-gradient(135deg, #c85b2a 0%, #9c3b16 100%);
+}
+
+button.primary:hover {
+	background: linear-gradient(135deg, #d16431 0%, #873114 100%);
+}
+
+button.danger {
+	background: linear-gradient(135deg, #96422a 0%, #74281c 100%);
+}
+
+.field,
+.file-field,
+.checkbox-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 10px;
+	font-size: 13px;
+}
+
+.checkbox-field {
+	flex-direction: row;
+	align-items: center;
+	gap: 10px;
+}
+
+.field span,
+.file-field span {
+	font-weight: 700;
+	color: var(--muted);
+}
+
+input[type="number"],
+input[type="file"] {
+	width: 100%;
+	border: 1px solid rgba(35, 49, 58, 0.12);
+	border-radius: 12px;
+	padding: 10px 12px;
+	background: rgba(255, 255, 255, 0.84);
+	color: var(--text);
+}
+
+input[type="range"] {
+	width: 100%;
+	accent-color: var(--accent);
+}
+
+.spline-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 12px;
+	max-height: 180px;
+	overflow: auto;
+	padding-right: 4px;
+}
+
+.spline-card {
+	display: block;
+	width: 100%;
+	text-align: left;
+	border: 1px solid rgba(35, 49, 58, 0.08);
+	border-radius: 14px;
+	padding: 10px 12px;
+	background: rgba(255, 255, 255, 0.72);
+	cursor: pointer;
+	transition: border-color 120ms ease, transform 120ms ease, background-color 120ms ease;
+}
+
+.spline-card:hover {
+	transform: translateX(1px);
+	border-color: rgba(200, 91, 42, 0.34);
+}
+
+.spline-card.active {
+	border-color: rgba(200, 91, 42, 0.62);
+	background: linear-gradient(135deg, rgba(255, 237, 223, 0.92) 0%, rgba(255, 245, 236, 0.96) 100%);
+	box-shadow: inset 0 0 0 1px rgba(200, 91, 42, 0.12);
+}
+
+.spline-card-title {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	font-weight: 700;
+}
+
+.spline-card-meta {
+	margin-top: 4px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.tips {
+	margin: 0;
+	padding-left: 18px;
+	display: grid;
+	gap: 6px;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+.status {
+	margin-top: auto;
+	padding: 14px 16px;
+	font-size: 13px;
+	line-height: 1.45;
+}
+
+.editor-shell {
+	position: relative;
+	min-height: 0;
+	min-width: 0;
+	background: var(--canvas);
+	overflow: hidden;
+}
+
+#editorCanvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+	cursor: crosshair;
+	touch-action: none;
+}
+
+.canvas-hud {
+	position: absolute;
+	top: 16px;
+	right: 16px;
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	flex-wrap: wrap;
+	pointer-events: none;
+}
+
+.hud-chip {
+	padding: 9px 12px;
+	border-radius: 999px;
+	background: rgba(250, 246, 240, 0.82);
+	border: 1px solid rgba(35, 49, 58, 0.08);
+	box-shadow: 0 12px 28px rgba(35, 49, 58, 0.12);
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+}
+
+@media (max-width: 980px) {
+	.app-shell {
+		grid-template-columns: 1fr;
+		grid-template-rows: 62vh minmax(0, 1fr);
+	}
+
+	.sidebar {
+		order: 2;
+		border-right: 0;
+		border-top: 1px solid rgba(35, 49, 58, 0.1);
+	}
+
+	#editorCanvas {
+		height: 100%;
+	}
+}

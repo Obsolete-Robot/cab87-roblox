@@ -4,19 +4,25 @@
 
 local AssetService = game:GetService("AssetService")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local HttpService = game:GetService("HttpService")
 local Selection = game:GetService("Selection")
+local StudioService = game:GetService("StudioService")
 local Workspace = game:GetService("Workspace")
 
 local ROOT_NAME = "Cab87RoadEditor"
 local SPLINES_NAME = "Splines"
 local POINTS_NAME = "RoadPoints"
+local MARKERS_NAME = "Markers"
 local MESH_NAME = "RoadMesh"
 local NETWORK_NAME = "RoadNetwork"
 local NETWORK_BUILD_NAME = "RoadNetwork_Building"
 local ACTIVE_SPLINE_ATTR = "ActiveSpline"
 local ROAD_WIDTH_ATTR = "RoadWidth"
+local MARKER_TYPE_ATTR = "Cab87MarkerType"
 
 local ROAD_WIDTH = 28
+local CAB_COMPANY_NODE_NAME = "CabCompanyNode"
+local CAB_COMPANY_NODE_RIDE_HEIGHT = 2.3
 local ROAD_MIN_WIDTH = 8
 local ROAD_MAX_WIDTH = 200
 local ROAD_WIDTH_STEP = 4
@@ -50,6 +56,11 @@ local WIRE_OFFSET_Y = 0.08
 local WIRE_MAX_EDGES = 6000
 local ROAD_DEBUG_LOGGING = true
 local ROAD_LOG_PREFIX = "[cab87 roads plugin]"
+local ROAD_CURVE_JSON_VERSION = 1
+local IMPORT_PLANE_Y_SETTING = "cab87_road_import_plane_y"
+local IMPORT_FILE_FILTER = { "json" }
+local IMPORT_PLANE_Y_MIN = -5000
+local IMPORT_PLANE_Y_MAX = 5000
 
 local AUTO_REBUILD_DELAY = 0.5
 local autoRebuildEnabled = false
@@ -58,7 +69,9 @@ local autoRebuildSerial = 0
 local autoRebuildRunning = false
 local autoRebuildDueTime = 0
 local autoRebuildReason = nil
+local bulkImportInProgress = false
 local wireframeEnabled = plugin:GetSetting("cab87_road_wireframe") == true
+local importPlaneY = plugin:GetSetting(IMPORT_PLANE_Y_SETTING)
 local lastWireframeEdges = {}
 
 local function formatLogMessage(message, ...)
@@ -86,6 +99,16 @@ local function sanitizeRoadWidth(value)
 	end
 	return math.clamp(width, ROAD_MIN_WIDTH, ROAD_MAX_WIDTH)
 end
+
+local function sanitizeImportPlaneY(value)
+	local planeY = tonumber(value)
+	if not planeY then
+		return 0
+	end
+	return math.clamp(planeY, IMPORT_PLANE_Y_MIN, IMPORT_PLANE_Y_MAX)
+end
+
+importPlaneY = sanitizeImportPlaneY(importPlaneY)
 
 local function getSplineRoadWidth(spline)
 	if not spline then
@@ -118,6 +141,18 @@ local function getOrCreateSplinesFolder()
 	end
 	folder = Instance.new("Folder")
 	folder.Name = SPLINES_NAME
+	folder.Parent = root
+	return folder
+end
+
+local function getOrCreateMarkersFolder()
+	local root = getOrCreateRoot()
+	local folder = root:FindFirstChild(MARKERS_NAME)
+	if folder and folder:IsA("Folder") then
+		return folder
+	end
+	folder = Instance.new("Folder")
+	folder.Name = MARKERS_NAME
 	folder.Parent = root
 	return folder
 end
@@ -343,6 +378,20 @@ local function pointName(index)
 	return string.format("P%03d", index)
 end
 
+local function createControlPointPart(parent, name, pos)
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Shape = Enum.PartType.Ball
+	p.Size = Vector3.new(4.5, 4.5, 4.5)
+	p.Anchored = true
+	p.Material = Enum.Material.Neon
+	p.Color = Color3.fromRGB(255, 180, 75)
+	p.Position = pos
+	p.Locked = false
+	p.Parent = parent
+	return p
+end
+
 local function renumberPoints()
 	for i, p in ipairs(sortedPoints()) do
 		p.Name = pointName(i)
@@ -374,6 +423,73 @@ local function raycastFromCamera(maxDistance)
 	return origin + camera.CFrame.LookVector * 120
 end
 
+local function yawFromCFrame(cframe)
+	local look = cframe.LookVector
+	local horizontal = Vector3.new(look.X, 0, look.Z)
+	if horizontal.Magnitude <= 0.001 then
+		return 0
+	end
+
+	local unit = horizontal.Unit
+	return math.atan2(unit.X, unit.Z)
+end
+
+local function yawFromCamera()
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		return 0
+	end
+
+	return yawFromCFrame(camera.CFrame)
+end
+
+local function setCabCompanyNode(position, yaw)
+	local markersFolder = getOrCreateMarkersFolder()
+	local node = markersFolder:FindFirstChild(CAB_COMPANY_NODE_NAME)
+	if node and not node:IsA("Part") then
+		node:Destroy()
+		node = nil
+	end
+	if not node then
+		node = Instance.new("Part")
+		node.Name = CAB_COMPANY_NODE_NAME
+		node.Parent = markersFolder
+	end
+
+	node.Anchored = true
+	node.CanCollide = false
+	node.CanTouch = false
+	node.CanQuery = true
+	node.Size = Vector3.new(10, 2, 10)
+	node.Color = Color3.fromRGB(90, 255, 150)
+	node.Material = Enum.Material.Neon
+	node.Transparency = 0.15
+	node.CFrame = CFrame.new(position) * CFrame.Angles(0, yaw or 0, 0)
+	node:SetAttribute(MARKER_TYPE_ATTR, "CabCompany")
+	node:SetAttribute("Cab87MarkerDescription", "Cab spawn pivot and cab company origin")
+	return node
+end
+
+local function setCabCompanyNodeFromCamera()
+	local hitPosition = raycastFromCamera(4000)
+	if not hitPosition then
+		return nil
+	end
+
+	return setCabCompanyNode(hitPosition + Vector3.new(0, CAB_COMPANY_NODE_RIDE_HEIGHT, 0), yawFromCamera())
+end
+
+local function selectCabCompanyNode()
+	local markersFolder = getOrCreateMarkersFolder()
+	local node = markersFolder:FindFirstChild(CAB_COMPANY_NODE_NAME)
+	if node and node:IsA("BasePart") then
+		Selection:Set({ node })
+		return true
+	end
+
+	return false
+end
+
 local function nearestPointToCameraRay()
 	local camera = Workspace.CurrentCamera
 	if not camera then
@@ -400,17 +516,7 @@ end
 local function addControlPoint(pos)
 	local folder = getOrCreatePointsFolder()
 	local idx = #folder:GetChildren() + 1
-	local p = Instance.new("Part")
-	p.Name = pointName(idx)
-	p.Shape = Enum.PartType.Ball
-	p.Size = Vector3.new(4.5, 4.5, 4.5)
-	p.Anchored = true
-	p.Material = Enum.Material.Neon
-	p.Color = Color3.fromRGB(255, 180, 75)
-	p.Position = pos
-	p.Locked = false
-	p.Parent = folder
-	return p
+	return createControlPointPart(folder, pointName(idx), pos)
 end
 
 local function isClosedSpline(spline)
@@ -438,6 +544,25 @@ local function setActiveRoadWidth(value)
 	return width
 end
 
+local function clearAllSplines()
+	clearFolder(getOrCreateSplinesFolder())
+	getOrCreateRoot():SetAttribute(ACTIVE_SPLINE_ATTR, nil)
+end
+
+local function createImportedSpline(data)
+	local spline = createSpline()
+	local pointsFolder = ensureSplineChildren(spline)
+
+	spline:SetAttribute("ClosedCurve", data.closed == true)
+	spline:SetAttribute(ROAD_WIDTH_ATTR, sanitizeRoadWidth(data.width))
+
+	for index, position in ipairs(data.points) do
+		createControlPointPart(pointsFolder, pointName(index), position)
+	end
+
+	return spline
+end
+
 local function formatRoadWidth(width)
 	width = sanitizeRoadWidth(width)
 	local rounded = math.floor(width + 0.5)
@@ -445,6 +570,114 @@ local function formatRoadWidth(width)
 		return tostring(rounded)
 	end
 	return string.format("%.1f", width)
+end
+
+local function formatImportPlaneY(value)
+	value = sanitizeImportPlaneY(value)
+	local rounded = math.floor(value + 0.5)
+	if math.abs(value - rounded) < 0.01 then
+		return tostring(rounded)
+	end
+	return string.format("%.2f", value)
+end
+
+local function stripUtf8Bom(text)
+	if string.byte(text, 1) == 239 and string.byte(text, 2) == 187 and string.byte(text, 3) == 191 then
+		return string.sub(text, 4)
+	end
+	return text
+end
+
+local function readImportedFileContents(file)
+	if not file then
+		return nil, "No file selected"
+	end
+
+	local ok, contentsOrErr = pcall(function()
+		return file:GetBinaryContents()
+	end)
+	if not ok then
+		return nil, tostring(contentsOrErr)
+	end
+
+	if type(contentsOrErr) ~= "string" or contentsOrErr == "" then
+		return nil, "Imported file was empty"
+	end
+
+	return stripUtf8Bom(contentsOrErr)
+end
+
+local function parseImportedCurveJson(contents, planeY)
+	local ok, payloadOrErr = pcall(function()
+		return HttpService:JSONDecode(contents)
+	end)
+	if not ok then
+		return nil, nil, "JSON decode failed: " .. tostring(payloadOrErr)
+	end
+
+	local payload = payloadOrErr
+	if type(payload) ~= "table" then
+		return nil, nil, "Curve JSON root must be an object"
+	end
+
+	local version = payload.version
+	if version ~= nil and tonumber(version) ~= ROAD_CURVE_JSON_VERSION then
+		return nil, nil, string.format("Unsupported curve JSON version %s", tostring(version))
+	end
+
+	local splines = payload.splines
+	if type(splines) ~= "table" then
+		return nil, nil, "Curve JSON must include a splines array"
+	end
+
+	local imported = {}
+	local summary = {
+		sourceSplineCount = 0,
+		importedSplineCount = 0,
+		skippedSplineCount = 0,
+		importedPointCount = 0,
+		skippedPointCount = 0,
+	}
+
+	for _, splineData in ipairs(splines) do
+		summary.sourceSplineCount += 1
+
+		local importedPoints = {}
+		if type(splineData) == "table" and type(splineData.points) == "table" then
+			for _, pointData in ipairs(splineData.points) do
+				if type(pointData) == "table" then
+					local x = tonumber(pointData.x)
+					local y = tonumber(pointData.y) or 0
+					local z = tonumber(pointData.z)
+					if x and z then
+						table.insert(importedPoints, Vector3.new(x, planeY + y, z))
+					else
+						summary.skippedPointCount += 1
+					end
+				else
+					summary.skippedPointCount += 1
+				end
+			end
+		end
+
+		if #importedPoints >= 2 then
+			table.insert(imported, {
+				width = sanitizeRoadWidth(type(splineData) == "table" and splineData.width or nil),
+				closed = type(splineData) == "table" and splineData.closed == true and #importedPoints >= 3 or false,
+				points = importedPoints,
+			})
+			summary.importedSplineCount += 1
+			summary.importedPointCount += #importedPoints
+		else
+			summary.skippedSplineCount += 1
+		end
+	end
+
+	if #imported == 0 then
+		return nil, summary, "Curve JSON did not contain any valid splines with at least 2 points"
+	end
+
+	return imported, summary, nil
 end
 
 local function catmullRom(p0, p1, p2, p3, t)
@@ -2217,6 +2450,19 @@ local function makeInlineButton(parent, text, width)
 	return b
 end
 
+local function makeInlineLabel(parent, text, width)
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(0, width, 1, 0)
+	label.BackgroundTransparency = 1
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextColor3 = Color3.fromRGB(200, 200, 205)
+	label.Font = Enum.Font.GothamSemibold
+	label.TextSize = 12
+	label.Text = text
+	label.Parent = parent
+	return label
+end
+
 local function makeTextBox(parent, placeholder)
 	local box = Instance.new("TextBox")
 	box.Size = UDim2.new(1, -96, 1, 0)
@@ -2278,8 +2524,15 @@ local widthRow = makeControlRow()
 local btnWidthDown = makeInlineButton(widthRow, "-4", 42)
 local widthInput = makeTextBox(widthRow, "Road width")
 local btnWidthUp = makeInlineButton(widthRow, "+4", 42)
+local importPlaneRow = makeControlRow()
+local _importPlaneLabel = makeInlineLabel(importPlaneRow, "Import Y", 72)
+local importPlaneInput = makeTextBox(importPlaneRow, "Plane Y")
+local btnImportAppend = makeButton("Import Curve JSON (Append)")
+local btnImportReplace = makeButton("Import Curve JSON (Replace)")
 local btnAddCamera = makeButton("Add Point (Camera Hit)")
 local btnAddSelected = makeButton("Add Point (From Selection)")
+local btnSetCabCompany = makeButton("Set Cab Company Node (Camera)")
+local btnSelectCabCompany = makeButton("Select Cab Company Node")
 local btnSelectNearest = makeButton("Select Nearest Point (Camera)")
 local btnYPrev = makeButton("Set Selected Y = Prev")
 local btnYNext = makeButton("Set Selected Y = Next")
@@ -2308,6 +2561,10 @@ local function refreshRoadWidthInput()
 	widthInput.Text = formatRoadWidth(getActiveRoadWidth())
 end
 
+local function refreshImportPlaneInput()
+	importPlaneInput.Text = formatImportPlaneY(importPlaneY)
+end
+
 local scheduleAutoRebuild
 
 local function updateActiveRoadWidth(value, reason)
@@ -2330,6 +2587,20 @@ local function updateActiveRoadWidth(value, reason)
 	refreshRoadWidthInput()
 	scheduleAutoRebuild(reason or "road-width-changed")
 	updateStatus(string.format("Set %s width to %s studs", getActiveSpline().Name, formatRoadWidth(width)))
+end
+
+local function updateImportPlaneY(value)
+	local planeY = tonumber(value)
+	if not planeY then
+		refreshImportPlaneInput()
+		updateStatus("Enter a numeric import plane Y")
+		return
+	end
+
+	importPlaneY = sanitizeImportPlaneY(planeY)
+	plugin:SetSetting(IMPORT_PLANE_Y_SETTING, importPlaneY)
+	refreshImportPlaneInput()
+	updateStatus(string.format("Import plane Y set to %s studs", formatImportPlaneY(importPlaneY)))
 end
 
 local function runAutoRoadRebuild(reason)
@@ -2366,7 +2637,7 @@ local function disconnectPointWatcher(point)
 end
 
 function scheduleAutoRebuild(reason)
-	if not autoRebuildEnabled then
+	if bulkImportInProgress or not autoRebuildEnabled then
 		return
 	end
 	autoRebuildSerial += 1
@@ -2425,6 +2696,98 @@ local function refreshPointWatchers()
 	end
 end
 
+local function applyImportedCurves(importedSplines, replaceExisting)
+	local created = {}
+	local previousBulkImport = bulkImportInProgress
+	bulkImportInProgress = true
+
+	local ok, rebuildSegmentsOrErr, rebuildNote = pcall(function()
+		if replaceExisting then
+			clearAllSplines()
+			clearFolder(getOrCreateNetworkModel())
+			lastWireframeEdges = {}
+		end
+
+		for _, data in ipairs(importedSplines) do
+			table.insert(created, createImportedSpline(data))
+		end
+
+		if #created == 0 then
+			error("No imported splines were created", 0)
+		end
+
+		setActiveSpline(created[1])
+		return rebuildRoadMeshPreferred()
+	end)
+
+	bulkImportInProgress = previousBulkImport
+	refreshPointWatchers()
+	refreshCurveModeButton()
+	refreshRoadWidthInput()
+	refreshImportPlaneInput()
+
+	if not ok then
+		error(rebuildSegmentsOrErr, 0)
+	end
+
+	return {
+		splineCount = #created,
+		rebuildSegments = rebuildSegmentsOrErr,
+		rebuildNote = rebuildNote,
+	}
+end
+
+local function importCurveJson(replaceExisting)
+	local okFile, fileOrErr = pcall(function()
+		return StudioService:PromptImportFileAsync(IMPORT_FILE_FILTER)
+	end)
+	if not okFile then
+		updateStatus("Import failed to open file picker: " .. tostring(fileOrErr))
+		return
+	end
+
+	local file = fileOrErr
+	if not file then
+		updateStatus("Curve import canceled")
+		return
+	end
+
+	local contents, readErr = readImportedFileContents(file)
+	if not contents then
+		updateStatus("Curve import failed: " .. tostring(readErr))
+		return
+	end
+
+	local importedSplines, summary, parseErr = parseImportedCurveJson(contents, importPlaneY)
+	if not importedSplines then
+		updateStatus("Curve import failed: " .. tostring(parseErr))
+		return
+	end
+
+	ChangeHistoryService:SetWaypoint("cab87 roads before curve json import")
+	local okImport, resultOrErr = pcall(function()
+		return applyImportedCurves(importedSplines, replaceExisting)
+	end)
+	if not okImport then
+		updateStatus("Curve import failed: " .. tostring(resultOrErr))
+		return
+	end
+	ChangeHistoryService:SetWaypoint("cab87 roads after curve json import")
+
+	local result = resultOrErr
+	local action = replaceExisting and "Replaced" or "Appended"
+	local skippedNote = summary.skippedSplineCount > 0 and string.format(" Skipped %d invalid spline(s).", summary.skippedSplineCount) or ""
+	updateStatus(string.format(
+		"%s %d spline(s), %d point(s) at Y=%s. %s%s",
+		action,
+		result.splineCount,
+		summary.importedPointCount,
+		formatImportPlaneY(importPlaneY),
+		result.rebuildNote or string.format("Rebuilt road (%d spans).", result.rebuildSegments or 0),
+		skippedNote
+	))
+end
+
 btnNew.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads before new spline")
 	local spline = createAndActivateSpline()
@@ -2470,6 +2833,18 @@ widthInput.FocusLost:Connect(function()
 	updateActiveRoadWidth(widthInput.Text, "road-width-changed")
 end)
 
+importPlaneInput.FocusLost:Connect(function()
+	updateImportPlaneY(importPlaneInput.Text)
+end)
+
+btnImportAppend.MouseButton1Click:Connect(function()
+	importCurveJson(false)
+end)
+
+btnImportReplace.MouseButton1Click:Connect(function()
+	importCurveJson(true)
+end)
+
 btnAddCamera.MouseButton1Click:Connect(function()
 	local pos = raycastFromCamera(4000)
 	if not pos then
@@ -2498,6 +2873,27 @@ btnAddSelected.MouseButton1Click:Connect(function()
 	refreshPointWatchers()
 	scheduleAutoRebuild("point-added")
 	updateStatus("Added " .. p.Name .. " from selection")
+end)
+
+btnSetCabCompany.MouseButton1Click:Connect(function()
+	ChangeHistoryService:SetWaypoint("cab87 roads before cab company node")
+	local node = setCabCompanyNodeFromCamera()
+	ChangeHistoryService:SetWaypoint("cab87 roads after cab company node")
+	if not node then
+		updateStatus("Could not raycast cab company node from camera")
+		return
+	end
+
+	Selection:Set({ node })
+	updateStatus("Cab company node set; cab spawns here in Play")
+end)
+
+btnSelectCabCompany.MouseButton1Click:Connect(function()
+	if selectCabCompanyNode() then
+		updateStatus("Selected cab company node")
+	else
+		updateStatus("No cab company node yet")
+	end
 end)
 
 btnSelectNearest.MouseButton1Click:Connect(function()
@@ -2625,6 +3021,9 @@ toggleButton.Click:Connect(function()
 end)
 
 Selection.SelectionChanged:Connect(function()
+	if bulkImportInProgress then
+		return
+	end
 	local sel = Selection:Get()
 	if #sel > 0 then
 		local spline = getSplineFromControlPoint(sel[1])
@@ -2640,6 +3039,9 @@ end)
 
 local splinesFolder = getOrCreateSplinesFolder()
 splinesFolder.DescendantAdded:Connect(function(inst)
+	if bulkImportInProgress then
+		return
+	end
 	if isControlPoint(inst) then
 		refreshPointWatchers()
 		scheduleAutoRebuild("point-added")
@@ -2647,6 +3049,9 @@ splinesFolder.DescendantAdded:Connect(function(inst)
 	end
 end)
 splinesFolder.DescendantRemoving:Connect(function(inst)
+	if bulkImportInProgress then
+		return
+	end
 	if isControlPoint(inst) then
 		refreshPointWatchers()
 		scheduleAutoRebuild("point-removed")
@@ -2670,6 +3075,7 @@ end
 refreshPointWatchers()
 refreshCurveModeButton()
 refreshRoadWidthInput()
+refreshImportPlaneInput()
 refreshAutoRebuildButton()
 refreshWireframeButton()
 updateStatus("Panel stays open while you iterate")
