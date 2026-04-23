@@ -456,6 +456,29 @@ function TaxiService:spawnCabForPlayer(player, taxiId, spawnPose, options)
 	return handle, true
 end
 
+function TaxiService:claimCabForPlayer(player, taxiId, spawnPose, options)
+	options = options or {}
+	local ownerUserId = getOwnerUserId(player)
+	assert(ownerUserId, "claimCabForPlayer requires a Player")
+
+	local existingHandle = self:_getActiveCabForUserId(ownerUserId)
+	if existingHandle and not options.allowDuplicate then
+		return existingHandle, false
+	end
+
+	for _, handle in ipairs(self.cabHandles) do
+		if self:_isHandleActive(handle)
+			and not handle.ownerUserId
+			and (not taxiId or handle.taxiId == taxiId)
+		then
+			self:_setHandleOwner(handle, player, ownerUserId)
+			return handle, false
+		end
+	end
+
+	return self:spawnCabForPlayer(player, taxiId, spawnPose, options)
+end
+
 function TaxiService:recoverCabForPlayer(player, taxiId, spawnPose, options)
 	local cabOptions = table.clone(options or {})
 	cabOptions.replaceExisting = true

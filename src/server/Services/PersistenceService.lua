@@ -1,5 +1,6 @@
 local DataStoreService = game:GetService("DataStoreService")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 
 local PersistenceService = {}
 PersistenceService.__index = PersistenceService
@@ -80,28 +81,74 @@ local function encodeOwnedTaxiIds(ownedTaxiIds)
 	return table.concat(ids, ",")
 end
 
+local function shouldUseDataStore(options, runService)
+	if options.dataStoreEnabled ~= nil then
+		return options.dataStoreEnabled == true
+	end
+
+	local config = options.config or {}
+	if config.persistenceUseDataStore == false then
+		return false
+	end
+
+	if runService:IsStudio() and config.persistenceUseDataStoreInStudio ~= true then
+		return false
+	end
+
+	return true
+end
+
 function PersistenceService.new(options)
 	options = options or {}
 
-	local storeName = options.storeName or "Cab87PlayerProfile"
-	local scope = options.scope
-	local dataStore
-	if type(scope) == "string" and scope ~= "" then
-		dataStore = DataStoreService:GetDataStore(storeName, scope)
-	else
-		dataStore = DataStoreService:GetDataStore(storeName)
+	local config = options.config or {}
+	local runService = options.runService or RunService
+	local useDataStore = shouldUseDataStore(options, runService)
+	local dataStore = nil
+	if useDataStore then
+		dataStore = options.dataStore
+		if not dataStore then
+			local storeName = options.storeName or config.persistenceDataStoreName or "Cab87PlayerProfile"
+			local scope = options.scope or config.persistenceDataStoreScope
+			if type(scope) == "string" and scope ~= "" then
+				dataStore = DataStoreService:GetDataStore(storeName, scope)
+			else
+				dataStore = DataStoreService:GetDataStore(storeName)
+			end
+		end
+	end
+
+	local sessionModeReason = nil
+	if not dataStore then
+		if runService:IsStudio() and config.persistenceUseDataStore ~= false then
+			sessionModeReason =
+				"Studio session mode; set persistenceUseDataStoreInStudio=true and enable Studio API access to test DataStores"
+		else
+			sessionModeReason = "DataStore persistence disabled"
+		end
 	end
 
 	return setmetatable({
-		config = options.config or {},
+		config = config,
 		vehicleCatalog = options.vehicleCatalog,
 		players = options.players or Players,
 		dataStore = dataStore,
+		sessionModeReason = sessionModeReason,
+		sessionModeLogged = false,
 		profilesByPlayer = {},
 		dirtyByPlayer = {},
 		connections = {},
 		running = false,
 	}, PersistenceService)
+end
+
+function PersistenceService:_logSessionMode()
+	if self.sessionModeLogged or not self.sessionModeReason then
+		return
+	end
+
+	self.sessionModeLogged = true
+	print("[cab87] Persistence using session-only profiles: " .. self.sessionModeReason)
 end
 
 function PersistenceService:_setPlayerAttributes(player, profile)
@@ -148,6 +195,13 @@ function PersistenceService:loadProfile(player)
 	end
 
 	local defaultProfile = makeDefaultProfile(self.vehicleCatalog, self.config)
+	if not self.dataStore then
+		self:_logSessionMode()
+		self.profilesByPlayer[player] = defaultProfile
+		self:_setPlayerAttributes(player, defaultProfile)
+		return defaultProfile, false
+	end
+
 	local key = self:_keyForPlayer(player)
 
 	local ok, result = self:_retry("load", function()
@@ -265,6 +319,12 @@ function PersistenceService:saveProfile(player)
 		return true
 	end
 
+	if not self.dataStore then
+		self:_logSessionMode()
+		self.dirtyByPlayer[player] = nil
+		return true
+	end
+
 	local key = self:_keyForPlayer(player)
 	local payload = {
 		schemaVersion = SCHEMA_VERSION,
@@ -290,6 +350,9 @@ function PersistenceService:start()
 		return
 	end
 	self.running = true
+	if not self.dataStore then
+		self:_logSessionMode()
+	end
 
 	for _, player in ipairs(self.players:GetPlayers()) do
 		self:loadProfile(player)

@@ -457,6 +457,10 @@ function CabCompanyService:requestCab(player, actionOrPayload, taxiId)
 		handle, created = self.taxiService:recoverCabForPlayer(player, resolvedTaxiId, spawnPose, {
 			world = self.world,
 		})
+	elseif self.taxiService.claimCabForPlayer then
+		handle, created = self.taxiService:claimCabForPlayer(player, resolvedTaxiId, spawnPose, {
+			world = self.world,
+		})
 	else
 		handle, created = self.taxiService:spawnCabForPlayer(player, resolvedTaxiId, spawnPose, {
 			world = self.world,

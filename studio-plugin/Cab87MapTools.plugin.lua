@@ -32,7 +32,8 @@ local function requireFresh(moduleScript)
 	-- Require cache can hold stale module state in plugin context.
 	-- Clone-and-require forces a fresh load of latest synced source.
 	local clone = moduleScript:Clone()
-	clone.Parent = nil
+	clone.Name = moduleScript.Name .. "_PluginFreshRequire"
+	clone.Parent = moduleScript.Parent
 	local ok, result = pcall(require, clone)
 	clone:Destroy()
 	if not ok then

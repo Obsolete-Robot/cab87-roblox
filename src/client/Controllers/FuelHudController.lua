@@ -1,6 +1,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 
 local shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(shared:WaitForChild("Config"))
@@ -41,6 +42,23 @@ local function get2dDistance(a, b)
 	local dx = a.X - b.X
 	local dz = a.Z - b.Z
 	return math.sqrt(dx * dx + dz * dz)
+end
+
+local function getStationPosition(station)
+	local position = station.position
+	if station.kind ~= "cab_company" then
+		return position
+	end
+
+	local world = Workspace:FindFirstChild("Cab87World")
+	local x = world and world:GetAttribute("CabCompanyRefuelX")
+	local y = world and world:GetAttribute("CabCompanyRefuelY")
+	local z = world and world:GetAttribute("CabCompanyRefuelZ")
+	if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+		return Vector3.new(x, y, z)
+	end
+
+	return position
 end
 
 local function createUi(parentGui)
@@ -182,10 +200,11 @@ function FuelHudController.start(parentGui, cabTracker)
 		local nearest = nil
 		local nearestDistance = math.huge
 		for _, station in ipairs(stations) do
-			if type(station) == "table" and type(station.id) == "string" and typeof(station.position) == "Vector3" then
+			local stationPosition = type(station) == "table" and getStationPosition(station) or nil
+			if type(station) == "table" and type(station.id) == "string" and typeof(stationPosition) == "Vector3" then
 				local radius = station.kind == "cab_company" and toNumber(Config.fuelCabCompanyStationRadius, 34)
 					or toNumber(Config.fuelRefuelStationRadius, 28)
-				local distance = get2dDistance(primary.Position, station.position)
+				local distance = get2dDistance(primary.Position, stationPosition)
 				if distance <= math.max(radius, 1) and distance < nearestDistance then
 					nearest = station
 					nearestDistance = distance

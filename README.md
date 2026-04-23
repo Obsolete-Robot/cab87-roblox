@@ -71,8 +71,13 @@ Road Editor panel actions:
 - Next Spline
 - Curve Mode: Open/Closed (toggle)
 - Road Width: per-spline numeric input with -4/+4 controls
+- Import Plane Y: numeric input used by JSON curve imports
+- Import Curve JSON (Append)
+- Import Curve JSON (Replace)
 - Add Point (Camera Hit)
 - Add Point (From Selection)
+- Set Cab Company Node (Camera)
+- Select Cab Company Node
 - Select Nearest Point (Camera)
 - Set Selected Y = Prev
 - Set Selected Y = Next
@@ -103,6 +108,24 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
    - Spline control points are the durable source of truth. The plugin rebuilds stale generated MeshParts on load; Play mode keeps server collision invisible and has each client rebuild the clean unified visual mesh from spline data.
    - **Wireframe Mesh** can be toggled on to inspect generated mesh edges.
 5. Press Play and test traversal.
+
+### Web curve authoring workflow
+
+Use the static browser tool in `tools/road-curve-editor` when you want to trace a 2D reference and import it into Studio:
+
+1. Open `tools/road-curve-editor/index.html`, or run `tools/road-curve-editor/run.bat`.
+2. Import a trace image and lay out one or more splines in the browser tool.
+3. Export `cab87-road-curves.json` to save the full browser session, including the trace image and its transform.
+4. Reopen that same file in the browser tool with **Import Session JSON** if you want to resume editing later.
+5. In Studio, set **Import Plane Y** in the Road Editor.
+6. Click **Import Curve JSON (Append)** to add to the current spline set, or **Import Curve JSON (Replace)** to replace the current authored splines while keeping markers such as `CabCompanyNode`.
+7. The plugin imports the control points into `Cab87RoadEditor/Splines` and rebuilds the road network from the imported data.
+
+### Cab company and player spawn placement
+
+For authored-road maps, use **Set Cab Company Node (Camera)** in the Road Editor to place `Cab87RoadEditor/Markers/CabCompanyNode`. At runtime, that marker becomes the cab company location and the starter cab spawns at that marker.
+
+Player spawning is left to normal Roblox `SpawnLocation` parts by default, so you can manually place a spawn plate wherever the player should start. Set `playerUseCabCompanySpawn = true` in `src/shared/MapConfig.lua` only if you want the server to force characters to the generated cab-company spawn marker.
 
 ## Controls
 

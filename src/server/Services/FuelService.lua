@@ -35,6 +35,7 @@ function FuelService.new(options)
 		players = options.players or Players,
 		economyService = options.economyService,
 		taxiService = options.taxiService,
+		world = options.world,
 		remote = options.remote,
 		stateRemote = options.stateRemote,
 		stateByPlayer = {},
@@ -64,6 +65,14 @@ function FuelService:_buildStations()
 	for _, station in ipairs(self.config.fuelStations or {}) do
 		if type(station) == "table" and type(station.id) == "string" and station.id ~= "" then
 			local position = toVector3(station.position)
+			if station.kind == "cab_company" and self.world then
+				local x = self.world:GetAttribute("CabCompanyRefuelX")
+				local y = self.world:GetAttribute("CabCompanyRefuelY")
+				local z = self.world:GetAttribute("CabCompanyRefuelZ")
+				if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+					position = Vector3.new(x, y, z)
+				end
+			end
 			if position then
 				self.stationsById[station.id] = {
 					id = station.id,

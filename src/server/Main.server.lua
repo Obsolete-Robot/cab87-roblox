@@ -183,8 +183,35 @@ local function buildRefuelStations(world)
 		root.Parent = world
 	end
 
+	local function getCabCompanyStationPosition(station)
+		if station.kind ~= "cab_company" then
+			return station.position
+		end
+
+		local x = world:GetAttribute("CabCompanyRefuelX")
+		local y = world:GetAttribute("CabCompanyRefuelY")
+		local z = world:GetAttribute("CabCompanyRefuelZ")
+		if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+			return Vector3.new(x, y, z)
+		end
+
+		local spawnX = world:GetAttribute("CabCompanySpawnX")
+		local spawnY = world:GetAttribute("CabCompanySpawnY")
+		local spawnZ = world:GetAttribute("CabCompanySpawnZ")
+		if type(spawnX) == "number" and type(spawnY) == "number" and type(spawnZ) == "number" then
+			return Vector3.new(spawnX, spawnY, spawnZ)
+		end
+
+		return station.position
+	end
+
 	for _, station in ipairs(stations) do
-		if typeof(station.position) == "Vector3" and type(station.id) == "string" and station.id ~= "" then
+		local stationPosition = type(station) == "table" and getCabCompanyStationPosition(station) or nil
+		if type(station) == "table"
+			and typeof(stationPosition) == "Vector3"
+			and type(station.id) == "string"
+			and station.id ~= ""
+		then
 			local marker = root:FindFirstChild(station.id)
 			if marker and not marker:IsA("Part") then
 				marker:Destroy()
@@ -201,13 +228,16 @@ local function buildRefuelStations(world)
 			marker.CanCollide = false
 			marker.Shape = Enum.PartType.Cylinder
 			marker.Size = Vector3.new(radius * 2, 0.4, radius * 2)
-			marker.CFrame = CFrame.new(station.position + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
+			marker.CFrame = CFrame.new(stationPosition + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
 			marker.Transparency = 0.45
 			marker.Material = Enum.Material.Neon
 			marker.Color = station.kind == "cab_company" and Color3.fromRGB(95, 255, 160) or Color3.fromRGB(91, 169, 255)
 			marker:SetAttribute("StationId", station.id)
 			marker:SetAttribute("RefuelMode", station.kind == "cab_company" and "cab_company" or "paid")
 			marker:SetAttribute("DisplayName", station.name or station.id)
+			marker:SetAttribute("StationX", stationPosition.X)
+			marker:SetAttribute("StationY", stationPosition.Y)
+			marker:SetAttribute("StationZ", stationPosition.Z)
 		end
 	end
 end
@@ -363,6 +393,7 @@ local function bootstrap()
 		config = Config,
 		economyService = economyService,
 		taxiService = taxiService,
+		world = world,
 		remote = remotes.requestRefuel,
 		stateRemote = remotes.fuelStateUpdated,
 	})
@@ -498,32 +529,32 @@ local function bootstrap()
 		return cabCompanyService:isShopEligible(player)
 	end)
 
-	local playerSpawnPose = resolvePlayerSpawnPose(world, spawnPose)
-	Players.PlayerAdded:Connect(function(player)
-		player.CharacterAdded:Connect(function(character)
-			placeCharacterAtSpawn(player, character, playerSpawnPose)
+	if Config.playerUseCabCompanySpawn == true then
+		local playerSpawnPose = resolvePlayerSpawnPose(world, spawnPose)
+		Players.PlayerAdded:Connect(function(player)
+			player.CharacterAdded:Connect(function(character)
+				placeCharacterAtSpawn(player, character, playerSpawnPose)
+			end)
+			if player.Character then
+				placeCharacterAtSpawn(player, player.Character, playerSpawnPose)
+			end
 		end)
-		if player.Character then
-			placeCharacterAtSpawn(player, player.Character, playerSpawnPose)
-		end
-	end)
-	for _, player in ipairs(Players:GetPlayers()) do
-		player.CharacterAdded:Connect(function(character)
-			placeCharacterAtSpawn(player, character, playerSpawnPose)
-		end)
-		if player.Character then
-			placeCharacterAtSpawn(player, player.Character, playerSpawnPose)
+		for _, player in ipairs(Players:GetPlayers()) do
+			player.CharacterAdded:Connect(function(character)
+				placeCharacterAtSpawn(player, character, playerSpawnPose)
+			end)
+			if player.Character then
+				placeCharacterAtSpawn(player, player.Character, playerSpawnPose)
+			end
 		end
 	end
 
-	local initialPlayer = Players:GetPlayers()[1]
-	if initialPlayer then
-		local playerCab = taxiService:spawnCabForPlayer(initialPlayer, Config.carDefaultTaxiId, spawnPose, {
-			world = world,
-			startController = false,
-		})
-		startCabRuntime(playerCab, spawnPose)
-	end
+	local starterCab = taxiService:spawnCab({
+		taxiId = Config.carDefaultTaxiId,
+		spawnPose = spawnPose,
+		world = world,
+	})
+	startCabRuntime(starterCab, spawnPose)
 end
 
 local ok, err = xpcall(bootstrap, debug.traceback)

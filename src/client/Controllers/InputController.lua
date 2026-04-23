@@ -1,10 +1,14 @@
+local ContextActionService = game:GetService("ContextActionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
+local DrivenCabTracker = require(script.Parent:WaitForChild("DrivenCabTracker"))
 
 local InputController = {}
+
+local BLOCK_CAB_JUMP_ACTION = "Cab87BlockCabJumpExit"
 
 local driveKeys = {
 	[Enum.KeyCode.W] = true,
@@ -52,6 +56,7 @@ function InputController.start()
 		lastSentAirPitch = nil,
 		sendAccumulator = 0,
 		forceSendAccumulator = 0,
+		jumpBlockedHumanoid = nil,
 	}
 
 	local driveInputRemoteName = Remotes.getClientToServerName("driveInput")
@@ -111,6 +116,31 @@ function InputController.start()
 		controller.lastSentDrift = drift
 		controller.lastSentAirPitch = airPitch
 		driveInputRemote:FireServer("Drive", throttle, steer, drift, airPitch)
+	end
+
+	local function setCabJumpBlocked(humanoid)
+		if controller.jumpBlockedHumanoid == humanoid then
+			if humanoid then
+				humanoid.Jump = false
+			end
+			return
+		end
+
+		if controller.jumpBlockedHumanoid then
+			controller.jumpBlockedHumanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+		end
+
+		controller.jumpBlockedHumanoid = humanoid
+		if humanoid then
+			humanoid.Jump = false
+			humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+		end
+	end
+
+	local function updateCabJumpBlock()
+		local humanoid = DrivenCabTracker.getHumanoid()
+		local cab = humanoid and DrivenCabTracker.getDrivenCab() or nil
+		setCabJumpBlocked(if cab then humanoid else nil)
 	end
 
 	local function setGamepadDriftButton(keyCode, isHeld)
@@ -181,6 +211,7 @@ function InputController.start()
 	end)
 
 	connect(RunService.Heartbeat, function(dt)
+		updateCabJumpBlock()
 		controller.sendAccumulator += dt
 		controller.forceSendAccumulator += dt
 		if controller.sendAccumulator >= 1 / 20 then
@@ -193,7 +224,26 @@ function InputController.start()
 		end
 	end)
 
+	ContextActionService:BindActionAtPriority(
+		BLOCK_CAB_JUMP_ACTION,
+		function()
+			updateCabJumpBlock()
+			if controller.jumpBlockedHumanoid then
+				controller.jumpBlockedHumanoid.Jump = false
+				return Enum.ContextActionResult.Sink
+			end
+
+			return Enum.ContextActionResult.Pass
+		end,
+		false,
+		Enum.ContextActionPriority.High.Value + 1,
+		Enum.KeyCode.Space,
+		Enum.KeyCode.ButtonA
+	)
+
 	function controller:destroy()
+		ContextActionService:UnbindAction(BLOCK_CAB_JUMP_ACTION)
+		setCabJumpBlocked(nil)
 		for _, connection in ipairs(self.connections) do
 			connection:Disconnect()
 		end

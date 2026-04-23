@@ -6,6 +6,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
+local CabCompanyWorldBuilder = require(script.Parent:WaitForChild("CabCompanyWorldBuilder"))
 
 local AuthoredRoadRuntime = {}
 
@@ -1406,6 +1407,102 @@ local function findFirstSpawn(root)
 	}
 end
 
+local function getMarkerFolder(root)
+	local folderName = Config.cabCompanyMarkerFolderName or "Markers"
+	local folder = root and root:FindFirstChild(folderName)
+	if folder and folder:IsA("Folder") then
+		return folder
+	end
+
+	return nil
+end
+
+local function isCabCompanyMarker(part)
+	if not (part and part:IsA("BasePart")) then
+		return false
+	end
+
+	local markerType = part:GetAttribute("Cab87MarkerType")
+	return markerType == "CabCompany" or markerType == "CabCompanyNode"
+end
+
+local function isPlayerSpawnMarker(part)
+	if not (part and part:IsA("BasePart")) then
+		return false
+	end
+
+	return part:GetAttribute("Cab87MarkerType") == "PlayerSpawn"
+end
+
+local function findAuthoredMarker(root, markerName, predicate)
+	if not root then
+		return nil
+	end
+
+	local markersFolder = getMarkerFolder(root)
+	if markersFolder then
+		local marker = markersFolder:FindFirstChild(markerName)
+		if marker and marker:IsA("BasePart") then
+			return marker
+		end
+	end
+
+	local direct = root:FindFirstChild(markerName)
+	if direct and direct:IsA("BasePart") then
+		return direct
+	end
+
+	for _, item in ipairs(root:GetDescendants()) do
+		if item:IsA("BasePart") and (item.Name == markerName or predicate(item)) then
+			return item
+		end
+	end
+
+	return nil
+end
+
+local function findAuthoredCabCompanyMarker(root)
+	return findAuthoredMarker(root, Config.cabCompanyMarkerName or "CabCompanyNode", isCabCompanyMarker)
+end
+
+local function findAuthoredPlayerSpawnMarker(root)
+	return findAuthoredMarker(root, Config.cabCompanyPlayerSpawnMarkerName or "PlayerSpawnPoint", isPlayerSpawnMarker)
+end
+
+local function appendParts(target, source)
+	for _, item in ipairs(source or {}) do
+		table.insert(target, item)
+	end
+end
+
+local function buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles)
+	local marker = findAuthoredCabCompanyMarker(root)
+	if not marker then
+		return nil
+	end
+
+	local playerSpawnMarker = findAuthoredPlayerSpawnMarker(root)
+	local result = CabCompanyWorldBuilder.create(world, Config, {
+		cabSpawnPosition = marker.Position,
+		cabSpawnYaw = CabCompanyWorldBuilder.yawFromCFrame(marker.CFrame),
+		playerSpawnPosition = playerSpawnMarker and playerSpawnMarker.Position or nil,
+		playerSpawnYaw = playerSpawnMarker and CabCompanyWorldBuilder.yawFromCFrame(playerSpawnMarker.CFrame) or nil,
+		source = marker:GetFullName(),
+	})
+
+	appendParts(driveSurfaces, result.driveSurfaces)
+	appendParts(crashObstacles, result.crashObstacles)
+	roadDebugLog(
+		"cab company marker active: marker=%s spawn=(%.1f, %.1f, %.1f)",
+		marker:GetFullName(),
+		result.spawnPose.position.X,
+		result.spawnPose.position.Y,
+		result.spawnPose.position.Z
+	)
+
+	return result.spawnPose
+end
+
 local function hideEditorRootForPlay(root)
 	for _, item in ipairs(root:GetDescendants()) do
 		if item:IsA("BasePart") then
@@ -1579,6 +1676,13 @@ function AuthoredRoadRuntime.createWorld(root)
 	local driveSurfaces = {}
 	local crashObstacles = {}
 	local spawnPose = findFirstSpawn(root)
+	local authoredCabCompanyMarker = findAuthoredCabCompanyMarker(root)
+	if authoredCabCompanyMarker then
+		spawnPose = {
+			position = authoredCabCompanyMarker.Position,
+			yaw = CabCompanyWorldBuilder.yawFromCFrame(authoredCabCompanyMarker.CFrame),
+		}
+	end
 	local authoredSplines = getAuthoredSplines(root)
 	roadDebugLog(
 		"createWorld start: root=%s splines=%d editorSurfaceParts=%d spawn=(%.1f, %.1f, %.1f)",
@@ -1631,6 +1735,10 @@ function AuthoredRoadRuntime.createWorld(root)
 		if collisionSegments == 0 then
 			useRoadNetworkFallback(root:FindFirstChild(ROAD_EDITOR_NETWORK_NAME), driveSurfaces)
 		end
+	end
+	local cabCompanySpawnPose = buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles)
+	if cabCompanySpawnPose then
+		spawnPose = cabCompanySpawnPose
 	end
 	roadDebugLog(
 		"createWorld done: collisionSource=%s sectionCount=%d runtimeMeshCount=%d driveSurfaces=%d serverMeshError=%s",
