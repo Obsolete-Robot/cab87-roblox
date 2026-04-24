@@ -1529,7 +1529,7 @@ function lineIntersectionWithParametersXZ(a, dirA, b, dirB) {
 
 function junctionCoreBoundaryLimit(junction) {
 	const center = getJunctionMeshCenter(junction);
-	let limit = Math.max(sanitizeJunctionCrosswalkLength(junction.crosswalkLength) * 2, JUNCTION_RADIUS_MIN);
+	let limit = JUNCTION_RADIUS_MIN;
 	for (const portal of junction.portals ?? []) {
 		const width = (portal.halfWidth ?? 0) * 2;
 		limit = Math.max(
@@ -1683,34 +1683,7 @@ function buildJunctionCoreBoundary(junction) {
 }
 
 function buildJunctionSurfaceBoundary(junction) {
-	const portals = sortedJunctionPortals(junction);
-	if (portals.length < 2) {
-		return [];
-	}
-
-	const boundary = [];
-	for (let index = 0; index < portals.length; index += 1) {
-		const portal = portals[index];
-		const nextPortal = portals[(index + 1) % portals.length];
-		const right = roadRightFromTangent(portal.tangent);
-		appendOrderedJunctionPoint(boundary, makePoint(
-			portal.point.x + (right.x * (portal.halfWidth ?? 0)),
-			portal.point.z + (right.z * (portal.halfWidth ?? 0)),
-			portal.point.y ?? 0,
-		));
-		appendOrderedJunctionPoint(boundary, makePoint(
-			portal.point.x - (right.x * (portal.halfWidth ?? 0)),
-			portal.point.z - (right.z * (portal.halfWidth ?? 0)),
-			portal.point.y ?? 0,
-		));
-
-		if (portal.coreLeft && nextPortal.coreRight) {
-			appendOrderedJunctionPoint(boundary, portal.coreLeft);
-			appendOrderedJunctionPoint(boundary, nextPortal.coreRight);
-		}
-	}
-
-	return finalizeOrderedJunctionBoundary(boundary);
+	return (junction.coreBoundary ?? []).map(clonePoint);
 }
 
 function pointLineDistanceXZ(point, linePoint, lineDir) {
@@ -1815,7 +1788,6 @@ function updatePortalGeometry(junction, portal) {
 		junction.intersectionCenter = computeJunctionIntersectionCenter(junction);
 	}
 
-	const crosswalkLength = sanitizeJunctionCrosswalkLength(junction.crosswalkLength);
 	const right = roadRightFromTangent(portal.tangent);
 	const center = getJunctionMeshCenter(junction);
 	let coreLeft = portal.coreLeft ?? makePoint(
@@ -1837,11 +1809,7 @@ function updatePortalGeometry(junction, portal) {
 		(coreLeft.z + coreRight.z) * 0.5,
 		((coreLeft.y ?? 0) + (coreRight.y ?? 0)) * 0.5,
 	);
-	const point = makePoint(
-		corePoint.x + (portal.tangent.x * crosswalkLength),
-		corePoint.z + (portal.tangent.z * crosswalkLength),
-		corePoint.y ?? 0,
-	);
+	const point = clonePoint(portal.boundaryPoint);
 	const y = point.y ?? 0;
 	portal.corePoint = corePoint;
 	portal.coreLeft = coreLeft;
@@ -2230,10 +2198,10 @@ function emitExplicitRoadRun(processedChains, sourceChain, samples, startPortal,
 	processedChains.push(chain);
 
 	if (startPortal) {
-		addPortalForChain(startPortal.junction, chain, startPortal.point, chain.samples[0]);
+		addPortalForChain(startPortal.junction, chain, startPortal.point, chain.samples[1] ?? chain.samples[0]);
 	}
 	if (endPortal) {
-		addPortalForChain(endPortal.junction, chain, endPortal.point, chain.samples[chain.samples.length - 1]);
+		addPortalForChain(endPortal.junction, chain, endPortal.point, chain.samples[chain.samples.length - 2] ?? chain.samples[chain.samples.length - 1]);
 	}
 }
 
@@ -2250,9 +2218,9 @@ function splitOpenPathByExplicitHits(processedChains, path, hits) {
 	let cursor = 0;
 	let startPortal = null;
 	for (const hit of hits) {
-		const crosswalkLength = sanitizeJunctionCrosswalkLength(hit.junction.crosswalkLength);
-		const beforeDistance = Math.max(0, hit.pathDistance - crosswalkLength);
-		const afterDistance = Math.min(path.totalLength, hit.pathDistance + crosswalkLength);
+		const cutDistance = Math.max(sanitizeJunctionRadius(hit.junction.radius), 0);
+		const beforeDistance = Math.max(0, hit.pathDistance - cutDistance);
+		const afterDistance = Math.min(path.totalLength, hit.pathDistance + cutDistance);
 		if (beforeDistance > cursor + 0.05) {
 			emitExplicitRoadRun(
 				processedChains,
@@ -2281,10 +2249,10 @@ function splitClosedPathByExplicitHits(processedChains, path, hits) {
 	for (let index = 0; index < hits.length; index += 1) {
 		const hit = hits[index];
 		const nextHit = hits[(index + 1) % hits.length];
-		const hitCrosswalk = sanitizeJunctionCrosswalkLength(hit.junction.crosswalkLength);
-		const nextCrosswalk = sanitizeJunctionCrosswalkLength(nextHit.junction.crosswalkLength);
-		const startDistance = (hit.pathDistance + hitCrosswalk) % path.totalLength;
-		const endDistance = (nextHit.pathDistance - nextCrosswalk + path.totalLength) % path.totalLength;
+		const hitCutDistance = Math.max(sanitizeJunctionRadius(hit.junction.radius), 0);
+		const nextCutDistance = Math.max(sanitizeJunctionRadius(nextHit.junction.radius), 0);
+		const startDistance = (hit.pathDistance + hitCutDistance) % path.totalLength;
+		const endDistance = (nextHit.pathDistance - nextCutDistance + path.totalLength) % path.totalLength;
 		let effectiveEnd = endDistance;
 		if (effectiveEnd <= startDistance) {
 			effectiveEnd += path.totalLength;
@@ -2550,10 +2518,6 @@ function buildJunctionBoundary(junction) {
 }
 
 function buildJunctionConnectorQuads(junction) {
-	if (junction.surfaceBoundary && junction.surfaceBoundary.length >= 3) {
-		return [];
-	}
-
 	const quads = [];
 	for (const portal of junction.portals ?? []) {
 		const [coreLeft, coreRight, mouthLeft, mouthRight] = portalConnectorPoints(portal);

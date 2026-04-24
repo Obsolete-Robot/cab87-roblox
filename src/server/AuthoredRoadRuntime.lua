@@ -1190,7 +1190,7 @@ end
 
 local function junctionCoreBoundaryLimit(junction)
 	local center = getJunctionMeshCenter(junction)
-	local limit = math.max(RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength) * 2, 8)
+	local limit = 8
 	for _, portal in ipairs(junction.portals or {}) do
 		local width = (portal.halfWidth or 0) * 2
 		limit = math.max(
@@ -1319,25 +1319,11 @@ local function buildJunctionCoreBoundary(junction)
 end
 
 local function buildJunctionSurfaceBoundary(junction)
-	local portals = sortedJunctionPortals(junction)
-	if #portals < 2 then
-		return {}
-	end
-
 	local boundary = {}
-	for i, portal in ipairs(portals) do
-		local nextPortal = portals[(i % #portals) + 1]
-		local right = roadRightFromTangent(portal.tangent)
-		appendOrderedJunctionPoint(boundary, portal.point + right * (portal.halfWidth or 0))
-		appendOrderedJunctionPoint(boundary, portal.point - right * (portal.halfWidth or 0))
-
-		if portal.coreLeft and nextPortal.coreRight then
-			appendOrderedJunctionPoint(boundary, portal.coreLeft)
-			appendOrderedJunctionPoint(boundary, nextPortal.coreRight)
-		end
+	for _, point in ipairs(junction.coreBoundary or {}) do
+		table.insert(boundary, point)
 	end
-
-	return finalizeOrderedJunctionBoundary(boundary)
+	return boundary
 end
 
 local function pointLineDistanceXZ(point, linePoint, lineDir)
@@ -1428,7 +1414,6 @@ local function updatePortalGeometry(junction, portal)
 		junction.intersectionCenter = computeJunctionIntersectionCenter(junction)
 	end
 
-	local crosswalkLength = RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength)
 	local right = roadRightFromTangent(portal.tangent)
 	local center = getJunctionMeshCenter(junction)
 	local coreLeft = portal.coreLeft or (center - right * portal.halfWidth)
@@ -1438,7 +1423,7 @@ local function updatePortalGeometry(junction, portal)
 	end
 
 	local corePoint = (coreLeft + coreRight) * 0.5
-	local point = corePoint + portal.tangent * crosswalkLength
+	local point = portal.boundaryPoint
 	portal.corePoint = corePoint
 	portal.coreLeft = coreLeft
 	portal.coreRight = coreRight
@@ -1515,10 +1500,10 @@ local function emitExplicitRoadRun(processedChains, sourceChain, samples, startP
 	table.insert(processedChains, chain)
 
 	if startPortal then
-		addPortalForChain(startPortal.junction, chain, startPortal.point, samples[1])
+		addPortalForChain(startPortal.junction, chain, startPortal.point, samples[2] or samples[1])
 	end
 	if endPortal then
-		addPortalForChain(endPortal.junction, chain, endPortal.point, samples[#samples])
+		addPortalForChain(endPortal.junction, chain, endPortal.point, samples[#samples - 1] or samples[#samples])
 	end
 end
 
@@ -1538,9 +1523,9 @@ local function splitOpenPathByExplicitHits(processedChains, path, hits)
 	local cursor = 0
 	local startPortal = nil
 	for _, hit in ipairs(hits) do
-		local crosswalkLength = RoadSplineData.sanitizeJunctionCrosswalkLength(hit.junction.crosswalkLength)
-		local beforeDistance = math.max(0, hit.pathDistance - crosswalkLength)
-		local afterDistance = math.min(path.totalLength, hit.pathDistance + crosswalkLength)
+		local cutDistance = math.max(RoadSplineData.sanitizeJunctionRadius(hit.junction.radius), 0)
+		local beforeDistance = math.max(0, hit.pathDistance - cutDistance)
+		local afterDistance = math.min(path.totalLength, hit.pathDistance + cutDistance)
 
 		if beforeDistance > cursor + 0.05 then
 			emitExplicitRoadRun(
@@ -1572,10 +1557,10 @@ local function splitClosedPathByExplicitHits(processedChains, path, hits)
 
 	for i, hit in ipairs(hits) do
 		local nextHit = hits[(i % #hits) + 1]
-		local hitCrosswalk = RoadSplineData.sanitizeJunctionCrosswalkLength(hit.junction.crosswalkLength)
-		local nextCrosswalk = RoadSplineData.sanitizeJunctionCrosswalkLength(nextHit.junction.crosswalkLength)
-		local startDistance = (hit.pathDistance + hitCrosswalk) % path.totalLength
-		local endDistance = (nextHit.pathDistance - nextCrosswalk) % path.totalLength
+		local hitCutDistance = math.max(RoadSplineData.sanitizeJunctionRadius(hit.junction.radius), 0)
+		local nextCutDistance = math.max(RoadSplineData.sanitizeJunctionRadius(nextHit.junction.radius), 0)
+		local startDistance = (hit.pathDistance + hitCutDistance) % path.totalLength
+		local endDistance = (nextHit.pathDistance - nextCutDistance) % path.totalLength
 		local effectiveEnd = endDistance
 		if effectiveEnd <= startDistance then
 			effectiveEnd += path.totalLength
@@ -2061,10 +2046,8 @@ local function addIntersectionPatchToMesh(state, junction)
 		end
 	end
 
-	if not (junction.surfaceBoundary and #junction.surfaceBoundary >= 3) then
-		for _, portal in ipairs(junction.portals or {}) do
-			addPortalConnectorToMesh(state, portal, fallbackCenter.Y)
-		end
+	for _, portal in ipairs(junction.portals or {}) do
+		addPortalConnectorToMesh(state, portal, fallbackCenter.Y)
 	end
 end
 
@@ -2134,11 +2117,9 @@ local function addIntersectionCollisionPatchToMesh(state, junction)
 		end
 	end
 
-	if not (junction.surfaceBoundary and #junction.surfaceBoundary >= 3) then
-		for _, portal in ipairs(junction.portals or {}) do
-			local coreLeft, coreRight, mouthLeft, mouthRight = portalConnectorPoints(portal, topCenter.Y)
-			addRoadCollisionSpanToMesh(state, coreLeft, coreRight, mouthLeft, mouthRight)
-		end
+	for _, portal in ipairs(junction.portals or {}) do
+		local coreLeft, coreRight, mouthLeft, mouthRight = portalConnectorPoints(portal, topCenter.Y)
+		addRoadCollisionSpanToMesh(state, coreLeft, coreRight, mouthLeft, mouthRight)
 	end
 end
 

@@ -269,7 +269,7 @@ end
 
 local function junctionCoreBoundaryLimit(junction)
 	local center = getJunctionMeshCenter(junction)
-	local limit = math.max(RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength) * 2, 8)
+	local limit = 8
 	for _, portal in ipairs(junction.portals or {}) do
 		local width = (portal.halfWidth or 0) * 2
 		limit = math.max(
@@ -398,25 +398,11 @@ local function buildJunctionCoreBoundary(junction)
 end
 
 local function buildJunctionSurfaceBoundary(junction)
-	local portals = sortedJunctionPortals(junction)
-	if #portals < 2 then
-		return {}
-	end
-
 	local boundary = {}
-	for i, portal in ipairs(portals) do
-		local nextPortal = portals[(i % #portals) + 1]
-		local right = roadRightFromTangent(portal.tangent)
-		appendOrderedJunctionPoint(boundary, portal.point + right * (portal.halfWidth or 0))
-		appendOrderedJunctionPoint(boundary, portal.point - right * (portal.halfWidth or 0))
-
-		if portal.coreLeft and nextPortal.coreRight then
-			appendOrderedJunctionPoint(boundary, portal.coreLeft)
-			appendOrderedJunctionPoint(boundary, nextPortal.coreRight)
-		end
+	for _, point in ipairs(junction.coreBoundary or {}) do
+		table.insert(boundary, point)
 	end
-
-	return finalizeOrderedJunctionBoundary(boundary)
+	return boundary
 end
 
 local function pointLineDistanceXZ(point, linePoint, lineDir)
@@ -461,15 +447,14 @@ local function boundaryPointOnPortalSide(boundary, portal, sideSign)
 end
 
 local function annotateProcessedPortalCore(junction, portal)
-	local crosswalkLength = RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength)
-	local corePoint = portal.point - portal.tangent * crosswalkLength
+	local corePoint = portal.point
 	local right = roadRightFromTangent(portal.tangent)
 	portal.boundaryPoint = corePoint
 	portal.corePoint = corePoint
 	portal.coreLeft = corePoint - right * portal.halfWidth
 	portal.coreRight = corePoint + right * portal.halfWidth
 	portal.coreT = 0
-	portal.mouthT = crosswalkLength
+	portal.mouthT = 0
 end
 
 local function updateProcessedPortalCoreGeometry(junction, portal)
@@ -1752,10 +1737,8 @@ local function addIntersectionPatchToMesh(state, junction)
 		end
 	end
 
-	if not (junction.surfaceBoundary and #junction.surfaceBoundary >= 3) then
-		for _, portal in ipairs(junction.portals or {}) do
-			addPortalConnectorToMesh(state, portal, fallbackCenter.Y)
-		end
+	for _, portal in ipairs(junction.portals or {}) do
+		addPortalConnectorToMesh(state, portal, fallbackCenter.Y)
 	end
 end
 
