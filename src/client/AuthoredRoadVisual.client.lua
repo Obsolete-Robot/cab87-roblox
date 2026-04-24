@@ -102,6 +102,7 @@ local sampleLoopIsClosed = RoadSampling.sampleLoopIsClosed
 local getRoadSampleTangent = RoadSampling.getRoadSampleTangent
 local polylineLength = RoadSampling.polylineLength
 local samplePolylineAtFraction = RoadSampling.samplePolylineAtFraction
+local roadRightFromTangent
 
 local function heightConnectTolerance(widthA, widthB)
 	local width = math.min(sanitizeRoadWidth(widthA), sanitizeRoadWidth(widthB))
@@ -131,6 +132,50 @@ local function collectProcessedJunctions(root)
 	return RoadSplineData.collectJunctions(root, {
 		defaultRadius = DEFAULT_AUTHORED_ROAD_WIDTH * INTERSECTION_RADIUS_SCALE,
 	})
+end
+
+local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
+	if not junction or not chain or not outsidePoint then
+		return
+	end
+
+	local tangent = horizontalUnit(outsidePoint - boundaryPoint)
+		or horizontalUnit(boundaryPoint - junction.center)
+		or Vector3.zAxis
+	local right = roadRightFromTangent(tangent)
+	local halfWidth = sanitizeRoadWidth(chain.width) * 0.5
+	table.insert(junction.portals, {
+		chain = chain,
+		point = boundaryPoint,
+		left = boundaryPoint - right * halfWidth,
+		right = boundaryPoint + right * halfWidth,
+	})
+	junction.chains[chain] = true
+end
+
+local function attachProcessedChainEndpointsToJunctions(chains, junctions)
+	for _, junction in ipairs(junctions) do
+		junction.portals = {}
+		junction.chains = {}
+	end
+
+	for _, chain in ipairs(chains) do
+		if #chain.samples >= 2 then
+			local first = chain.samples[1]
+			local second = chain.samples[2]
+			local last = chain.samples[#chain.samples]
+			local beforeLast = chain.samples[#chain.samples - 1]
+			for _, junction in ipairs(junctions) do
+				local tolerance = math.max(1, chain.width * 0.08)
+				if distanceXZ(first, junction.center) <= junction.radius + tolerance then
+					addPortalForChain(junction, chain, first, second)
+				end
+				if distanceXZ(last, junction.center) <= junction.radius + tolerance then
+					addPortalForChain(junction, chain, last, beforeLast)
+				end
+			end
+		end
+	end
 end
 
 local function buildProcessedComponents(chains, junctions)
@@ -402,7 +447,7 @@ local function applyJunctionsToChains(chains, junctions)
 	end
 end
 
-local function roadRightFromTangent(tangent)
+function roadRightFromTangent(tangent)
 	local right = Vector3.yAxis:Cross(tangent)
 	if right.Magnitude < 1e-4 then
 		return Vector3.xAxis
@@ -916,6 +961,17 @@ local function fairEdgeCurveControls(points, closedLoop, sampleStep)
 	return sampleSmoothedCurveControls(relaxed, closedLoop, sampleStep)
 end
 
+local function getUniqueRoadSamples(samples, closedLoop)
+	local unique = {}
+	for _, sample in ipairs(samples) do
+		table.insert(unique, sample)
+	end
+	if closedLoop and #unique > 1 and distanceXZ(unique[1], unique[#unique]) <= 0.05 then
+		table.remove(unique, #unique)
+	end
+	return unique
+end
+
 local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugLabel)
 	if #samples < 2 then
 		return nil
@@ -923,139 +979,77 @@ local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugL
 
 	roadWidth = sanitizeRoadWidth(roadWidth)
 	local closedLoop = sampleLoopIsClosed(samples)
-	local edgeCount = closedLoop and #samples - 1 or #samples
-	if edgeCount < 2 then
+	local centerControls = getUniqueRoadSamples(samples, closedLoop)
+	if #centerControls < (closedLoop and 3 or 2) then
+		return nil
+	end
+
+	local centerLength = polylineLength(centerControls, closedLoop)
+	if centerLength <= 1e-4 then
 		return nil
 	end
 
 	local halfWidth = roadWidth * 0.5
 	local widthSegments = math.min(ROAD_WIDTH_MAX_INTERNAL_LOOPS + 1, math.max(1, math.ceil(roadWidth / ROAD_WIDTH_TRIANGULATION_STEP)))
-	local centerControls = {}
-	local leftControls = {}
-	local rightControls = {}
-	local rights = {}
-	local fallbackDir = Vector3.new(0, 0, 1)
-	local rightFlips = 0
-
-	for i = 1, edgeCount do
-		local tangent = getRoadSampleTangent(samples, i, edgeCount, closedLoop, fallbackDir)
-		fallbackDir = tangent or fallbackDir
-		local right = roadRightFromTangent(fallbackDir)
-		if i > 1 and rights[i - 1] and right:Dot(rights[i - 1]) < 0 then
-			right = -right
-			rightFlips += 1
-		end
-		local center = samples[i] + Vector3.new(0, surfaceYOffset, 0)
-		centerControls[i] = center
-		rights[i] = right
-		leftControls[i] = center - right * halfWidth
-		rightControls[i] = center + right * halfWidth
-	end
-
-	local smoothedCenterControls = sampleSmoothedCurveControls(centerControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP)
-	local smoothedLeftControls = fairEdgeCurveControls(leftControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP)
-	local smoothedRightControls = fairEdgeCurveControls(rightControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP)
-
-	local centerLength = polylineLength(smoothedCenterControls, closedLoop)
-	local leftLength = polylineLength(smoothedLeftControls, closedLoop)
-	local rightLength = polylineLength(smoothedRightControls, closedLoop)
-	local desiredRowCount
+	local rowCount
 	if closedLoop then
-		desiredRowCount = math.max(3, edgeCount, math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP))
+		rowCount = math.max(3, #centerControls, math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP))
 	else
-		desiredRowCount = math.max(2, edgeCount, math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP) + 1)
+		rowCount = math.max(2, #centerControls, math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP) + 1)
 	end
-	local minEdgeStep = math.max(2, roadWidth * 0.02)
-	local shortestCurveLength = math.min(centerLength, leftLength, rightLength)
-	local edgeLimitedRowCount = desiredRowCount
-	if shortestCurveLength > 1e-4 then
-		if closedLoop then
-			edgeLimitedRowCount = math.max(3, math.floor(shortestCurveLength / minEdgeStep))
-		else
-			edgeLimitedRowCount = math.max(2, math.floor(shortestCurveLength / minEdgeStep) + 1)
-		end
-	end
-	local rowCount = math.min(desiredRowCount, edgeLimitedRowCount)
-
 	local spanCount = closedLoop and rowCount or rowCount - 1
 	local centers = {}
 	local leftPositions = {}
 	local rightPositions = {}
+	local rights = {}
+	local fallbackDir = Vector3.new(0, 0, 1)
+
 	for i = 1, rowCount do
-		local fraction
+		local fraction = closedLoop and ((i - 1) / rowCount) or (rowCount > 1 and ((i - 1) / (rowCount - 1)) or 0)
+		centers[i] = samplePolylineAtFraction(centerControls, closedLoop, fraction) + Vector3.new(0, surfaceYOffset, 0)
+	end
+
+	for i = 1, rowCount do
+		local tangent
 		if closedLoop then
-			fraction = (i - 1) / rowCount
+			local prevIndex = i - 1
+			if prevIndex < 1 then
+				prevIndex = rowCount
+			end
+			local nextIndex = i + 1
+			if nextIndex > rowCount then
+				nextIndex = 1
+			end
+			tangent = horizontalUnit(centers[nextIndex] - centers[prevIndex])
+		elseif i == 1 then
+			tangent = horizontalUnit(centers[2] - centers[1])
+		elseif i == rowCount then
+			tangent = horizontalUnit(centers[rowCount] - centers[rowCount - 1])
 		else
-			fraction = rowCount > 1 and ((i - 1) / (rowCount - 1)) or 0
+			tangent = horizontalUnit(centers[i + 1] - centers[i - 1])
 		end
-		centers[i] = samplePolylineAtFraction(smoothedCenterControls, closedLoop, fraction)
-		leftPositions[i] = samplePolylineAtFraction(smoothedLeftControls, closedLoop, fraction)
-		rightPositions[i] = samplePolylineAtFraction(smoothedRightControls, closedLoop, fraction)
-		local lateral = horizontalUnit(rightPositions[i] - leftPositions[i])
-		if lateral then
-			local mid = (leftPositions[i] + rightPositions[i]) * 0.5
-			leftPositions[i] = Vector3.new(mid.X, mid.Y, mid.Z) - lateral * halfWidth
-			rightPositions[i] = Vector3.new(mid.X, mid.Y, mid.Z) + lateral * halfWidth
+
+		fallbackDir = tangent or fallbackDir
+		local right = roadRightFromTangent(fallbackDir)
+		if i > 1 and rights[i - 1] and right:Dot(rights[i - 1]) < 0 then
+			right = -right
 		end
+		rights[i] = right
+		leftPositions[i] = centers[i] - right * halfWidth
+		rightPositions[i] = centers[i] + right * halfWidth
 	end
 
-	local collapsedSpans = 0
-	local tightSpans = 0
-	local minCenterStep = math.huge
-	local minLeftStep = math.huge
-	local minRightStep = math.huge
-	local minLoftWidth = math.huge
-	local maxLoftWidth = 0
-	local pinchedRows = 0
-	for i = 1, rowCount do
-		local loftWidth = (rightPositions[i] - leftPositions[i]).Magnitude
-		minLoftWidth = math.min(minLoftWidth, loftWidth)
-		maxLoftWidth = math.max(maxLoftWidth, loftWidth)
-		if loftWidth < roadWidth * 0.35 then
-			pinchedRows += 1
-		end
-	end
-	for i = 1, spanCount do
-		local nextIndex = closedLoop and ((i % rowCount) + 1) or (i + 1)
-		local centerStep = (centers[nextIndex] - centers[i]).Magnitude
-		local leftStep = (leftPositions[nextIndex] - leftPositions[i]).Magnitude
-		local rightStep = (rightPositions[nextIndex] - rightPositions[i]).Magnitude
-		minCenterStep = math.min(minCenterStep, centerStep)
-		minLeftStep = math.min(minLeftStep, leftStep)
-		minRightStep = math.min(minRightStep, rightStep)
-		if centerStep > 1 and math.min(leftStep, rightStep) < 0.5 then
-			collapsedSpans += 1
-		end
-		if roadWidth > centerStep * 2 then
-			tightSpans += 1
-		end
-	end
-
-	if (collapsedSpans > 0 or pinchedRows > 0 or rightFlips > 0 or roadWidth >= 96) and Config.authoredRoadDebugLogging == true then
+	if Config.authoredRoadDebugLogging == true and roadWidth >= 96 then
 		roadDebugLog(
-			"road loft diagnostics %s: width=%.1f samples=%d rows=%d closed=%s spans=%d tightSpans=%d collapsedSpans=%d pinchedRows=%d rightFlips=%d centerLen=%.1f leftLen=%.1f rightLen=%.1f minLoftWidth=%.2f maxLoftWidth=%.2f minCenterStep=%.2f minLeftStep=%.2f minRightStep=%.2f widthSegments=%d smoothControls=%d/%d/%d",
+			"road loft %s: width=%.1f samples=%d rows=%d closed=%s spans=%d centerLen=%.1f widthSegments=%d",
 			tostring(debugLabel or "road"),
 			roadWidth,
 			#samples,
 			rowCount,
 			tostring(closedLoop),
 			spanCount,
-			tightSpans,
-			collapsedSpans,
-			pinchedRows,
-			rightFlips,
 			centerLength,
-			leftLength,
-			rightLength,
-			minLoftWidth == math.huge and 0 or minLoftWidth,
-			maxLoftWidth,
-			minCenterStep == math.huge and 0 or minCenterStep,
-			minLeftStep == math.huge and 0 or minLeftStep,
-			minRightStep == math.huge and 0 or minRightStep,
-			widthSegments,
-			#smoothedCenterControls,
-			#smoothedLeftControls,
-			#smoothedRightControls
+			widthSegments
 		)
 	end
 
@@ -1109,17 +1103,113 @@ local function addRoadRibbonToMesh(state, samples, roadWidth, debugLabel)
 	return spans
 end
 
-local function addIntersectionDiskToMesh(state, junction)
-	local center = junction.center + Vector3.new(0, ROAD_MESH_THICKNESS * 0.5, 0)
-	local centerVertex = addMeshVertex(state, center)
-	local ring = {}
-	for i = 1, INTERSECTION_RING_SEGMENTS do
-		local theta = ((i - 1) / INTERSECTION_RING_SEGMENTS) * math.pi * 2
-		ring[i] = addMeshVertex(state, center + Vector3.new(math.cos(theta) * junction.radius, 0, math.sin(theta) * junction.radius))
+local function normalizePositiveAngleDelta(delta)
+	local result = delta
+	while result <= 0 do
+		result += math.pi * 2
+	end
+	while result > math.pi * 2 do
+		result -= math.pi * 2
+	end
+	return result
+end
+
+local function junctionBoundaryAngle(point, junction)
+	return math.atan2(point.Z - junction.center.Z, point.X - junction.center.X)
+end
+
+local function boundaryEntriesSharePortal(a, b)
+	return a.portal ~= nil and b.portal ~= nil and a.portal == b.portal
+end
+
+local function mergeBoundaryEntryPortal(target, source)
+	if not boundaryEntriesSharePortal(target, source) then
+		target.portal = nil
+	end
+end
+
+local function sortedJunctionBoundaryEntries(junction)
+	local entries = {}
+	for _, portal in ipairs(junction.portals) do
+		table.insert(entries, { point = portal.left, portal = portal })
+		table.insert(entries, { point = portal.right, portal = portal })
+	end
+	table.sort(entries, function(a, b)
+		return junctionBoundaryAngle(a.point, junction) < junctionBoundaryAngle(b.point, junction)
+	end)
+
+	local filtered = {}
+	for _, entry in ipairs(entries) do
+		local previous = filtered[#filtered]
+		if previous and distanceXZ(previous.point, entry.point) <= 0.05 then
+			mergeBoundaryEntryPortal(previous, entry)
+		else
+			table.insert(filtered, { point = entry.point, portal = entry.portal })
+		end
+	end
+	if #filtered >= 2 and distanceXZ(filtered[1].point, filtered[#filtered].point) <= 0.05 then
+		mergeBoundaryEntryPortal(filtered[1], filtered[#filtered])
+		table.remove(filtered, #filtered)
 	end
 
-	for i = 1, INTERSECTION_RING_SEGMENTS do
-		addMeshTriangle(state, centerVertex, ring[(i % INTERSECTION_RING_SEGMENTS) + 1], ring[i])
+	return filtered
+end
+
+local function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPoint, subdivisions, surfaceY)
+	local fromAngle = junctionBoundaryAngle(fromPoint, junction)
+	local toAngle = junctionBoundaryAngle(toPoint, junction)
+	local delta = normalizePositiveAngleDelta(toAngle - fromAngle)
+	if delta <= 1e-4 or delta >= math.pi * 2 - 1e-4 then
+		return
+	end
+
+	local fromRadius = distanceXZ(fromPoint, junction.center)
+	local toRadius = distanceXZ(toPoint, junction.center)
+	for i = 1, subdivisions do
+		local alpha = i / (subdivisions + 1)
+		local angle = fromAngle + delta * alpha
+		local radius = fromRadius + (toRadius - fromRadius) * alpha
+		table.insert(boundary, Vector3.new(
+			junction.center.X + math.cos(angle) * radius,
+			surfaceY,
+			junction.center.Z + math.sin(angle) * radius
+		))
+	end
+end
+
+local function getJunctionBoundary(junction, surfaceY)
+	if not junction.portals or #junction.portals == 0 then
+		return {}
+	end
+
+	local entries = sortedJunctionBoundaryEntries(junction)
+	local subdivisions = RoadSplineData.sanitizeJunctionSubdivisions(junction.subdivisions)
+	local boundary = {}
+	for i, entry in ipairs(entries) do
+		local nextEntry = entries[(i % #entries) + 1]
+		table.insert(boundary, Vector3.new(entry.point.X, surfaceY, entry.point.Z))
+		if subdivisions > 0 and not boundaryEntriesSharePortal(entry, nextEntry) then
+			addConnectorSubdivisionPoints(boundary, junction, entry.point, nextEntry.point, subdivisions, surfaceY)
+		end
+	end
+	return boundary
+end
+
+local function addIntersectionPatchToMesh(state, junction)
+	local center = junction.center + Vector3.new(0, ROAD_MESH_THICKNESS * 0.5, 0)
+	local boundary = getJunctionBoundary(junction, center.Y)
+	if #boundary < 3 then
+		return
+	end
+
+	local centerVertex = addMeshVertex(state, center)
+	local ring = {}
+	for i, point in ipairs(boundary) do
+		ring[i] = addMeshVertex(state, point)
+	end
+
+	for i = 1, #ring do
+		addMeshTriangle(state, centerVertex, ring[(i % #ring) + 1], ring[i])
 	end
 end
 
@@ -1252,6 +1342,7 @@ local function buildClientRoadMesh(root, world)
 	local junctions
 	if processedRoadNetwork then
 		junctions = collectProcessedJunctions(root)
+		attachProcessedChainEndpointsToJunctions(chains, junctions)
 	else
 		local rawJunctions = collectEndpointJunctions(chains)
 		for _, junction in ipairs(collectCrossIntersections(chains)) do
@@ -1280,7 +1371,7 @@ local function buildClientRoadMesh(root, world)
 			totalSpans += addRoadRibbonToMesh(state, chain.samples, chain.width, string.format("client component %03d/%s", i, getChainName(chain)))
 		end
 		for _, junction in ipairs(component.junctions) do
-			addIntersectionDiskToMesh(state, junction)
+			addIntersectionPatchToMesh(state, junction)
 		end
 
 		if state.faces > 0 then

@@ -47,7 +47,31 @@
 
 				<div class="button-row">
 					<button id="deletePointButton" type="button">Delete Point</button>
+					<button id="splitSplineButton" type="button">Split Curve</button>
 					<button id="centerViewButton" type="button">Center View</button>
+				</div>
+			</section>
+
+			<section class="panel">
+				<div class="panel-header">
+					<h2>Junctions</h2>
+					<p>Use Junction Mode to add, move, delete, and resize merge nodes. Roundabouts use one node per entry on the loop.</p>
+				</div>
+
+				<label class="field">
+					<span>Junction Radius</span>
+					<input id="junctionRadiusInput" type="number" min="6" max="220" step="1">
+				</label>
+
+				<label class="field">
+					<span>Junction Subdivisions</span>
+					<input id="junctionSubdivisionsInput" type="number" min="0" max="12" step="1">
+				</label>
+
+				<div class="button-row">
+					<button id="junctionModeButton" type="button">Junction Mode</button>
+					<button id="autoJunctionButton" type="button">Auto Junction</button>
+					<button id="deleteJunctionButton" type="button" class="danger">Delete Junction</button>
 				</div>
 			</section>
 
@@ -91,7 +115,7 @@
 			<section class="panel">
 				<div class="panel-header">
 					<h2>Session JSON</h2>
-					<p>Exports a resumable editor session while keeping the `splines` payload compatible with the Roblox road editor plugin.</p>
+					<p>Autosaves locally after edits. Export JSON when you want a portable copy for Studio or another browser.</p>
 				</div>
 
 				<div class="button-row">
@@ -108,6 +132,9 @@
 				<ul class="tips">
 					<li>Left click empty space: append point to active spline</li>
 					<li>Left drag point: move point</li>
+					<li>Split Curve: select an interior point on an open curve</li>
+					<li>Junction Mode: click empty space to add, drag center to move</li>
+					<li>Junction Mode: drag radius ring to scale, Alt-click to delete</li>
 					<li>Right drag or middle drag: pan</li>
 					<li>Mouse wheel: zoom</li>
 				</ul>

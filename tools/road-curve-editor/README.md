@@ -28,10 +28,13 @@ Manual:
    - Between existing points inserts in the middle.
    - Clicking away from the curve on an open spline extends whichever end is closer.
    - New points enter drag immediately on creation.
-5. Use `New`, `Prev`, `Next`, `Delete`, `Road Width`, `Closed loop`, and `Roblox Mesh Preview` to manage splines and preview the authored-road mesh footprint/wireframe.
-6. Export `cab87-road-curves.json` to save the full editor session, including camera state and the trace image data/transform.
-7. Use `Import Session JSON` in the browser tool to resume where you left off.
-8. In Roblox Studio, use the road editor plugin's `Import Curve JSON (Append)` or `Import Curve JSON (Replace)` action on that same JSON file.
+5. Use `Split Curve` after selecting an interior point on an open curve to split it into two curves sharing that split point.
+6. Use `New`, `Prev`, `Next`, `Delete`, `Road Width`, `Closed loop`, and `Roblox Mesh Preview` to manage splines and preview the authored-road mesh footprint/wireframe.
+7. Use `Junction Mode` to click-add junctions, drag centers to move them, drag radius rings to scale them, and Alt-click a junction to delete it. Use `Auto Junction` on a selected junction to snap included control points to the junction center and size the junction from the widest intersecting road. Increase `Junction Subdivisions` above `0` to bevel each road mouth in the junction patch. Roundabouts should be authored as a closed loop with one junction at each entry/exit on the loop.
+8. The browser autosaves the editor session locally and restores it after refresh, including incomplete curves. Large trace images may exceed browser storage quota; in that case the curve data still autosaves without the image data.
+9. Export `cab87-road-curves.json` to save the full editor session, including camera state and the trace image data/transform.
+10. Use `Import Session JSON` in the browser tool to resume where you left off.
+11. In Roblox Studio, use the road editor plugin's `Import Curve JSON (Append)` or `Import Curve JSON (Replace)` action on that same JSON file.
 
 ## JSON Format
 
@@ -39,7 +42,7 @@ The exported payload stays shaped for the Studio plugin importer and adds an `ed
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "sampleStepStuds": 8,
   "coordinateSpace": {
     "upAxis": "Y",
@@ -56,6 +59,9 @@ The exported payload stays shaped for the Studio plugin importer and adds an `ed
         { "x": 64, "y": 0, "z": 32 }
       ]
     }
+  ],
+  "junctions": [
+    { "id": "Junction001", "x": 64, "y": 0, "z": 32, "radius": 22, "subdivisions": 0 }
   ],
   "editorState": {
     "camera": { "x": 12, "z": 48, "zoom": 1.35 },

@@ -1,6 +1,16 @@
 const ROAD_WIDTH_DEFAULT = 28;
 const ROAD_WIDTH_MIN = 8;
 const ROAD_WIDTH_MAX = 200;
+const AUTOSAVE_STORAGE_KEY = "cab87-road-curve-editor-autosave-v2";
+const AUTOSAVE_DEBOUNCE_MS = 350;
+const JUNCTION_RADIUS_DEFAULT = 22;
+const JUNCTION_RADIUS_MIN = 6;
+const JUNCTION_RADIUS_MAX = 220;
+const JUNCTION_RADIUS_PADDING = 2;
+const JUNCTION_VERTEX_EPSILON = 0.05;
+const JUNCTION_SUBDIVISIONS_DEFAULT = 0;
+const JUNCTION_SUBDIVISIONS_MIN = 0;
+const JUNCTION_SUBDIVISIONS_MAX = 12;
 const SAMPLE_STEP_STUDS = 8;
 const ENDPOINT_WELD_DISTANCE = 22;
 const INTERSECTION_RADIUS_SCALE = 0.5;
@@ -20,6 +30,8 @@ const ROAD_CURVE_EXPANSION_PASSES = 0;
 const ROAD_CURVE_EXPANSION_ALPHA = 0.8;
 const ROAD_INNER_EDGE_RADIUS_SCALE = 0.08;
 const POINT_HIT_RADIUS_PX = 12;
+const JUNCTION_HIT_RADIUS_PX = 13;
+const JUNCTION_RADIUS_RING_HIT_PX = 8;
 const CURVE_INSERT_HIT_RADIUS_PX = 18;
 const CURVE_END_INSERT_ALPHA_THRESHOLD = 0.28;
 
@@ -30,7 +42,13 @@ const elements = {
 	closedToggle: document.getElementById("closedToggle"),
 	meshPreviewToggle: document.getElementById("meshPreviewToggle"),
 	deletePointButton: document.getElementById("deletePointButton"),
+	splitSplineButton: document.getElementById("splitSplineButton"),
 	centerViewButton: document.getElementById("centerViewButton"),
+	junctionRadiusInput: document.getElementById("junctionRadiusInput"),
+	junctionSubdivisionsInput: document.getElementById("junctionSubdivisionsInput"),
+	junctionModeButton: document.getElementById("junctionModeButton"),
+	autoJunctionButton: document.getElementById("autoJunctionButton"),
+	deleteJunctionButton: document.getElementById("deleteJunctionButton"),
 	newSplineButton: document.getElementById("newSplineButton"),
 	prevSplineButton: document.getElementById("prevSplineButton"),
 	nextSplineButton: document.getElementById("nextSplineButton"),
@@ -51,13 +69,19 @@ const elements = {
 
 const ctx = elements.canvas.getContext("2d");
 
+let autosaveReady = false;
+let autosaveTimer = null;
+let autosaveWarned = false;
+
 const state = {
 	cameraX: 0,
 	cameraZ: 0,
 	zoom: 1.1,
 	splines: [],
+	junctions: [],
 	activeSplineIndex: 0,
 	selectedPoint: null,
+	selectedJunctionId: null,
 	drag: null,
 	mouseWorld: { x: 0, z: 0 },
 	image: {
@@ -75,6 +99,7 @@ const state = {
 	},
 	statusMessage: "",
 	meshPreviewEnabled: false,
+	junctionModeEnabled: false,
 	meshPreviewDirty: true,
 	meshPreviewCache: null,
 };
@@ -87,6 +112,25 @@ function sanitizeRoadWidth(value) {
 		return ROAD_WIDTH_DEFAULT;
 	}
 	return Math.min(ROAD_WIDTH_MAX, Math.max(ROAD_WIDTH_MIN, width));
+}
+
+function sanitizeJunctionRadius(value) {
+	const radius = Number(value);
+	if (!Number.isFinite(radius)) {
+		return JUNCTION_RADIUS_DEFAULT;
+	}
+	return Math.min(JUNCTION_RADIUS_MAX, Math.max(JUNCTION_RADIUS_MIN, radius));
+}
+
+function sanitizeJunctionSubdivisions(value) {
+	const subdivisions = Number(value);
+	if (!Number.isFinite(subdivisions)) {
+		return JUNCTION_SUBDIVISIONS_DEFAULT;
+	}
+	return Math.min(
+		JUNCTION_SUBDIVISIONS_MAX,
+		Math.max(JUNCTION_SUBDIVISIONS_MIN, Math.round(subdivisions)),
+	);
 }
 
 function roundNumber(value, decimals = 3) {
@@ -112,6 +156,18 @@ function makeSpline(name) {
 		width: ROAD_WIDTH_DEFAULT,
 		closed: false,
 		points: [],
+	};
+}
+
+function makeJunction(position, radius = JUNCTION_RADIUS_DEFAULT, subdivisions = JUNCTION_SUBDIVISIONS_DEFAULT) {
+	return {
+		id: `junction-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+		name: `Junction${String(state.junctions.length + 1).padStart(3, "0")}`,
+		x: roundNumber(position.x, 3),
+		y: roundNumber(position.y ?? 0, 3),
+		z: roundNumber(position.z, 3),
+		radius: sanitizeJunctionRadius(radius),
+		subdivisions: sanitizeJunctionSubdivisions(subdivisions),
 	};
 }
 
@@ -189,6 +245,13 @@ function getSelectedPointRecord() {
 	};
 }
 
+function getSelectedJunction() {
+	if (!state.selectedJunctionId) {
+		return null;
+	}
+	return state.junctions.find((junction) => junction.id === state.selectedJunctionId) || null;
+}
+
 function setActiveSpline(index) {
 	state.activeSplineIndex = Math.min(Math.max(index, 0), state.splines.length - 1);
 	const selected = getSelectedPointRecord();
@@ -218,11 +281,33 @@ function updateStatus() {
 		`${state.statusMessage || "Preview uses the same Catmull-Rom subdivision rule as the Roblox road editor sampler."}`;
 }
 
+function setJunctionModeEnabled(enabled) {
+	state.junctionModeEnabled = enabled;
+	elements.junctionModeButton.classList.toggle("primary", enabled);
+	elements.junctionModeButton.textContent = enabled ? "Junction Mode: On" : "Junction Mode";
+}
+
+function getJunctionModeStatus() {
+	return state.junctionModeEnabled
+		? "Junction Mode enabled. Click empty space to add, drag centers to move, drag radius rings to scale, Alt-click a junction to delete."
+		: "Junction Mode disabled.";
+}
+
+function toggleJunctionMode() {
+	setJunctionModeEnabled(!state.junctionModeEnabled);
+	refreshInspector();
+	setStatus(getJunctionModeStatus());
+}
+
 function refreshInspector() {
 	const spline = getActiveSpline();
 	elements.widthInput.value = formatNumber(spline.width, 1);
 	elements.closedToggle.checked = spline.closed;
 	elements.meshPreviewToggle.checked = state.meshPreviewEnabled;
+	setJunctionModeEnabled(state.junctionModeEnabled);
+	const selectedJunction = getSelectedJunction();
+	elements.junctionRadiusInput.value = formatNumber(selectedJunction ? selectedJunction.radius : JUNCTION_RADIUS_DEFAULT, 1);
+	elements.junctionSubdivisionsInput.value = String(selectedJunction ? sanitizeJunctionSubdivisions(selectedJunction.subdivisions) : JUNCTION_SUBDIVISIONS_DEFAULT);
 	elements.imageOffsetXInput.value = formatNumber(state.image.offsetX, 1);
 	elements.imageOffsetZInput.value = formatNumber(state.image.offsetZ, 1);
 	elements.imageScaleInput.value = formatNumber(state.image.scale, 2);
@@ -273,6 +358,30 @@ function cloneSplineForExport(spline) {
 			y: 0,
 			z: roundNumber(point.z, 3),
 		})),
+	};
+}
+
+function cloneSplineForEditorPersistence(spline) {
+	return {
+		name: spline.name,
+		closed: spline.closed && spline.points.length >= 3,
+		width: roundNumber(spline.width, 3),
+		points: spline.points.map((point) => ({
+			x: roundNumber(point.x, 3),
+			y: roundNumber(point.y ?? 0, 3),
+			z: roundNumber(point.z, 3),
+		})),
+	};
+}
+
+function cloneJunctionForExport(junction) {
+	return {
+		id: junction.name || junction.id,
+		radius: roundNumber(sanitizeJunctionRadius(junction.radius), 3),
+		subdivisions: sanitizeJunctionSubdivisions(junction.subdivisions),
+		x: roundNumber(junction.x, 3),
+		y: roundNumber(junction.y ?? 0, 3),
+		z: roundNumber(junction.z, 3),
 	};
 }
 
@@ -330,7 +439,7 @@ function clearImageSourceState() {
 function buildSessionPayload() {
 	const selected = getSelectedPointRecord();
 	return {
-		version: 1,
+		version: 2,
 		sampleStepStuds: SAMPLE_STEP_STUDS,
 		coordinateSpace: {
 			upAxis: "Y",
@@ -340,6 +449,7 @@ function buildSessionPayload() {
 		splines: state.splines
 			.filter((spline) => spline.points.length >= 2)
 			.map(cloneSplineForExport),
+		junctions: state.junctions.map(cloneJunctionForExport),
 		editorState: {
 			camera: {
 				x: roundNumber(state.cameraX, 3),
@@ -353,6 +463,7 @@ function buildSessionPayload() {
 					pointIndex: selected.pointIndex,
 				}
 				: null,
+			selectedJunctionIndex: state.junctions.findIndex((junction) => junction.id === state.selectedJunctionId),
 			image: hasLoadedImage()
 				? {
 					fileName: state.image.fileName,
@@ -367,14 +478,28 @@ function buildSessionPayload() {
 				}
 				: null,
 			meshPreviewEnabled: state.meshPreviewEnabled,
+			junctionModeEnabled: state.junctionModeEnabled,
 		},
 	};
 }
 
-function normalizeImportedSpline(splineData, index) {
+function buildEditorPersistencePayload() {
+	const payload = buildSessionPayload();
+	return {
+		...payload,
+		splines: state.splines.map(cloneSplineForEditorPersistence),
+		editorState: {
+			...payload.editorState,
+			autosavedAt: new Date().toISOString(),
+		},
+	};
+}
+
+function normalizeImportedSpline(splineData, index, options = {}) {
 	if (!splineData || typeof splineData !== "object" || !Array.isArray(splineData.points)) {
 		return null;
 	}
+	const minPoints = Number.isInteger(options.minPoints) ? options.minPoints : 2;
 
 	const name = typeof splineData.name === "string" && splineData.name.trim().length > 0
 		? splineData.name.trim()
@@ -388,17 +513,18 @@ function normalizeImportedSpline(splineData, index) {
 		}
 		const x = Number(pointData.x);
 		const z = Number(pointData.z);
-		if (!Number.isFinite(x) || !Number.isFinite(z)) {
-			continue;
+			if (!Number.isFinite(x) || !Number.isFinite(z)) {
+				continue;
+			}
+			const y = Number(pointData.y);
+			spline.points.push({
+				x: roundNumber(x, 3),
+				y: Number.isFinite(y) ? roundNumber(y, 3) : 0,
+				z: roundNumber(z, 3),
+			});
 		}
-		spline.points.push({
-			x: roundNumber(x, 3),
-			y: 0,
-			z: roundNumber(z, 3),
-		});
-	}
 
-	if (spline.points.length < 2) {
+	if (spline.points.length < minPoints) {
 		return null;
 	}
 
@@ -406,11 +532,42 @@ function normalizeImportedSpline(splineData, index) {
 	return spline;
 }
 
+function normalizeImportedJunction(junctionData, index) {
+	if (!junctionData || typeof junctionData !== "object") {
+		return null;
+	}
+
+	const x = Number(junctionData.x);
+	const z = Number(junctionData.z);
+	if (!Number.isFinite(x) || !Number.isFinite(z)) {
+		return null;
+	}
+
+	const junction = makeJunction(
+		{
+			x,
+			y: Number.isFinite(Number(junctionData.y)) ? Number(junctionData.y) : 0,
+			z,
+			},
+			junctionData.radius,
+			junctionData.subdivisions,
+		);
+	junction.name = typeof junctionData.id === "string" && junctionData.id.trim().length > 0
+		? junctionData.id.trim()
+		: `Junction${String(index + 1).padStart(3, "0")}`;
+	return junction;
+}
+
 function frameActiveSpline(setMessage = true) {
 	const spline = getActiveSpline();
-	const points = spline.points.length > 0
+	const points = (spline.points.length > 0
 		? spline.points
-		: state.splines.flatMap((item) => item.points);
+		: state.splines.flatMap((item) => item.points))
+		.concat(state.junctions.map((junction) => ({
+			x: junction.x,
+			y: junction.y ?? 0,
+			z: junction.z,
+		})));
 
 	if (points.length === 0) {
 		state.cameraX = 0;
@@ -455,7 +612,7 @@ function frameActiveSpline(setMessage = true) {
 	}
 }
 
-async function importSessionFromText(text) {
+async function importSessionFromText(text, options = {}) {
 	let payload;
 	try {
 		payload = JSON.parse(text);
@@ -467,22 +624,32 @@ async function importSessionFromText(text) {
 		throw new Error("Session JSON must include a splines array.");
 	}
 
+	const minPoints = options.allowIncompleteSplines ? 0 : 2;
 	const importedSplines = payload.splines
-		.map((splineData, index) => normalizeImportedSpline(splineData, index))
+		.map((splineData, index) => normalizeImportedSpline(splineData, index, { minPoints }))
 		.filter(Boolean);
 
 	if (importedSplines.length === 0) {
-		throw new Error("Session JSON did not contain any valid splines with at least 2 points.");
+		throw new Error(options.allowIncompleteSplines
+			? "Saved session did not contain any valid splines."
+			: "Session JSON did not contain any valid splines with at least 2 points.");
 	}
 
 	state.splines = importedSplines;
+	state.junctions = Array.isArray(payload.junctions)
+		? payload.junctions
+			.map((junctionData, index) => normalizeImportedJunction(junctionData, index))
+			.filter(Boolean)
+		: [];
 	state.activeSplineIndex = 0;
 	state.selectedPoint = null;
+	state.selectedJunctionId = null;
 
 	const editorState = payload.editorState && typeof payload.editorState === "object"
 		? payload.editorState
 		: null;
 	state.meshPreviewEnabled = editorState ? editorState.meshPreviewEnabled === true : false;
+	state.junctionModeEnabled = editorState ? editorState.junctionModeEnabled === true : false;
 
 	if (editorState && Number.isInteger(editorState.activeSplineIndex)) {
 		state.activeSplineIndex = Math.min(
@@ -516,6 +683,13 @@ async function importSessionFromText(text) {
 			};
 		}
 	}
+	if (editorState && Number.isInteger(editorState.selectedJunctionIndex)) {
+		const junction = state.junctions[editorState.selectedJunctionIndex];
+		if (junction) {
+			state.selectedJunctionId = junction.id;
+			state.selectedPoint = null;
+		}
+	}
 
 	clearImageSourceState();
 	const imageState = editorState && editorState.image && typeof editorState.image === "object"
@@ -545,7 +719,110 @@ async function importSessionFromText(text) {
 	renderSplineList();
 	refreshInspector();
 	requestRender();
-	setStatus(`Imported ${importedSplines.length} spline${importedSplines.length === 1 ? "" : "s"} from session JSON.`);
+	if (options.statusMessage) {
+		setStatus(options.statusMessage);
+	} else {
+		setStatus(`Imported ${importedSplines.length} spline${importedSplines.length === 1 ? "" : "s"} and ${state.junctions.length} junction${state.junctions.length === 1 ? "" : "s"} from session JSON.`);
+	}
+}
+
+function getAutosaveStorage() {
+	try {
+		return window.localStorage || null;
+	} catch (error) {
+		return null;
+	}
+}
+
+function writeAutosavePayload(payload) {
+	const storage = getAutosaveStorage();
+	if (!storage) {
+		return false;
+	}
+	storage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(payload));
+	return true;
+}
+
+function saveEditorAutosave() {
+	if (!autosaveReady || state.splines.length === 0) {
+		return false;
+	}
+
+	const payload = buildEditorPersistencePayload();
+	try {
+		return writeAutosavePayload(payload);
+	} catch (error) {
+		const image = payload.editorState && payload.editorState.image;
+		if (image && image.dataUrl) {
+			try {
+				const fallbackPayload = {
+					...payload,
+					editorState: {
+						...payload.editorState,
+						image: {
+							...image,
+							dataUrl: "",
+							autosaveImageOmitted: true,
+						},
+					},
+				};
+				const saved = writeAutosavePayload(fallbackPayload);
+				if (saved && !autosaveWarned) {
+					autosaveWarned = true;
+					console.warn("Cab87 Road Curve Editor autosave skipped trace image data because browser storage quota was exceeded.");
+				}
+				return saved;
+			} catch (fallbackError) {
+				if (!autosaveWarned) {
+					autosaveWarned = true;
+					console.warn("Cab87 Road Curve Editor autosave failed.", fallbackError);
+				}
+				return false;
+			}
+		}
+		if (!autosaveWarned) {
+			autosaveWarned = true;
+			console.warn("Cab87 Road Curve Editor autosave failed.", error);
+		}
+		return false;
+	}
+}
+
+function scheduleAutosave() {
+	if (!autosaveReady) {
+		return;
+	}
+	if (autosaveTimer) {
+		window.clearTimeout(autosaveTimer);
+	}
+	autosaveTimer = window.setTimeout(() => {
+		autosaveTimer = null;
+		saveEditorAutosave();
+	}, AUTOSAVE_DEBOUNCE_MS);
+}
+
+function flushAutosave() {
+	if (autosaveTimer) {
+		window.clearTimeout(autosaveTimer);
+		autosaveTimer = null;
+	}
+	saveEditorAutosave();
+}
+
+async function restoreAutosavedSession() {
+	const storage = getAutosaveStorage();
+	if (!storage) {
+		return false;
+	}
+	const saved = storage.getItem(AUTOSAVE_STORAGE_KEY);
+	if (!saved) {
+		return false;
+	}
+	await importSessionFromText(saved, {
+		allowIncompleteSplines: true,
+		statusMessage: "Restored autosaved editor session from this browser.",
+	});
+	return true;
 }
 
 function catmullRom(p0, p1, p2, p3, t) {
@@ -973,6 +1250,14 @@ function offsetEdgePoint(center, prevDir, prevRight, nextDir, nextRight, sideSig
 	);
 }
 
+function getUniqueRoadSamples(samples, closedLoop) {
+	const unique = samples.map(clonePoint);
+	if (closedLoop && unique.length > 1 && distanceXZ(unique[0], unique[unique.length - 1]) <= 0.05) {
+		unique.pop();
+	}
+	return unique;
+}
+
 function buildRoadCrossSections(samples, roadWidth) {
 	if (samples.length < 2) {
 		return null;
@@ -980,8 +1265,13 @@ function buildRoadCrossSections(samples, roadWidth) {
 
 	const width = sanitizeRoadWidth(roadWidth);
 	const closedLoop = sampleLoopIsClosed(samples);
-	const edgeCount = closedLoop ? samples.length - 1 : samples.length;
-	if (edgeCount < 2) {
+	const centerControls = getUniqueRoadSamples(samples, closedLoop);
+	if (centerControls.length < (closedLoop ? 3 : 2)) {
+		return null;
+	}
+
+	const centerLength = polylineLength(centerControls, closedLoop);
+	if (centerLength <= 1e-4) {
 		return null;
 	}
 
@@ -990,67 +1280,53 @@ function buildRoadCrossSections(samples, roadWidth) {
 		ROAD_WIDTH_MAX_INTERNAL_LOOPS + 1,
 		Math.max(1, Math.ceil(width / ROAD_WIDTH_TRIANGULATION_STEP)),
 	);
-	const centerControls = [];
-	const leftControls = [];
-	const rightControls = [];
-	const rights = [];
-	let fallbackDir = { x: 0, z: 1 };
-
-	for (let index = 0; index < edgeCount; index += 1) {
-		const tangent = getRoadSampleTangent(samples, index, edgeCount, closedLoop, fallbackDir) || fallbackDir;
-		fallbackDir = tangent;
-		let right = roadRightFromTangent(fallbackDir);
-		if (index > 0 && rights[index - 1] && dot2D(right, rights[index - 1]) < 0) {
-			right = scale2D(right, -1);
-		}
-		const center = clonePoint(samples[index]);
-		centerControls[index] = center;
-		rights[index] = right;
-		leftControls[index] = makePoint(center.x - (right.x * halfWidth), center.z - (right.z * halfWidth), center.y ?? 0);
-		rightControls[index] = makePoint(center.x + (right.x * halfWidth), center.z + (right.z * halfWidth), center.y ?? 0);
-	}
-
-	const smoothedCenterControls = sampleSmoothedCurveControls(centerControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP);
-	const smoothedLeftControls = fairEdgeCurveControls(leftControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP);
-	const smoothedRightControls = fairEdgeCurveControls(rightControls, closedLoop, ROAD_EDGE_CURVE_SMOOTH_STEP);
-
-	const centerLength = polylineLength(smoothedCenterControls, closedLoop);
-	const leftLength = polylineLength(smoothedLeftControls, closedLoop);
-	const rightLength = polylineLength(smoothedRightControls, closedLoop);
-	let desiredRowCount = closedLoop
-		? Math.max(3, edgeCount, Math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP))
-		: Math.max(2, edgeCount, Math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP) + 1);
-	const minEdgeStep = Math.max(2, width * 0.02);
-	const shortestCurveLength = Math.min(centerLength, leftLength, rightLength);
-	let edgeLimitedRowCount = desiredRowCount;
-	if (shortestCurveLength > 1e-4) {
-		edgeLimitedRowCount = closedLoop
-			? Math.max(3, Math.floor(shortestCurveLength / minEdgeStep))
-			: Math.max(2, Math.floor(shortestCurveLength / minEdgeStep) + 1);
-	}
-	const rowCount = Math.min(desiredRowCount, edgeLimitedRowCount);
+	const rowCount = closedLoop
+		? Math.max(3, centerControls.length, Math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP))
+		: Math.max(2, centerControls.length, Math.ceil(centerLength / ROAD_LOFT_LENGTH_STEP) + 1);
 	const spanCount = closedLoop ? rowCount : rowCount - 1;
 	const centers = [];
 	const leftPositions = [];
 	const rightPositions = [];
+	const rights = [];
+	let fallbackDir = { x: 0, z: 1 };
 
 	for (let index = 0; index < rowCount; index += 1) {
 		const fraction = closedLoop
 			? (index / rowCount)
 			: (rowCount > 1 ? (index / (rowCount - 1)) : 0);
-		centers[index] = samplePolylineAtFraction(smoothedCenterControls, closedLoop, fraction);
-		leftPositions[index] = samplePolylineAtFraction(smoothedLeftControls, closedLoop, fraction);
-		rightPositions[index] = samplePolylineAtFraction(smoothedRightControls, closedLoop, fraction);
-		const lateral = horizontalUnit(subtract2D(rightPositions[index], leftPositions[index]));
-		if (lateral) {
-			const mid = makePoint(
-				(leftPositions[index].x + rightPositions[index].x) * 0.5,
-				(leftPositions[index].z + rightPositions[index].z) * 0.5,
-				((leftPositions[index].y ?? 0) + (rightPositions[index].y ?? 0)) * 0.5,
-			);
-			leftPositions[index] = makePoint(mid.x - (lateral.x * halfWidth), mid.z - (lateral.z * halfWidth), mid.y ?? 0);
-			rightPositions[index] = makePoint(mid.x + (lateral.x * halfWidth), mid.z + (lateral.z * halfWidth), mid.y ?? 0);
+		centers[index] = samplePolylineAtFraction(centerControls, closedLoop, fraction);
+	}
+
+	for (let index = 0; index < rowCount; index += 1) {
+		let tangent;
+		if (closedLoop) {
+			const prev = centers[index > 0 ? index - 1 : rowCount - 1];
+			const next = centers[index < rowCount - 1 ? index + 1 : 0];
+			tangent = horizontalUnit(subtract2D(next, prev));
+		} else if (index === 0) {
+			tangent = horizontalUnit(subtract2D(centers[1], centers[0]));
+		} else if (index === rowCount - 1) {
+			tangent = horizontalUnit(subtract2D(centers[rowCount - 1], centers[rowCount - 2]));
+		} else {
+			tangent = horizontalUnit(subtract2D(centers[index + 1], centers[index - 1]));
 		}
+
+		fallbackDir = tangent || fallbackDir;
+		let right = roadRightFromTangent(fallbackDir);
+		if (index > 0 && rights[index - 1] && dot2D(right, rights[index - 1]) < 0) {
+			right = scale2D(right, -1);
+		}
+		rights[index] = right;
+		leftPositions[index] = makePoint(
+			centers[index].x - (right.x * halfWidth),
+			centers[index].z - (right.z * halfWidth),
+			centers[index].y ?? 0,
+		);
+		rightPositions[index] = makePoint(
+			centers[index].x + (right.x * halfWidth),
+			centers[index].z + (right.z * halfWidth),
+			centers[index].y ?? 0,
+		);
 	}
 
 	return {
@@ -1071,6 +1347,346 @@ function buildLoftRowVertices(left, right, widthSegments) {
 		row[segment] = lerpPoint(left, right, segment / widthSegments);
 	}
 	return row;
+}
+
+function segmentCircleIntersections(a, b, center, radius) {
+	const dx = b.x - a.x;
+	const dz = b.z - a.z;
+	const fx = a.x - center.x;
+	const fz = a.z - center.z;
+	const aa = (dx * dx) + (dz * dz);
+	if (aa <= 1e-6) {
+		return [];
+	}
+
+	const bb = 2 * ((fx * dx) + (fz * dz));
+	const cc = (fx * fx) + (fz * fz) - (radius * radius);
+	const discriminant = (bb * bb) - (4 * aa * cc);
+	if (discriminant < -1e-6) {
+		return [];
+	}
+
+	const root = Math.sqrt(Math.max(0, discriminant));
+	return [(-bb - root) / (2 * aa), (-bb + root) / (2 * aa)]
+		.filter((t) => t > 1e-4 && t < 1 - 1e-4);
+}
+
+function interpolateSegmentPoint(a, b, t) {
+	return makePoint(
+		a.x + ((b.x - a.x) * t),
+		a.z + ((b.z - a.z) * t),
+		(a.y ?? 0) + ((((b.y ?? 0) - (a.y ?? 0)) * t)),
+	);
+}
+
+function cloneJunctionForPreview(junction) {
+	const radius = sanitizeJunctionRadius(junction.radius);
+	return {
+		id: junction.id,
+		name: junction.name,
+		center: makePoint(junction.x, junction.z, junction.y ?? 0),
+		radius,
+		blendRadius: radius,
+		subdivisions: sanitizeJunctionSubdivisions(junction.subdivisions),
+		portals: [],
+		chains: new Set(),
+	};
+}
+
+function junctionContainingPoint(point, junctions) {
+	let best = null;
+	let bestDistance = Infinity;
+	for (const junction of junctions) {
+		const distance = distanceXZ(point, junction.center);
+		if (distance <= junction.radius - 1e-3 && distance < bestDistance) {
+			best = junction;
+			bestDistance = distance;
+		}
+	}
+	return best;
+}
+
+function junctionTouchingPoint(point, junctions) {
+	let best = null;
+	let bestDistance = Infinity;
+	for (const junction of junctions) {
+		const distance = distanceXZ(point, junction.center);
+		if (distance <= junction.radius + JUNCTION_VERTEX_EPSILON && distance < bestDistance) {
+			best = junction;
+			bestDistance = distance;
+		}
+	}
+	return best;
+}
+
+function intervalOutsideJunctions(a, b, junctions) {
+	const midpoint = lerpPoint(a, b, 0.5);
+	return !junctionContainingPoint(midpoint, junctions);
+}
+
+function addPortalForChain(junction, chain, boundaryPoint, outsidePoint) {
+	if (!junction || !chain || !outsidePoint) {
+		return;
+	}
+
+	const tangent = horizontalUnit(subtract2D(outsidePoint, boundaryPoint))
+		|| horizontalUnit(subtract2D(boundaryPoint, junction.center))
+		|| { x: 0, z: 1 };
+	const right = roadRightFromTangent(tangent);
+	const halfWidth = sanitizeRoadWidth(chain.width) * 0.5;
+	const portal = {
+		chain,
+		point: clonePoint(boundaryPoint),
+		left: makePoint(boundaryPoint.x - (right.x * halfWidth), boundaryPoint.z - (right.z * halfWidth), boundaryPoint.y ?? 0),
+		right: makePoint(boundaryPoint.x + (right.x * halfWidth), boundaryPoint.z + (right.z * halfWidth), boundaryPoint.y ?? 0),
+	};
+	junction.portals.push(portal);
+	junction.chains.add(chain);
+}
+
+function emitRoadRun(processedChains, sourceChain, runVertices) {
+	const samples = runVertices.map((vertex) => clonePoint(vertex.point));
+	if (samples.length < 2 || polylineLength(samples, false) <= 0.05) {
+		return;
+	}
+
+	const chain = {
+		...sourceChain,
+		samples,
+		closed: false,
+		sections: null,
+	};
+	processedChains.push(chain);
+
+	const first = runVertices[0];
+	const second = runVertices[1];
+	const last = runVertices[runVertices.length - 1];
+	const beforeLast = runVertices[runVertices.length - 2];
+	if (first.junction) {
+		addPortalForChain(first.junction, chain, first.point, second.point);
+	}
+	if (last.junction) {
+		addPortalForChain(last.junction, chain, last.point, beforeLast.point);
+	}
+}
+
+function samplesWithClosedSeam(samples, closedLoop) {
+	const result = samples.map(clonePoint);
+	if (closedLoop && result.length > 1 && distanceXZ(result[0], result[result.length - 1]) > 0.05) {
+		result.push(clonePoint(result[0]));
+	}
+	return result;
+}
+
+function splitChainByExplicitJunctions(chain, junctions, processedChains) {
+	const closedLoop = chain.closed || sampleLoopIsClosed(chain.samples);
+	const baseSamples = getUniqueRoadSamples(chain.samples, closedLoop);
+	if (baseSamples.length < (closedLoop ? 3 : 2) || junctions.length === 0) {
+		processedChains.push({ ...chain, samples: samplesWithClosedSeam(baseSamples, closedLoop), closed: closedLoop });
+		return;
+	}
+
+	const vertices = [];
+	const appendVertex = (vertex) => {
+		const previous = vertices[vertices.length - 1];
+		if (
+			previous
+			&& distanceXZ(previous.point, vertex.point) <= 0.01
+			&& previous.junction === vertex.junction
+		) {
+			return;
+		}
+		vertices.push(vertex);
+	};
+
+	const segmentCount = closedLoop ? baseSamples.length : baseSamples.length - 1;
+	appendVertex({ point: baseSamples[0], junction: junctionTouchingPoint(baseSamples[0], junctions) });
+	for (let index = 0; index < segmentCount; index += 1) {
+		const nextIndex = (index + 1) % baseSamples.length;
+		const a = baseSamples[index];
+		const b = baseSamples[nextIndex];
+		const cuts = [];
+		for (const junction of junctions) {
+			for (const t of segmentCircleIntersections(a, b, junction.center, junction.radius)) {
+				cuts.push({
+					t,
+					point: interpolateSegmentPoint(a, b, t),
+					junction,
+				});
+			}
+		}
+		cuts.sort((left, right) => left.t - right.t);
+		for (const cut of cuts) {
+			const duplicate = vertices.some((vertex) => distanceXZ(vertex.point, cut.point) <= 0.01 && vertex.junction === cut.junction);
+			if (!duplicate) {
+				appendVertex({ point: cut.point, junction: cut.junction });
+			}
+		}
+		if (!closedLoop || nextIndex !== 0) {
+			appendVertex({ point: b, junction: junctionTouchingPoint(b, junctions) });
+		}
+	}
+
+	if (vertices.length < 2) {
+		return;
+	}
+
+	if (!closedLoop) {
+		let run = [];
+		for (let index = 0; index < vertices.length - 1; index += 1) {
+			const outside = intervalOutsideJunctions(vertices[index].point, vertices[index + 1].point, junctions);
+			if (outside) {
+				if (run.length === 0) {
+					run.push(vertices[index]);
+				}
+				run.push(vertices[index + 1]);
+			} else if (run.length > 0) {
+				emitRoadRun(processedChains, chain, run);
+				run = [];
+			}
+		}
+		if (run.length > 0) {
+			emitRoadRun(processedChains, chain, run);
+		}
+		return;
+	}
+
+	const intervalCount = vertices.length;
+	const outsideIntervals = [];
+	for (let index = 0; index < intervalCount; index += 1) {
+		const nextIndex = (index + 1) % intervalCount;
+		outsideIntervals[index] = intervalOutsideJunctions(vertices[index].point, vertices[nextIndex].point, junctions);
+	}
+
+	if (outsideIntervals.every(Boolean)) {
+		processedChains.push({ ...chain, samples: samplesWithClosedSeam(baseSamples, true), closed: true });
+		return;
+	}
+
+	for (let start = 0; start < intervalCount; start += 1) {
+		const previous = (start - 1 + intervalCount) % intervalCount;
+		if (!outsideIntervals[start] || outsideIntervals[previous]) {
+			continue;
+		}
+
+		const run = [vertices[start]];
+		let index = start;
+		while (outsideIntervals[index]) {
+			const nextIndex = (index + 1) % intervalCount;
+			run.push(vertices[nextIndex]);
+			index = nextIndex;
+			if (index === start) {
+				break;
+			}
+		}
+		emitRoadRun(processedChains, chain, run);
+	}
+}
+
+function applyExplicitJunctionsToChains(chains, junctions) {
+	const processedChains = [];
+	for (const chain of chains) {
+		splitChainByExplicitJunctions(chain, junctions, processedChains);
+	}
+	return processedChains;
+}
+
+function normalizePositiveAngleDelta(delta) {
+	let result = delta;
+	while (result <= 0) {
+		result += Math.PI * 2;
+	}
+	while (result > Math.PI * 2) {
+		result -= Math.PI * 2;
+	}
+	return result;
+}
+
+function junctionBoundaryAngle(point, junction) {
+	return Math.atan2(point.z - junction.center.z, point.x - junction.center.x);
+}
+
+function entriesSharePortal(a, b) {
+	return a.portal && b.portal && a.portal === b.portal;
+}
+
+function mergeBoundaryEntryPortal(target, source) {
+	if (!entriesSharePortal(target, source)) {
+		target.portal = null;
+	}
+}
+
+function sortedJunctionBoundaryEntries(junction) {
+	const entries = [];
+	for (const portal of junction.portals) {
+		entries.push({ point: portal.left, portal });
+		entries.push({ point: portal.right, portal });
+	}
+	entries.sort((a, b) => junctionBoundaryAngle(a.point, junction) - junctionBoundaryAngle(b.point, junction));
+
+	const filtered = [];
+	for (const entry of entries) {
+		const previous = filtered[filtered.length - 1];
+		if (previous && distanceXZ(previous.point, entry.point) <= 0.05) {
+			mergeBoundaryEntryPortal(previous, entry);
+		} else {
+			filtered.push({ point: entry.point, portal: entry.portal });
+		}
+	}
+	if (filtered.length >= 2 && distanceXZ(filtered[0].point, filtered[filtered.length - 1].point) <= 0.05) {
+		mergeBoundaryEntryPortal(filtered[0], filtered[filtered.length - 1]);
+		filtered.pop();
+	}
+
+	return filtered;
+}
+
+function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPoint, subdivisions) {
+	const fromAngle = junctionBoundaryAngle(fromPoint, junction);
+	const toAngle = junctionBoundaryAngle(toPoint, junction);
+	const delta = normalizePositiveAngleDelta(toAngle - fromAngle);
+	if (delta <= 1e-4 || delta >= (Math.PI * 2) - 1e-4) {
+		return;
+	}
+
+	const fromRadius = distanceXZ(fromPoint, junction.center);
+	const toRadius = distanceXZ(toPoint, junction.center);
+	for (let index = 1; index <= subdivisions; index += 1) {
+		const alpha = index / (subdivisions + 1);
+		const angle = fromAngle + (delta * alpha);
+		const radius = fromRadius + ((toRadius - fromRadius) * alpha);
+		boundary.push(makePoint(
+			junction.center.x + (Math.cos(angle) * radius),
+			junction.center.z + (Math.sin(angle) * radius),
+			(fromPoint.y ?? 0) + (((toPoint.y ?? 0) - (fromPoint.y ?? 0)) * alpha),
+		));
+	}
+}
+
+function buildJunctionBoundary(junction) {
+	const entries = sortedJunctionBoundaryEntries(junction);
+	if (entries.length === 0) {
+		return [];
+	}
+
+	const subdivisions = sanitizeJunctionSubdivisions(junction.subdivisions);
+	const boundary = [];
+	for (let index = 0; index < entries.length; index += 1) {
+		const entry = entries[index];
+		const next = entries[(index + 1) % entries.length];
+		boundary.push(entry.point);
+		if (subdivisions > 0 && !entriesSharePortal(entry, next)) {
+			addConnectorSubdivisionPoints(boundary, junction, entry.point, next.point, subdivisions);
+		}
+	}
+	return boundary;
+}
+
+function addJunctionPatchToMeshPreviewRows(junction) {
+	if (!junction.portals || junction.portals.length === 0) {
+		return [];
+	}
+	return buildJunctionBoundary(junction);
 }
 
 function maxRoadWidthForMembers(members) {
@@ -1285,7 +1901,7 @@ function applyJunctionsToChains(chains, junctions) {
 }
 
 function computeMeshPreview() {
-	const chains = state.splines
+	const sourceChains = state.splines
 		.filter((spline) => spline.points.length >= 2)
 		.map((spline) => ({
 			spline,
@@ -1295,16 +1911,12 @@ function computeMeshPreview() {
 			width: spline.width,
 		}));
 
-	if (chains.length === 0) {
+	if (sourceChains.length === 0) {
 		return { chains: [], junctions: [] };
 	}
 
-	const rawJunctions = [
-		...collectEndpointJunctions(chains),
-		...collectCrossIntersections(chains),
-	];
-	const junctions = mergeJunctions(rawJunctions);
-	applyJunctionsToChains(chains, junctions);
+	const junctions = state.junctions.map(cloneJunctionForPreview);
+	const chains = applyExplicitJunctionsToChains(sourceChains, junctions);
 
 	for (const chain of chains) {
 		chain.sections = buildRoadCrossSections(chain.samples, chain.width);
@@ -1340,6 +1952,7 @@ function screenToWorld(x, y) {
 }
 
 function requestRender() {
+	scheduleAutosave();
 	if (renderQueued) {
 		return;
 	}
@@ -1499,10 +2112,20 @@ function drawMeshPreview() {
 	}
 
 	for (const junction of preview.junctions) {
-		const center = worldToScreen(junction.center.x, junction.center.z);
-		const radius = junction.radius * state.zoom;
+		const boundary = addJunctionPatchToMeshPreviewRows(junction);
+		if (boundary.length < 3) {
+			continue;
+		}
 		ctx.beginPath();
-		ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+		boundary.forEach((point, index) => {
+			const screen = worldToScreen(point.x, point.z);
+			if (index === 0) {
+				ctx.moveTo(screen.x, screen.y);
+			} else {
+				ctx.lineTo(screen.x, screen.y);
+			}
+		});
+		ctx.closePath();
 		ctx.fillStyle = "rgba(26, 33, 38, 0.92)";
 		ctx.fill();
 	}
@@ -1558,17 +2181,24 @@ function drawMeshPreview() {
 
 	ctx.strokeStyle = "rgba(223, 238, 241, 0.28)";
 	for (const junction of preview.junctions) {
-		const center = worldToScreen(junction.center.x, junction.center.z);
-		const radius = junction.radius * state.zoom;
+		const boundary = addJunctionPatchToMeshPreviewRows(junction);
+		if (boundary.length < 2) {
+			continue;
+		}
 		ctx.beginPath();
-		ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+		boundary.forEach((point, index) => {
+			const screen = worldToScreen(point.x, point.z);
+			if (index === 0) {
+				ctx.moveTo(screen.x, screen.y);
+			} else {
+				ctx.lineTo(screen.x, screen.y);
+			}
+		});
+		ctx.closePath();
 		ctx.stroke();
-		for (let index = 0; index < INTERSECTION_RING_SEGMENTS; index += 1) {
-			const theta = (index / INTERSECTION_RING_SEGMENTS) * Math.PI * 2;
-			const edge = worldToScreen(
-				junction.center.x + (Math.cos(theta) * junction.radius),
-				junction.center.z + (Math.sin(theta) * junction.radius),
-			);
+		const center = worldToScreen(junction.center.x, junction.center.z);
+		for (const point of boundary) {
+			const edge = worldToScreen(point.x, point.z);
 			ctx.beginPath();
 			ctx.moveTo(center.x, center.y);
 			ctx.lineTo(edge.x, edge.y);
@@ -1624,6 +2254,41 @@ function drawControlPolygon(spline, active) {
 	ctx.restore();
 }
 
+function drawJunctions() {
+	ctx.save();
+	for (const junction of state.junctions) {
+		const screen = worldToScreen(junction.x, junction.z);
+		const selected = junction.id === state.selectedJunctionId;
+		const radiusPixels = Math.max(5, junction.radius * state.zoom);
+		ctx.beginPath();
+		ctx.arc(screen.x, screen.y, radiusPixels, 0, Math.PI * 2);
+		ctx.fillStyle = selected ? "rgba(214, 66, 26, 0.2)" : "rgba(28, 132, 125, 0.16)";
+		ctx.fill();
+		ctx.lineWidth = selected ? 2.5 : 1.5;
+		ctx.strokeStyle = selected ? "rgba(214, 66, 26, 0.9)" : "rgba(28, 132, 125, 0.78)";
+		ctx.stroke();
+
+		if (selected) {
+			ctx.beginPath();
+			ctx.arc(screen.x + radiusPixels, screen.y, 4.5, 0, Math.PI * 2);
+			ctx.fillStyle = "#d6421a";
+			ctx.fill();
+			ctx.strokeStyle = "rgba(255, 250, 242, 0.92)";
+			ctx.lineWidth = 1.5;
+			ctx.stroke();
+		}
+
+		ctx.beginPath();
+		ctx.arc(screen.x, screen.y, selected ? 6 : 4.5, 0, Math.PI * 2);
+		ctx.fillStyle = selected ? "#d6421a" : "#1c847d";
+		ctx.fill();
+		ctx.strokeStyle = "rgba(255, 250, 242, 0.9)";
+		ctx.lineWidth = 1.5;
+		ctx.stroke();
+	}
+	ctx.restore();
+}
+
 function render() {
 	resizeCanvas();
 	const width = elements.canvas.clientWidth;
@@ -1642,6 +2307,48 @@ function render() {
 	state.splines.forEach((spline, index) => {
 		drawControlPolygon(spline, index === state.activeSplineIndex);
 	});
+	drawJunctions();
+}
+
+function pickJunction(clientX, clientY) {
+	let best = null;
+	let bestDistance = Infinity;
+	for (const junction of state.junctions) {
+		const screen = worldToScreen(junction.x, junction.z);
+		const distance = Math.hypot(screen.x - clientX, screen.y - clientY);
+		const hitRadius = Math.max(JUNCTION_HIT_RADIUS_PX, Math.min(24, junction.radius * state.zoom * 0.25));
+		if (distance <= hitRadius && distance < bestDistance) {
+			best = junction;
+			bestDistance = distance;
+		}
+	}
+	return best;
+}
+
+function pickJunctionRadius(clientX, clientY) {
+	let best = null;
+	let bestDistance = Infinity;
+	for (const junction of state.junctions) {
+		const screen = worldToScreen(junction.x, junction.z);
+		const radiusPixels = Math.max(5, junction.radius * state.zoom);
+		const distance = Math.hypot(screen.x - clientX, screen.y - clientY);
+		const handleDistance = Math.hypot((screen.x + radiusPixels) - clientX, screen.y - clientY);
+		if (junction.id === state.selectedJunctionId && handleDistance <= 9 && handleDistance < distance) {
+			return junction;
+		}
+
+		const centerHitRadius = Math.max(JUNCTION_HIT_RADIUS_PX, Math.min(24, radiusPixels * 0.25));
+		if (distance <= centerHitRadius) {
+			continue;
+		}
+
+		const ringDistance = Math.abs(distance - radiusPixels);
+		if (ringDistance <= JUNCTION_RADIUS_RING_HIT_PX && ringDistance < bestDistance) {
+			best = junction;
+			bestDistance = ringDistance;
+		}
+	}
+	return best;
 }
 
 function pickPoint(clientX, clientY) {
@@ -1677,6 +2384,7 @@ function insertPointAt(spline, insertIndex, worldPoint) {
 		splineId: spline.id,
 		pointIndex: clampedIndex,
 	};
+	state.selectedJunctionId = null;
 	markMeshPreviewDirty();
 	renderSplineList();
 	refreshInspector();
@@ -1694,6 +2402,7 @@ function startPointDrag(spline, pointIndex, pointerId) {
 		splineId: spline.id,
 		pointIndex,
 	};
+	state.selectedJunctionId = null;
 	state.drag = {
 		mode: "point",
 		splineId: spline.id,
@@ -1850,7 +2559,11 @@ function getActiveCurveInsertionTarget(localX, localY, worldPoint) {
 function deleteSelectedPoint() {
 	const selected = getSelectedPointRecord();
 	if (!selected) {
-		setStatus("Select a control point before deleting it.");
+		if (state.selectedJunctionId) {
+			deleteSelectedJunction();
+			return;
+		}
+		setStatus("Select a control point or junction before deleting it.");
 		return;
 	}
 	selected.spline.points.splice(selected.pointIndex, 1);
@@ -1860,6 +2573,259 @@ function deleteSelectedPoint() {
 	renderSplineList();
 	refreshInspector();
 	requestRender();
+}
+
+function addJunctionAt(worldPoint) {
+	const selected = getSelectedJunction();
+	const radius = selected ? selected.radius : sanitizeJunctionRadius(elements.junctionRadiusInput.value);
+	const subdivisions = selected ? selected.subdivisions : sanitizeJunctionSubdivisions(elements.junctionSubdivisionsInput.value);
+	const junction = makeJunction(worldPoint, radius, subdivisions);
+	state.junctions.push(junction);
+	state.selectedJunctionId = junction.id;
+	state.selectedPoint = null;
+	markMeshPreviewDirty();
+	refreshInspector();
+	requestRender();
+	setStatus(`Added ${junction.name} at X ${formatNumber(junction.x, 1)}, Z ${formatNumber(junction.z, 1)}.`);
+	return junction;
+}
+
+function startJunctionDrag(junction, pointerId) {
+	state.selectedJunctionId = junction.id;
+	state.selectedPoint = null;
+	state.drag = {
+		mode: "junction",
+		junctionId: junction.id,
+		pointerId,
+	};
+	refreshInspector();
+	requestRender();
+}
+
+function startJunctionRadiusDrag(junction, pointerId) {
+	state.selectedJunctionId = junction.id;
+	state.selectedPoint = null;
+	state.drag = {
+		mode: "junction-radius",
+		junctionId: junction.id,
+		pointerId,
+	};
+	refreshInspector();
+	requestRender();
+}
+
+function deleteJunction(junction) {
+	state.junctions = state.junctions.filter((item) => item.id !== junction.id);
+	if (state.selectedJunctionId === junction.id) {
+		state.selectedJunctionId = null;
+	}
+	markMeshPreviewDirty();
+	refreshInspector();
+	requestRender();
+	setStatus(`Deleted ${junction.name}.`);
+}
+
+function deleteSelectedJunction() {
+	const selected = getSelectedJunction();
+	if (!selected) {
+		setStatus("Select a junction before deleting it.");
+		return;
+	}
+	deleteJunction(selected);
+}
+
+function updateSelectedJunctionRadiusFromInput() {
+	const selected = getSelectedJunction();
+	const radius = sanitizeJunctionRadius(elements.junctionRadiusInput.value);
+	if (selected) {
+		selected.radius = radius;
+		markMeshPreviewDirty();
+		requestRender();
+		setStatus(`Set ${selected.name} radius to ${formatNumber(radius, 1)} studs.`);
+	}
+	refreshInspector();
+}
+
+function updateSelectedJunctionSubdivisionsFromInput() {
+	const selected = getSelectedJunction();
+	const subdivisions = sanitizeJunctionSubdivisions(elements.junctionSubdivisionsInput.value);
+	if (selected) {
+		selected.subdivisions = subdivisions;
+		markMeshPreviewDirty();
+		requestRender();
+		setStatus(`Set ${selected.name} subdivisions to ${subdivisions}.`);
+	}
+	refreshInspector();
+}
+
+function collectControlPointsInJunction(junction) {
+	const records = [];
+	for (const spline of state.splines) {
+		const width = sanitizeRoadWidth(spline.width);
+		spline.points.forEach((point, pointIndex) => {
+			const distance = distanceXZ(point, junction);
+			if (distance <= junction.radius + 0.001) {
+				records.push({
+					spline,
+					point,
+					pointIndex,
+					distance,
+					width,
+				});
+			}
+		});
+	}
+	return records;
+}
+
+function getControlPointRecordKey(record) {
+	return `${record.spline.id}:${record.pointIndex}`;
+}
+
+function getSplinePointIndex(spline, index) {
+	const count = spline.points.length;
+	if (count === 0) {
+		return null;
+	}
+	if (spline.closed) {
+		return (index + count) % count;
+	}
+	if (index < 0 || index >= count) {
+		return null;
+	}
+	return index;
+}
+
+function findFirstOutsidePointIndex(spline, startIndex, step, snappedPointKeys) {
+	for (let offset = 1; offset <= spline.points.length; offset += 1) {
+		const index = getSplinePointIndex(spline, startIndex + (offset * step));
+		if (index === null) {
+			return null;
+		}
+		const key = `${spline.id}:${index}`;
+		if (!snappedPointKeys.has(key)) {
+			return index;
+		}
+	}
+	return null;
+}
+
+function collectAutoJunctionConnections(junction, records) {
+	const snappedPointKeys = new Set(records.map(getControlPointRecordKey));
+	const connectionKeys = new Set();
+	const connections = [];
+
+	for (const record of records) {
+		for (const step of [-1, 1]) {
+			const outsideIndex = findFirstOutsidePointIndex(record.spline, record.pointIndex, step, snappedPointKeys);
+			if (outsideIndex === null) {
+				continue;
+			}
+
+			const connectionKey = `${record.spline.id}:${outsideIndex}:${step}`;
+			if (connectionKeys.has(connectionKey)) {
+				continue;
+			}
+			connectionKeys.add(connectionKey);
+
+			const outsidePoint = record.spline.points[outsideIndex];
+			const direction = horizontalUnit(subtract2D(outsidePoint, junction));
+			if (!direction) {
+				continue;
+			}
+
+			connections.push({
+				direction,
+				distance: distanceXZ(outsidePoint, junction),
+				width: record.width,
+			});
+		}
+	}
+
+	return connections;
+}
+
+function angleBetweenUnitDirections(a, b) {
+	const value = Math.max(-1, Math.min(1, dot2D(a, b)));
+	return Math.acos(value);
+}
+
+function sameControlPointRecords(a, b) {
+	if (a.length !== b.length) {
+		return false;
+	}
+
+	const aKeys = new Set(a.map(getControlPointRecordKey));
+	for (const record of b) {
+		if (!aKeys.has(getControlPointRecordKey(record))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function calculateLargestRoadAutoJunctionRadius(records, connections) {
+	let largestWidth = JUNCTION_RADIUS_MIN - JUNCTION_RADIUS_PADDING;
+	for (const record of records) {
+		largestWidth = Math.max(largestWidth, record.width);
+	}
+	for (const connection of connections) {
+		largestWidth = Math.max(largestWidth, connection.width);
+	}
+
+	let radius = largestWidth + JUNCTION_RADIUS_PADDING;
+	for (let i = 0; i < connections.length; i += 1) {
+		for (let j = i + 1; j < connections.length; j += 1) {
+			const angle = angleBetweenUnitDirections(connections[i].direction, connections[j].direction);
+			if (angle < 0.12) {
+				continue;
+			}
+			const widthAllowance = ((connections[i].width + connections[j].width) * 0.5) + JUNCTION_RADIUS_PADDING;
+			radius = Math.max(radius, widthAllowance / Math.max(0.01, 2 * Math.sin(angle * 0.5)));
+		}
+	}
+
+	return sanitizeJunctionRadius(radius);
+}
+
+function autoSelectedJunction() {
+	const selected = getSelectedJunction();
+	if (!selected) {
+		setStatus("Select a junction before running Auto Junction.");
+		return;
+	}
+
+	let records = collectControlPointsInJunction(selected);
+	if (records.length === 0) {
+		setStatus(`No control points are inside ${selected.name}'s radius.`);
+		return;
+	}
+
+	let connections = collectAutoJunctionConnections(selected, records);
+	let radius = calculateLargestRoadAutoJunctionRadius(records, connections);
+	for (let pass = 0; pass < 4; pass += 1) {
+		selected.radius = radius;
+		const expandedRecords = collectControlPointsInJunction(selected);
+		if (sameControlPointRecords(records, expandedRecords)) {
+			break;
+		}
+		records = expandedRecords;
+		connections = collectAutoJunctionConnections(selected, records);
+		radius = calculateLargestRoadAutoJunctionRadius(records, connections);
+	}
+	selected.radius = radius;
+
+	for (const record of records) {
+		record.point.x = roundNumber(selected.x, 3);
+		record.point.y = roundNumber(selected.y ?? 0, 3);
+		record.point.z = roundNumber(selected.z, 3);
+	}
+
+	markMeshPreviewDirty();
+	renderSplineList();
+	refreshInspector();
+	requestRender();
+	setStatus(`Auto-fit ${selected.name}: centered ${records.length} control point${records.length === 1 ? "" : "s"} and sized from the widest intersecting road at ${formatNumber(selected.radius, 1)} studs.`);
 }
 
 function createSplineAndActivate() {
@@ -1891,6 +2857,56 @@ function deleteActiveSpline() {
 	requestRender();
 }
 
+function splitSelectedSplineAtPoint() {
+	const selected = getSelectedPointRecord();
+	if (!selected) {
+		setStatus("Select an interior control point before splitting a curve.");
+		return;
+	}
+
+	const spline = selected.spline;
+	if (spline.closed) {
+		setStatus("Split Curve works on open curves. Turn off Closed loop before splitting.");
+		return;
+	}
+	if (spline.points.length < 3) {
+		setStatus(`${spline.name} needs at least three control points to split.`);
+		return;
+	}
+	if (selected.pointIndex <= 0 || selected.pointIndex >= spline.points.length - 1) {
+		setStatus("Select an interior control point, not an endpoint, before splitting.");
+		return;
+	}
+
+	const splineIndex = state.splines.findIndex((item) => item.id === spline.id);
+	if (splineIndex < 0) {
+		setStatus("Selected curve no longer exists.");
+		return;
+	}
+
+	const originalName = spline.name;
+	const secondSpline = makeSpline(getNextSplineName());
+	secondSpline.width = spline.width;
+	secondSpline.closed = false;
+	secondSpline.points = spline.points.slice(selected.pointIndex).map(clonePoint);
+	spline.points = spline.points.slice(0, selected.pointIndex + 1).map(clonePoint);
+
+	state.splines.splice(splineIndex + 1, 0, secondSpline);
+	state.activeSplineIndex = splineIndex + 1;
+	state.selectedPoint = {
+		splineId: secondSpline.id,
+		pointIndex: 0,
+	};
+	state.selectedJunctionId = null;
+	state.drag = null;
+
+	markMeshPreviewDirty();
+	renderSplineList();
+	refreshInspector();
+	requestRender();
+	setStatus(`Split ${originalName} at point ${selected.pointIndex + 1}; ${secondSpline.name} starts at the split point.`);
+}
+
 function centerViewOnActiveSpline() {
 	frameActiveSpline(true);
 }
@@ -1910,7 +2926,7 @@ function exportCurves() {
 	link.download = "cab87-road-curves.json";
 	link.click();
 	URL.revokeObjectURL(url);
-	setStatus(`Exported ${payload.splines.length} spline${payload.splines.length === 1 ? "" : "s"} to JSON.`);
+	setStatus(`Exported ${payload.splines.length} spline${payload.splines.length === 1 ? "" : "s"} and ${payload.junctions.length} junction${payload.junctions.length === 1 ? "" : "s"} to JSON.`);
 }
 
 function updateCursorReadout(clientX, clientY) {
@@ -1940,9 +2956,37 @@ function handleCanvasPointerDown(event) {
 		return;
 	}
 
+	if (state.junctionModeEnabled) {
+		const radiusHit = pickJunctionRadius(localX, localY);
+		const junctionHit = pickJunction(localX, localY);
+		const hitJunction = junctionHit || radiusHit;
+		if (hitJunction && event.altKey) {
+			deleteJunction(hitJunction);
+			return;
+		}
+		if (radiusHit) {
+			startJunctionRadiusDrag(radiusHit, event.pointerId);
+			setStatus(`Scaling ${radiusHit.name}.`);
+			elements.canvas.setPointerCapture(event.pointerId);
+			return;
+		}
+		if (junctionHit) {
+			startJunctionDrag(junctionHit, event.pointerId);
+			setStatus(`Dragging ${junctionHit.name}.`);
+			elements.canvas.setPointerCapture(event.pointerId);
+			return;
+		}
+		const junction = addJunctionAt(world);
+		startJunctionDrag(junction, event.pointerId);
+		setStatus(`Added and dragging ${junction.name}.`);
+		elements.canvas.setPointerCapture(event.pointerId);
+		return;
+	}
+
 	const hit = pickPoint(localX, localY);
 	if (hit) {
 		state.activeSplineIndex = hit.splineIndex;
+		state.selectedJunctionId = null;
 		startPointDrag(hit.spline, hit.pointIndex, event.pointerId);
 		setStatus(`Dragging ${hit.spline.name}:${hit.pointIndex + 1}.`);
 		elements.canvas.setPointerCapture(event.pointerId);
@@ -1994,6 +3038,30 @@ function handleCanvasPointerMove(event) {
 		const world = screenToWorld(localX, localY);
 		record.point.x = roundNumber(world.x, 3);
 		record.point.z = roundNumber(world.z, 3);
+		markMeshPreviewDirty();
+		refreshInspector();
+		requestRender();
+	}
+
+	if (state.drag.mode === "junction") {
+		const junction = state.junctions.find((item) => item.id === state.drag.junctionId);
+		if (!junction) {
+			return;
+		}
+		const world = screenToWorld(localX, localY);
+		junction.x = roundNumber(world.x, 3);
+		junction.z = roundNumber(world.z, 3);
+		markMeshPreviewDirty();
+		requestRender();
+	}
+
+	if (state.drag.mode === "junction-radius") {
+		const junction = state.junctions.find((item) => item.id === state.drag.junctionId);
+		if (!junction) {
+			return;
+		}
+		const world = screenToWorld(localX, localY);
+		junction.radius = sanitizeJunctionRadius(distanceXZ(world, junction));
 		markMeshPreviewDirty();
 		refreshInspector();
 		requestRender();
@@ -2098,12 +3166,16 @@ function handleKeyDown(event) {
 		event.preventDefault();
 		createSplineAndActivate();
 		setStatus(`Created ${getActiveSpline().name}.`);
+	} else if (event.key.toLowerCase() === "j") {
+		event.preventDefault();
+		toggleJunctionMode();
 	}
 }
 
 function bindEvents() {
 	window.addEventListener("resize", resizeCanvas);
 	window.addEventListener("keydown", handleKeyDown);
+	window.addEventListener("beforeunload", flushAutosave);
 
 	elements.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 	elements.canvas.addEventListener("mousedown", (event) => {
@@ -2137,7 +3209,15 @@ function bindEvents() {
 
 	elements.deleteSplineButton.addEventListener("click", deleteActiveSpline);
 	elements.deletePointButton.addEventListener("click", deleteSelectedPoint);
+	elements.splitSplineButton.addEventListener("click", splitSelectedSplineAtPoint);
 	elements.centerViewButton.addEventListener("click", centerViewOnActiveSpline);
+	elements.junctionModeButton.addEventListener("click", toggleJunctionMode);
+	elements.autoJunctionButton.addEventListener("click", autoSelectedJunction);
+	elements.deleteJunctionButton.addEventListener("click", deleteSelectedJunction);
+	elements.junctionRadiusInput.addEventListener("change", updateSelectedJunctionRadiusFromInput);
+	elements.junctionRadiusInput.addEventListener("blur", updateSelectedJunctionRadiusFromInput);
+	elements.junctionSubdivisionsInput.addEventListener("change", updateSelectedJunctionSubdivisionsFromInput);
+	elements.junctionSubdivisionsInput.addEventListener("blur", updateSelectedJunctionSubdivisionsFromInput);
 	elements.exportButton.addEventListener("click", exportCurves);
 	elements.importButton.addEventListener("click", () => {
 		elements.curveJsonInput.click();
@@ -2197,15 +3277,32 @@ function bindEvents() {
 	elements.clearImageButton.addEventListener("click", clearImage);
 }
 
-function initialize() {
+async function initialize() {
 	state.splines = [makeSpline("Spline001")];
+	state.junctions = [];
 	state.image = createEmptyImageState();
 	bindEvents();
-	renderSplineList();
-	refreshInspector();
 	resizeCanvas();
-	centerViewOnActiveSpline();
-	setStatus("Ready. Import an image or start placing points.");
+
+	let restored = false;
+	try {
+		restored = await restoreAutosavedSession();
+	} catch (error) {
+		const storage = getAutosaveStorage();
+		if (storage) {
+			storage.removeItem(AUTOSAVE_STORAGE_KEY);
+		}
+		console.warn("Cab87 Road Curve Editor could not restore autosaved session.", error);
+	}
+
+	autosaveReady = true;
+	if (!restored) {
+		renderSplineList();
+		refreshInspector();
+		centerViewOnActiveSpline();
+		setStatus("Ready. Import an image or start placing points.");
+	}
+	scheduleAutosave();
 }
 
 initialize();

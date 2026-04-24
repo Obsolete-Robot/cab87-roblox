@@ -10,6 +10,19 @@ RoadSplineData.WIREFRAME_NAME = "WireframeDisplay"
 RoadSplineData.RUNTIME_DATA_NAME = "AuthoredRoadSplineData"
 RoadSplineData.JUNCTIONS_NAME = "Junctions"
 RoadSplineData.ROAD_WIDTH_ATTR = RoadSampling.ROAD_WIDTH_ATTR
+RoadSplineData.JUNCTION_SUBDIVISIONS_ATTR = "Subdivisions"
+
+local JUNCTION_SUBDIVISIONS_DEFAULT = 0
+local JUNCTION_SUBDIVISIONS_MIN = 0
+local JUNCTION_SUBDIVISIONS_MAX = 12
+
+function RoadSplineData.sanitizeJunctionSubdivisions(value)
+	local subdivisions = tonumber(value)
+	if not subdivisions then
+		return JUNCTION_SUBDIVISIONS_DEFAULT
+	end
+	return math.clamp(math.floor(subdivisions + 0.5), JUNCTION_SUBDIVISIONS_MIN, JUNCTION_SUBDIVISIONS_MAX)
+end
 
 function RoadSplineData.sortedChildren(parent, className)
 	local children = {}
@@ -162,15 +175,28 @@ function RoadSplineData.collectJunctions(root, options)
 	local defaultRadius = tonumber(options.defaultRadius) or RoadSampling.DEFAULT_ROAD_WIDTH * 0.5
 	local minRadius = tonumber(options.minRadius) or 0
 	local junctions = {}
-	for _, junctionData in ipairs(RoadSplineData.sortedChildren(junctionsFolder, "Vector3Value")) do
-		local radius = math.max(tonumber(junctionData:GetAttribute("Radius")) or defaultRadius, minRadius)
-		table.insert(junctions, {
-			center = junctionData.Value,
-			radius = radius,
-			componentId = tonumber(junctionData:GetAttribute("ComponentId")) or 1,
-			members = {},
-			chains = {},
-		})
+	for _, junctionData in ipairs(RoadSplineData.sortedChildren(junctionsFolder)) do
+		local center = nil
+		if junctionData:IsA("Vector3Value") then
+			center = junctionData.Value
+		elseif junctionData:IsA("BasePart") then
+			center = junctionData.Position
+		end
+
+		if center then
+			local radius = math.max(tonumber(junctionData:GetAttribute("Radius")) or defaultRadius, minRadius)
+			local subdivisions = RoadSplineData.sanitizeJunctionSubdivisions(junctionData:GetAttribute(RoadSplineData.JUNCTION_SUBDIVISIONS_ATTR))
+			table.insert(junctions, {
+				instance = junctionData,
+				name = junctionData.Name,
+				center = center,
+				radius = radius,
+				subdivisions = subdivisions,
+				componentId = tonumber(junctionData:GetAttribute("ComponentId")) or 1,
+				members = {},
+				chains = {},
+			})
+		end
 	end
 	return junctions
 end
