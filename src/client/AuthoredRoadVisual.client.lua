@@ -27,8 +27,6 @@ local INTERSECTION_BLEND_SCALE = 0.95
 local INTERSECTION_MERGE_SCALE = 0.45
 local INTERSECTION_RING_SEGMENTS = 28
 local JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE = 0.5
-local JUNCTION_NATURAL_INTERSECTION_MAX_RADIUS_SCALE = 2.5
-local JUNCTION_NATURAL_INTERSECTION_MAX_WIDTH_SCALE = 4
 local ROAD_EDGE_MITER_LIMIT = 2.75
 local ROAD_EDGE_SMOOTH_PASSES = 2
 local ROAD_EDGE_SMOOTH_ALPHA = 0.35
@@ -107,6 +105,10 @@ local polylineLength = RoadSampling.polylineLength
 local samplePolylineAtFraction = RoadSampling.samplePolylineAtFraction
 local roadRightFromTangent
 
+local function crossXZ(a, b)
+	return a.X * b.Z - a.Z * b.X
+end
+
 local function heightConnectTolerance(widthA, widthB)
 	local width = math.min(sanitizeRoadWidth(widthA), sanitizeRoadWidth(widthB))
 	return math.clamp(
@@ -148,7 +150,10 @@ local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 	local right = roadRightFromTangent(tangent)
 	local halfWidth = sanitizeRoadWidth(chain.width) * 0.5
 	table.insert(junction.portals, {
+		junction = junction,
 		chain = chain,
+		boundaryPoint = boundaryPoint,
+		outsidePoint = outsidePoint,
 		point = boundaryPoint,
 		tangent = tangent,
 		halfWidth = halfWidth,
@@ -156,6 +161,331 @@ local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 		right = boundaryPoint + right * halfWidth,
 	})
 	junction.chains[chain] = true
+end
+
+local function portalLineT(portal, point)
+	return (point - portal.boundaryPoint):Dot(portal.tangent)
+end
+
+local function portalLinePointAtT(portal, t)
+	return Vector3.new(
+		portal.boundaryPoint.X + portal.tangent.X * t,
+		portal.boundaryPoint.Y,
+		portal.boundaryPoint.Z + portal.tangent.Z * t
+	)
+end
+
+local function getJunctionMeshCenter(junction)
+	return junction.intersectionCenter or junction.center
+end
+
+local function computeJunctionIntersectionCenter(junction)
+	local portals = junction.portals or {}
+	if #portals == 0 then
+		return junction.center
+	end
+
+	local sum = Vector3.zero
+	for _, portal in ipairs(portals) do
+		sum += portal.corePoint or portal.boundaryPoint or portal.point
+	end
+	return sum / #portals
+end
+
+local function appendUniqueJunctionPoint(points, point)
+	for _, existing in ipairs(points) do
+		if distanceXZ(existing, point) <= 0.05 then
+			return
+		end
+	end
+	table.insert(points, point)
+end
+
+local function junctionHullCrossXZ(origin, a, b)
+	return (a.X - origin.X) * (b.Z - origin.Z) - (a.Z - origin.Z) * (b.X - origin.X)
+end
+
+local function junctionConvexHullXZ(points)
+	if #points < 3 then
+		return points
+	end
+
+	local sorted = {}
+	for _, point in ipairs(points) do
+		table.insert(sorted, point)
+	end
+	table.sort(sorted, function(a, b)
+		if math.abs(a.X - b.X) > 0.001 then
+			return a.X < b.X
+		end
+		return a.Z < b.Z
+	end)
+
+	local lower = {}
+	for _, point in ipairs(sorted) do
+		while #lower >= 2 and junctionHullCrossXZ(lower[#lower - 1], lower[#lower], point) <= 0.001 do
+			table.remove(lower)
+		end
+		table.insert(lower, point)
+	end
+
+	local upper = {}
+	for i = #sorted, 1, -1 do
+		local point = sorted[i]
+		while #upper >= 2 and junctionHullCrossXZ(upper[#upper - 1], upper[#upper], point) <= 0.001 do
+			table.remove(upper)
+		end
+		table.insert(upper, point)
+	end
+
+	table.remove(lower, #lower)
+	table.remove(upper, #upper)
+	local hull = {}
+	for _, point in ipairs(lower) do
+		table.insert(hull, point)
+	end
+	for _, point in ipairs(upper) do
+		table.insert(hull, point)
+	end
+
+	if #hull < 3 then
+		return points
+	end
+	return hull
+end
+
+local function lineIntersectionWithParametersXZ(a, dirA, b, dirB)
+	local denom = crossXZ(dirA, dirB)
+	if math.abs(denom) < 1e-5 then
+		return nil
+	end
+
+	local dx = b.X - a.X
+	local dz = b.Z - a.Z
+	local tA = (dx * dirB.Z - dz * dirB.X) / denom
+	local tB = (dx * dirA.Z - dz * dirA.X) / denom
+	return Vector3.new(a.X + dirA.X * tA, a.Y, a.Z + dirA.Z * tA), tA, tB
+end
+
+local function junctionCoreBoundaryLimit(junction)
+	local center = getJunctionMeshCenter(junction)
+	local limit = math.max(RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength) * 2, 8)
+	for _, portal in ipairs(junction.portals or {}) do
+		local width = (portal.halfWidth or 0) * 2
+		limit = math.max(
+			limit,
+			width * 3,
+			distanceXZ(portal.boundaryPoint, center) + width * 2
+		)
+	end
+	return limit
+end
+
+local function portalSideLine(portal, sideSign)
+	local right = roadRightFromTangent(portal.tangent)
+	local center = getJunctionMeshCenter(portal.junction)
+	local basePoint = portalLinePointAtT(portal, portalLineT(portal, center))
+	local point = basePoint + right * ((portal.halfWidth or 0) * sideSign)
+	return {
+		portal = portal,
+		point = point,
+		dir = portal.tangent,
+		sideSign = sideSign,
+	}
+end
+
+local function collectPortalSideLines(junction)
+	local lines = {}
+	for _, portal in ipairs(junction.portals or {}) do
+		table.insert(lines, portalSideLine(portal, -1))
+		table.insert(lines, portalSideLine(portal, 1))
+	end
+	return lines
+end
+
+local function sortedJunctionPortals(junction)
+	local portals = {}
+	for _, portal in ipairs(junction.portals or {}) do
+		table.insert(portals, portal)
+	end
+	table.sort(portals, function(a, b)
+		return math.atan2(a.tangent.Z, a.tangent.X) < math.atan2(b.tangent.Z, b.tangent.X)
+	end)
+	return portals
+end
+
+local function appendOrderedJunctionPoint(points, point)
+	if #points == 0 or distanceXZ(points[#points], point) > 0.05 then
+		table.insert(points, point)
+	end
+end
+
+local function finalizeOrderedJunctionBoundary(points)
+	if #points >= 2 and distanceXZ(points[1], points[#points]) <= 0.05 then
+		table.remove(points, #points)
+	end
+	return points
+end
+
+local function junctionGapPoints(center, fromPortal, toPortal)
+	local fromRight = roadRightFromTangent(fromPortal.tangent)
+	local toRight = roadRightFromTangent(toPortal.tangent)
+	local fromHalfWidth = fromPortal.halfWidth or 0
+	local toHalfWidth = toPortal.halfWidth or 0
+	local fromSide = center - fromRight * fromHalfWidth
+	local toSide = center + toRight * toHalfWidth
+	local maxExtension = math.max(fromHalfWidth, toHalfWidth) * 1.5 + 50
+
+	local intersection, fromT, toT = lineIntersectionWithParametersXZ(fromSide, fromPortal.tangent, toSide, toPortal.tangent)
+	if intersection and fromT >= 0 and toT >= 0 and fromT <= maxExtension and toT <= maxExtension then
+		local point = Vector3.new(intersection.X, center.Y, intersection.Z)
+		return point, point, { point }
+	end
+
+	local safeFromT = math.clamp(fromT or 0, 0, maxExtension)
+	local safeToT = math.clamp(toT or 0, 0, maxExtension)
+	local fromPoint = Vector3.new(
+		fromSide.X + fromPortal.tangent.X * safeFromT,
+		center.Y,
+		fromSide.Z + fromPortal.tangent.Z * safeFromT
+	)
+	local toPoint = Vector3.new(
+		toSide.X + toPortal.tangent.X * safeToT,
+		center.Y,
+		toSide.Z + toPortal.tangent.Z * safeToT
+	)
+	if distanceXZ(fromPoint, toPoint) <= 0.05 then
+		local point = (fromPoint + toPoint) * 0.5
+		return point, point, { point }
+	end
+	return fromPoint, toPoint, { fromPoint, toPoint }
+end
+
+local function buildJunctionCoreBoundary(junction)
+	local portals = sortedJunctionPortals(junction)
+	if #portals < 2 then
+		return {}
+	end
+
+	local center = getJunctionMeshCenter(junction)
+	local boundary = {}
+	for _, portal in ipairs(portals) do
+		portal.coreLeft = nil
+		portal.coreRight = nil
+	end
+
+	for i, portal in ipairs(portals) do
+		local nextPortal = portals[(i % #portals) + 1]
+		local fromPoint, toPoint, points = junctionGapPoints(center, portal, nextPortal)
+		portal.coreLeft = fromPoint
+		nextPortal.coreRight = toPoint
+		for _, point in ipairs(points) do
+			appendOrderedJunctionPoint(boundary, point)
+		end
+	end
+
+	if #boundary < 3 then
+		local fallback = {}
+		for _, portal in ipairs(portals) do
+			local right = roadRightFromTangent(portal.tangent)
+			appendUniqueJunctionPoint(fallback, center + right * (portal.halfWidth or 0))
+			appendUniqueJunctionPoint(fallback, center - right * (portal.halfWidth or 0))
+		end
+		return junctionConvexHullXZ(fallback)
+	end
+
+	return finalizeOrderedJunctionBoundary(boundary)
+end
+
+local function buildJunctionSurfaceBoundary(junction)
+	local portals = sortedJunctionPortals(junction)
+	if #portals < 2 then
+		return {}
+	end
+
+	local boundary = {}
+	for i, portal in ipairs(portals) do
+		local nextPortal = portals[(i % #portals) + 1]
+		local right = roadRightFromTangent(portal.tangent)
+		appendOrderedJunctionPoint(boundary, portal.point + right * (portal.halfWidth or 0))
+		appendOrderedJunctionPoint(boundary, portal.point - right * (portal.halfWidth or 0))
+
+		if portal.coreLeft and nextPortal.coreRight then
+			appendOrderedJunctionPoint(boundary, portal.coreLeft)
+			appendOrderedJunctionPoint(boundary, nextPortal.coreRight)
+		end
+	end
+
+	return finalizeOrderedJunctionBoundary(boundary)
+end
+
+local function pointLineDistanceXZ(point, linePoint, lineDir)
+	return math.abs(crossXZ(point - linePoint, lineDir))
+end
+
+local function boundaryPointOnPortalSide(boundary, portal, sideSign)
+	local line = portalSideLine(portal, sideSign)
+	local best = nil
+	local bestT = -math.huge
+
+	local function consider(point)
+		if pointLineDistanceXZ(point, line.point, line.dir) > 0.08 then
+			return
+		end
+		local t = portalLineT(portal, point)
+		if t > bestT then
+			best = Vector3.new(point.X, line.point.Y, point.Z)
+			bestT = t
+		end
+	end
+
+	for _, point in ipairs(boundary) do
+		consider(point)
+	end
+
+	if not best and #boundary >= 2 then
+		for i = 1, #boundary do
+			local a = boundary[i]
+			local b = boundary[(i % #boundary) + 1]
+			local edge = b - a
+			if edge.Magnitude > 1e-4 then
+				local intersection, _, edgeT = lineIntersectionWithParametersXZ(line.point, line.dir, a, edge)
+				if intersection and edgeT >= -0.001 and edgeT <= 1.001 then
+					consider(intersection)
+				end
+			end
+		end
+	end
+
+	return best
+end
+
+local function annotateProcessedPortalCore(junction, portal)
+	local crosswalkLength = RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength)
+	local corePoint = portal.point - portal.tangent * crosswalkLength
+	local right = roadRightFromTangent(portal.tangent)
+	portal.boundaryPoint = corePoint
+	portal.corePoint = corePoint
+	portal.coreLeft = corePoint - right * portal.halfWidth
+	portal.coreRight = corePoint + right * portal.halfWidth
+	portal.coreT = 0
+	portal.mouthT = crosswalkLength
+end
+
+local function updateProcessedPortalCoreGeometry(junction, portal)
+	local right = roadRightFromTangent(portal.tangent)
+	local center = getJunctionMeshCenter(junction)
+	local coreLeft = portal.coreLeft or (center - right * portal.halfWidth)
+	local coreRight = portal.coreRight or (center + right * portal.halfWidth)
+	if (coreRight - coreLeft):Dot(right) < 0 then
+		coreLeft, coreRight = coreRight, coreLeft
+	end
+
+	portal.coreLeft = coreLeft
+	portal.coreRight = coreRight
+	portal.corePoint = (coreLeft + coreRight) * 0.5
+	portal.coreT = portalLineT(portal, portal.corePoint)
+	portal.mouthT = portalLineT(portal, portal.point)
 end
 
 local function attachProcessedChainEndpointsToJunctions(chains, junctions)
@@ -172,14 +502,33 @@ local function attachProcessedChainEndpointsToJunctions(chains, junctions)
 			local beforeLast = chain.samples[#chain.samples - 1]
 			for _, junction in ipairs(junctions) do
 				local tolerance = math.max(1, chain.width * 0.08)
-				if distanceXZ(first, junction.center) <= junction.radius + tolerance then
+				local attachDistance = math.max(
+					junction.radius,
+					tonumber(junction.portalAttachDistance) or 0,
+					junction.radius
+						+ RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength)
+						+ sanitizeRoadWidth(chain.width)
+				) + tolerance
+				if chain.componentId == junction.componentId and distanceXZ(first, junction.center) <= attachDistance then
 					addPortalForChain(junction, chain, first, second)
 				end
-				if distanceXZ(last, junction.center) <= junction.radius + tolerance then
+				if chain.componentId == junction.componentId and distanceXZ(last, junction.center) <= attachDistance then
 					addPortalForChain(junction, chain, last, beforeLast)
 				end
 			end
 		end
+	end
+
+	for _, junction in ipairs(junctions) do
+		for _, portal in ipairs(junction.portals or {}) do
+			annotateProcessedPortalCore(junction, portal)
+		end
+		junction.intersectionCenter = junction.center
+		junction.coreBoundary = buildJunctionCoreBoundary(junction)
+		for _, portal in ipairs(junction.portals or {}) do
+			updateProcessedPortalCoreGeometry(junction, portal)
+		end
+		junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction)
 	end
 end
 
@@ -461,7 +810,7 @@ function roadRightFromTangent(tangent)
 end
 
 local function lineIntersectionXZ(a, dirA, b, dirB)
-	local denom = dirA.X * dirB.Z - dirA.Z * dirB.X
+	local denom = crossXZ(dirA, dirB)
 	if math.abs(denom) < 1e-5 then
 		return nil
 	end
@@ -1120,7 +1469,8 @@ local function normalizePositiveAngleDelta(delta)
 end
 
 local function junctionBoundaryAngle(point, junction)
-	return math.atan2(point.Z - junction.center.Z, point.X - junction.center.X)
+	local center = getJunctionMeshCenter(junction)
+	return math.atan2(point.Z - center.Z, point.X - center.X)
 end
 
 local function boundaryEntriesSharePortal(a, b)
@@ -1130,14 +1480,15 @@ end
 local function mergeBoundaryEntryPortal(target, source)
 	if not boundaryEntriesSharePortal(target, source) then
 		target.portal = nil
+		target.corePoint = target.point
 	end
 end
 
 local function sortedJunctionBoundaryEntries(junction)
 	local entries = {}
 	for _, portal in ipairs(junction.portals) do
-		table.insert(entries, { point = portal.left, portal = portal })
-		table.insert(entries, { point = portal.right, portal = portal })
+		table.insert(entries, { point = portal.left, corePoint = portal.coreLeft or portal.left, portal = portal })
+		table.insert(entries, { point = portal.right, corePoint = portal.coreRight or portal.right, portal = portal })
 	end
 	table.sort(entries, function(a, b)
 		return junctionBoundaryAngle(a.point, junction) < junctionBoundaryAngle(b.point, junction)
@@ -1149,7 +1500,7 @@ local function sortedJunctionBoundaryEntries(junction)
 		if previous and distanceXZ(previous.point, entry.point) <= 0.05 then
 			mergeBoundaryEntryPortal(previous, entry)
 		else
-			table.insert(filtered, { point = entry.point, portal = entry.portal })
+			table.insert(filtered, { point = entry.point, corePoint = entry.corePoint, portal = entry.portal })
 		end
 	end
 	if #filtered >= 2 and distanceXZ(filtered[1].point, filtered[#filtered].point) <= 0.05 then
@@ -1161,6 +1512,7 @@ local function sortedJunctionBoundaryEntries(junction)
 end
 
 local function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPoint, subdivisions, surfaceY)
+	local center = getJunctionMeshCenter(junction)
 	local fromAngle = junctionBoundaryAngle(fromPoint, junction)
 	local toAngle = junctionBoundaryAngle(toPoint, junction)
 	local delta = normalizePositiveAngleDelta(toAngle - fromAngle)
@@ -1168,16 +1520,16 @@ local function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPo
 		return
 	end
 
-	local fromRadius = distanceXZ(fromPoint, junction.center)
-	local toRadius = distanceXZ(toPoint, junction.center)
+	local fromRadius = distanceXZ(fromPoint, center)
+	local toRadius = distanceXZ(toPoint, center)
 	for i = 1, subdivisions do
 		local alpha = i / (subdivisions + 1)
 		local angle = fromAngle + delta * alpha
 		local radius = fromRadius + (toRadius - fromRadius) * alpha
 		table.insert(boundary, Vector3.new(
-			junction.center.X + math.cos(angle) * radius,
+			center.X + math.cos(angle) * radius,
 			surfaceY,
-			junction.center.Z + math.sin(angle) * radius
+			center.Z + math.sin(angle) * radius
 		))
 	end
 end
@@ -1186,6 +1538,92 @@ local function appendBoundaryPoint(boundary, point)
 	if #boundary == 0 or distanceXZ(boundary[#boundary], point) > 0.05 then
 		table.insert(boundary, point)
 	end
+end
+
+local function appendUniqueBoundaryPoint(boundary, point)
+	for _, existing in ipairs(boundary) do
+		if distanceXZ(existing, point) <= 0.05 then
+			return
+		end
+	end
+	table.insert(boundary, point)
+end
+
+local function hullCrossXZ(origin, a, b)
+	return (a.X - origin.X) * (b.Z - origin.Z) - (a.Z - origin.Z) * (b.X - origin.X)
+end
+
+local function convexHullXZ(points)
+	if #points < 3 then
+		return points
+	end
+
+	local sorted = {}
+	for _, point in ipairs(points) do
+		table.insert(sorted, point)
+	end
+	table.sort(sorted, function(a, b)
+		if math.abs(a.X - b.X) > 0.001 then
+			return a.X < b.X
+		end
+		return a.Z < b.Z
+	end)
+
+	local lower = {}
+	for _, point in ipairs(sorted) do
+		while #lower >= 2 and hullCrossXZ(lower[#lower - 1], lower[#lower], point) <= 0.001 do
+			table.remove(lower)
+		end
+		table.insert(lower, point)
+	end
+
+	local upper = {}
+	for i = #sorted, 1, -1 do
+		local point = sorted[i]
+		while #upper >= 2 and hullCrossXZ(upper[#upper - 1], upper[#upper], point) <= 0.001 do
+			table.remove(upper)
+		end
+		table.insert(upper, point)
+	end
+
+	table.remove(lower, #lower)
+	table.remove(upper, #upper)
+	local hull = {}
+	for _, point in ipairs(lower) do
+		table.insert(hull, point)
+	end
+	for _, point in ipairs(upper) do
+		table.insert(hull, point)
+	end
+
+	if #hull < 3 then
+		return points
+	end
+	return hull
+end
+
+local function polygonAverageCenter(boundary, fallback)
+	if #boundary == 0 then
+		return fallback
+	end
+
+	local sum = Vector3.zero
+	for _, point in ipairs(boundary) do
+		sum += point
+	end
+	local center = sum / #boundary
+	return Vector3.new(center.X, fallback.Y, center.Z)
+end
+
+local function portalConnectorPoints(portal, surfaceY)
+	local coreLeft = portal.coreLeft or portal.left
+	local coreRight = portal.coreRight or portal.right
+	local mouthLeft = portal.left
+	local mouthRight = portal.right
+	return Vector3.new(coreLeft.X, surfaceY, coreLeft.Z),
+		Vector3.new(coreRight.X, surfaceY, coreRight.Z),
+		Vector3.new(mouthLeft.X, surfaceY, mouthLeft.Z),
+		Vector3.new(mouthRight.X, surfaceY, mouthRight.Z)
 end
 
 local function addLinearSubdivisionPoints(boundary, fromPoint, toPoint, subdivisions)
@@ -1199,17 +1637,19 @@ local function isNaturalJunctionCorner(junction, fromEntry, toEntry, point)
 		return false
 	end
 
-	local fromAdvance = (point - fromEntry.point):Dot(fromEntry.portal.tangent)
-	local toAdvance = (point - toEntry.point):Dot(toEntry.portal.tangent)
+	local fromCorePoint = fromEntry.corePoint or fromEntry.point
+	local toCorePoint = toEntry.corePoint or toEntry.point
+	local fromAdvance = (point - fromCorePoint):Dot(fromEntry.portal.tangent)
+	local toAdvance = (point - toCorePoint):Dot(toEntry.portal.tangent)
 	if fromAdvance > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE or toAdvance > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE then
 		return false
 	end
 
 	local maxDistance = math.max(
-		junction.radius * JUNCTION_NATURAL_INTERSECTION_MAX_RADIUS_SCALE,
-		((fromEntry.portal.halfWidth or 0) + (toEntry.portal.halfWidth or 0)) * JUNCTION_NATURAL_INTERSECTION_MAX_WIDTH_SCALE
+		distanceXZ(fromCorePoint, getJunctionMeshCenter(junction)) + (fromEntry.portal.halfWidth or 0),
+		distanceXZ(toCorePoint, getJunctionMeshCenter(junction)) + (toEntry.portal.halfWidth or 0)
 	)
-	return distanceXZ(point, junction.center) <= math.max(maxDistance, 6)
+	return distanceXZ(point, getJunctionMeshCenter(junction)) <= math.max(maxDistance, 6)
 end
 
 local function naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
@@ -1218,9 +1658,9 @@ local function naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
 	end
 
 	local intersection = lineIntersectionXZ(
-		fromEntry.point,
+		fromEntry.corePoint or fromEntry.point,
 		fromEntry.portal.tangent,
-		toEntry.point,
+		toEntry.corePoint or toEntry.point,
 		toEntry.portal.tangent
 	)
 	if not intersection then
@@ -1253,37 +1693,69 @@ local function getJunctionBoundary(junction, surfaceY)
 		return {}
 	end
 
-	local entries = sortedJunctionBoundaryEntries(junction)
-	local subdivisions = RoadSplineData.sanitizeJunctionSubdivisions(junction.subdivisions)
-	local boundary = {}
-	for i, entry in ipairs(entries) do
-		local nextEntry = entries[(i % #entries) + 1]
-		appendBoundaryPoint(boundary, Vector3.new(entry.point.X, surfaceY, entry.point.Z))
-		if not boundaryEntriesSharePortal(entry, nextEntry) then
-			addConnectorBoundaryPoints(boundary, junction, entry, nextEntry, subdivisions, surfaceY)
+	if junction.surfaceBoundary and #junction.surfaceBoundary >= 3 then
+		local boundary = {}
+		for _, point in ipairs(junction.surfaceBoundary) do
+			table.insert(boundary, Vector3.new(point.X, surfaceY, point.Z))
 		end
+		return boundary
 	end
-	if #boundary >= 2 and distanceXZ(boundary[1], boundary[#boundary]) <= 0.05 then
-		table.remove(boundary, #boundary)
+
+	if junction.coreBoundary and #junction.coreBoundary >= 3 then
+		local boundary = {}
+		for _, point in ipairs(junction.coreBoundary) do
+			table.insert(boundary, Vector3.new(point.X, surfaceY, point.Z))
+		end
+		return boundary
 	end
-	return boundary
+
+	local boundary = {}
+	for _, portal in ipairs(junction.portals) do
+		local coreLeft = portal.coreLeft or portal.left
+		local coreRight = portal.coreRight or portal.right
+		appendUniqueBoundaryPoint(boundary, Vector3.new(coreLeft.X, surfaceY, coreLeft.Z))
+		appendUniqueBoundaryPoint(boundary, Vector3.new(coreRight.X, surfaceY, coreRight.Z))
+	end
+	return convexHullXZ(boundary)
 end
 
-local function addIntersectionPatchToMesh(state, junction)
-	local center = junction.center + Vector3.new(0, ROAD_MESH_THICKNESS * 0.5, 0)
-	local boundary = getJunctionBoundary(junction, center.Y)
-	if #boundary < 3 then
+local function addPortalConnectorToMesh(state, portal, surfaceY)
+	local coreLeft, coreRight, mouthLeft, mouthRight = portalConnectorPoints(portal, surfaceY)
+	if distanceXZ(coreLeft, mouthLeft) <= 0.05 and distanceXZ(coreRight, mouthRight) <= 0.05 then
 		return
 	end
 
-	local centerVertex = addMeshVertex(state, center)
-	local ring = {}
-	for i, point in ipairs(boundary) do
-		ring[i] = addMeshVertex(state, point)
+	local coreLeftVertex = addMeshVertex(state, coreLeft)
+	local mouthLeftVertex = addMeshVertex(state, mouthLeft)
+	local mouthRightVertex = addMeshVertex(state, mouthRight)
+	local coreRightVertex = addMeshVertex(state, coreRight)
+	addMeshTriangle(state, coreLeftVertex, mouthLeftVertex, mouthRightVertex)
+	addMeshTriangle(state, coreLeftVertex, mouthRightVertex, coreRightVertex)
+end
+
+local function addIntersectionPatchToMesh(state, junction)
+	local fallbackCenter = getJunctionMeshCenter(junction) + Vector3.new(0, ROAD_MESH_THICKNESS * 0.5, 0)
+	local boundary = getJunctionBoundary(junction, fallbackCenter.Y)
+	if #boundary >= 3 then
+		local center = fallbackCenter
+		if not (junction.surfaceBoundary and #junction.surfaceBoundary >= 3) then
+			center = polygonAverageCenter(boundary, fallbackCenter)
+		end
+		local centerVertex = addMeshVertex(state, center)
+		local ring = {}
+		for i, point in ipairs(boundary) do
+			ring[i] = addMeshVertex(state, point)
+		end
+
+		for i = 1, #ring do
+			addMeshTriangle(state, centerVertex, ring[(i % #ring) + 1], ring[i])
+		end
 	end
 
-	for i = 1, #ring do
-		addMeshTriangle(state, centerVertex, ring[(i % #ring) + 1], ring[i])
+	if not (junction.surfaceBoundary and #junction.surfaceBoundary >= 3) then
+		for _, portal in ipairs(junction.portals or {}) do
+			addPortalConnectorToMesh(state, portal, fallbackCenter.Y)
+		end
 	end
 end
 
