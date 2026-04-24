@@ -28,6 +28,9 @@ local INTERSECTION_BLEND_SCALE = 0.95
 local INTERSECTION_MERGE_SCALE = 0.45
 local INTERSECTION_RING_SEGMENTS = 28
 local JUNCTION_VERTEX_EPSILON = 0.05
+local JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE = 0.5
+local JUNCTION_NATURAL_INTERSECTION_MAX_RADIUS_SCALE = 2.5
+local JUNCTION_NATURAL_INTERSECTION_MAX_WIDTH_SCALE = 4
 local ROAD_WIDTH_TRIANGULATION_STEP = 24
 local ROAD_WIDTH_MAX_INTERNAL_LOOPS = 2
 local ROAD_LOFT_LENGTH_STEP = Config.authoredRoadSampleStepStuds or 8
@@ -529,6 +532,18 @@ local function roadRightFromTangent(tangent)
 	return right.Unit
 end
 
+local function lineIntersectionXZ(a, dirA, b, dirB)
+	local denom = dirA.X * dirB.Z - dirA.Z * dirB.X
+	if math.abs(denom) < 1e-5 then
+		return nil
+	end
+
+	local dx = b.X - a.X
+	local dz = b.Z - a.Z
+	local t = (dx * dirB.Z - dz * dirB.X) / denom
+	return Vector3.new(a.X + dirA.X * t, a.Y, a.Z + dirA.Z * t)
+end
+
 local function addRoadLoftRowVertices(state, left, right, widthSegments)
 	local row = {}
 	for j = 0, widthSegments do
@@ -850,6 +865,8 @@ local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 	table.insert(junction.portals, {
 		chain = chain,
 		point = boundaryPoint,
+		tangent = tangent,
+		halfWidth = halfWidth,
 		left = boundaryPoint - right * halfWidth,
 		right = boundaryPoint + right * halfWidth,
 	})
@@ -1104,6 +1121,72 @@ local function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPo
 	end
 end
 
+local function appendBoundaryPoint(boundary, point)
+	if #boundary == 0 or distanceXZ(boundary[#boundary], point) > 0.05 then
+		table.insert(boundary, point)
+	end
+end
+
+local function addLinearSubdivisionPoints(boundary, fromPoint, toPoint, subdivisions)
+	for i = 1, subdivisions do
+		appendBoundaryPoint(boundary, fromPoint:Lerp(toPoint, i / (subdivisions + 1)))
+	end
+end
+
+local function isNaturalJunctionCorner(junction, fromEntry, toEntry, point)
+	if not fromEntry.portal or not toEntry.portal then
+		return false
+	end
+
+	local fromAdvance = (point - fromEntry.point):Dot(fromEntry.portal.tangent)
+	local toAdvance = (point - toEntry.point):Dot(toEntry.portal.tangent)
+	if fromAdvance > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE or toAdvance > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE then
+		return false
+	end
+
+	local maxDistance = math.max(
+		junction.radius * JUNCTION_NATURAL_INTERSECTION_MAX_RADIUS_SCALE,
+		((fromEntry.portal.halfWidth or 0) + (toEntry.portal.halfWidth or 0)) * JUNCTION_NATURAL_INTERSECTION_MAX_WIDTH_SCALE
+	)
+	return distanceXZ(point, junction.center) <= math.max(maxDistance, 6)
+end
+
+local function naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
+	if not fromEntry.portal or not toEntry.portal then
+		return nil
+	end
+
+	local intersection = lineIntersectionXZ(
+		fromEntry.point,
+		fromEntry.portal.tangent,
+		toEntry.point,
+		toEntry.portal.tangent
+	)
+	if not intersection then
+		return nil
+	end
+
+	local point = Vector3.new(intersection.X, surfaceY, intersection.Z)
+	if not isNaturalJunctionCorner(junction, fromEntry, toEntry, point) then
+		return nil
+	end
+	return point
+end
+
+local function addConnectorBoundaryPoints(boundary, junction, fromEntry, toEntry, subdivisions, surfaceY)
+	local corner = naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
+	if corner then
+		addLinearSubdivisionPoints(boundary, Vector3.new(fromEntry.point.X, surfaceY, fromEntry.point.Z), corner, subdivisions)
+		appendBoundaryPoint(boundary, corner)
+		addLinearSubdivisionPoints(boundary, corner, Vector3.new(toEntry.point.X, surfaceY, toEntry.point.Z), subdivisions)
+		return
+	end
+
+	if subdivisions > 0 then
+		addConnectorSubdivisionPoints(boundary, junction, fromEntry.point, toEntry.point, subdivisions, surfaceY)
+	end
+end
+
 local function getJunctionBoundary(junction, surfaceY)
 	if not junction.portals or #junction.portals == 0 then
 		return {}
@@ -1114,10 +1197,13 @@ local function getJunctionBoundary(junction, surfaceY)
 	local boundary = {}
 	for i, entry in ipairs(entries) do
 		local nextEntry = entries[(i % #entries) + 1]
-		table.insert(boundary, Vector3.new(entry.point.X, surfaceY, entry.point.Z))
-		if subdivisions > 0 and not boundaryEntriesSharePortal(entry, nextEntry) then
-			addConnectorSubdivisionPoints(boundary, junction, entry.point, nextEntry.point, subdivisions, surfaceY)
+		appendBoundaryPoint(boundary, Vector3.new(entry.point.X, surfaceY, entry.point.Z))
+		if not boundaryEntriesSharePortal(entry, nextEntry) then
+			addConnectorBoundaryPoints(boundary, junction, entry, nextEntry, subdivisions, surfaceY)
 		end
+	end
+	if #boundary >= 2 and distanceXZ(boundary[1], boundary[#boundary]) <= 0.05 then
+		table.remove(boundary, #boundary)
 	end
 	return boundary
 end

@@ -45,6 +45,9 @@ local INTERSECTION_BLEND_SCALE = 0.95
 local INTERSECTION_MERGE_SCALE = 0.45
 local INTERSECTION_RING_SEGMENTS = 28
 local JUNCTION_VERTEX_EPSILON = 0.05
+local JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE = 0.5
+local JUNCTION_NATURAL_INTERSECTION_MAX_RADIUS_SCALE = 2.5
+local JUNCTION_NATURAL_INTERSECTION_MAX_WIDTH_SCALE = 4
 local ROAD_EDGE_MITER_LIMIT = 2.75
 local ROAD_EDGE_SMOOTH_PASSES = 2
 local ROAD_EDGE_SMOOTH_ALPHA = 0.35
@@ -476,6 +479,16 @@ end
 local function addJunction(pos, radius, subdivisions)
 	local folder = getOrCreateJunctionsFolder()
 	return createJunctionPart(folder, junctionName(#sortedJunctions() + 1), pos, radius, subdivisions)
+end
+
+local positionHasConnectedControlPoint
+
+local function addConnectedJunction(pos, radius, subdivisions)
+	radius = sanitizeJunctionRadius(radius)
+	if not positionHasConnectedControlPoint(pos, radius) then
+		return nil, "Junctions must overlap an existing curve point with a connected road segment"
+	end
+	return addJunction(pos, radius, subdivisions), nil
 end
 
 local function getSelectedJunction()
@@ -921,6 +934,36 @@ local function distanceXZ(a, b)
 	local dx = a.X - b.X
 	local dz = a.Z - b.Z
 	return math.sqrt(dx * dx + dz * dz)
+end
+
+local function allControlPoints()
+	local points = {}
+	for _, spline in ipairs(sortedSplines()) do
+		for _, point in ipairs(sortedPointsInSpline(spline)) do
+			table.insert(points, point)
+		end
+	end
+	return points
+end
+
+local function collectControlPointsInJunctionPosition(center, radius)
+	local records = {}
+	for _, point in ipairs(allControlPoints()) do
+		if distanceXZ(point.Position, center) <= radius + 0.001 then
+			table.insert(records, point)
+		end
+	end
+	return records
+end
+
+positionHasConnectedControlPoint = function(center, radius)
+	for _, point in ipairs(collectControlPointsInJunctionPosition(center, radius)) do
+		local spline = getSplineFromControlPoint(point)
+		if spline and #sortedPointsInSpline(spline) >= 2 then
+			return true
+		end
+	end
+	return false
 end
 
 local function heightConnectTolerance(widthA, widthB)
@@ -1862,6 +1905,72 @@ local function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPo
 	end
 end
 
+local function appendBoundaryPoint(boundary, point)
+	if #boundary == 0 or distanceXZ(boundary[#boundary], point) > 0.05 then
+		table.insert(boundary, point)
+	end
+end
+
+local function addLinearSubdivisionPoints(boundary, fromPoint, toPoint, subdivisions)
+	for i = 1, subdivisions do
+		appendBoundaryPoint(boundary, fromPoint:Lerp(toPoint, i / (subdivisions + 1)))
+	end
+end
+
+local function isNaturalJunctionCorner(junction, fromEntry, toEntry, point)
+	if not fromEntry.portal or not toEntry.portal then
+		return false
+	end
+
+	local fromAdvance = (point - fromEntry.point):Dot(fromEntry.portal.tangent)
+	local toAdvance = (point - toEntry.point):Dot(toEntry.portal.tangent)
+	if fromAdvance > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE or toAdvance > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE then
+		return false
+	end
+
+	local maxDistance = math.max(
+		junction.radius * JUNCTION_NATURAL_INTERSECTION_MAX_RADIUS_SCALE,
+		((fromEntry.portal.halfWidth or 0) + (toEntry.portal.halfWidth or 0)) * JUNCTION_NATURAL_INTERSECTION_MAX_WIDTH_SCALE
+	)
+	return distanceXZ(point, junction.center) <= math.max(maxDistance, JUNCTION_MIN_RADIUS)
+end
+
+local function naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
+	if not fromEntry.portal or not toEntry.portal then
+		return nil
+	end
+
+	local intersection = lineIntersectionXZ(
+		fromEntry.point,
+		fromEntry.portal.tangent,
+		toEntry.point,
+		toEntry.portal.tangent
+	)
+	if not intersection then
+		return nil
+	end
+
+	local point = Vector3.new(intersection.X, surfaceY, intersection.Z)
+	if not isNaturalJunctionCorner(junction, fromEntry, toEntry, point) then
+		return nil
+	end
+	return point
+end
+
+local function addConnectorBoundaryPoints(boundary, junction, fromEntry, toEntry, subdivisions, surfaceY)
+	local corner = naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
+	if corner then
+		addLinearSubdivisionPoints(boundary, Vector3.new(fromEntry.point.X, surfaceY, fromEntry.point.Z), corner, subdivisions)
+		appendBoundaryPoint(boundary, corner)
+		addLinearSubdivisionPoints(boundary, corner, Vector3.new(toEntry.point.X, surfaceY, toEntry.point.Z), subdivisions)
+		return
+	end
+
+	if subdivisions > 0 then
+		addConnectorSubdivisionPoints(boundary, junction, fromEntry.point, toEntry.point, subdivisions, surfaceY)
+	end
+end
+
 local function buildJunctionBoundary(junction, surfaceY)
 	if not junction.portals or #junction.portals == 0 then
 		return {}
@@ -1872,10 +1981,13 @@ local function buildJunctionBoundary(junction, surfaceY)
 	local boundary = {}
 	for i, entry in ipairs(entries) do
 		local nextEntry = entries[(i % #entries) + 1]
-		table.insert(boundary, Vector3.new(entry.point.X, surfaceY, entry.point.Z))
-		if subdivisions > 0 and not boundaryEntriesSharePortal(entry, nextEntry) then
-			addConnectorSubdivisionPoints(boundary, junction, entry.point, nextEntry.point, subdivisions, surfaceY)
+		appendBoundaryPoint(boundary, Vector3.new(entry.point.X, surfaceY, entry.point.Z))
+		if not boundaryEntriesSharePortal(entry, nextEntry) then
+			addConnectorBoundaryPoints(boundary, junction, entry, nextEntry, subdivisions, surfaceY)
 		end
+	end
+	if #boundary >= 2 and distanceXZ(boundary[1], boundary[#boundary]) <= 0.05 then
+		table.remove(boundary, #boundary)
 	end
 	return boundary
 end
@@ -2077,6 +2189,8 @@ local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 	table.insert(junction.portals, {
 		chain = chain,
 		point = boundaryPoint,
+		tangent = tangent,
+		halfWidth = halfWidth,
 		left = boundaryPoint - right * halfWidth,
 		right = boundaryPoint + right * halfWidth,
 	})
@@ -3145,6 +3259,7 @@ local function runAutoRoadRebuild(reason)
 end
 
 local pointWatchers = {}
+local junctionLastPositions = {}
 
 local function disconnectPointWatcher(point)
 	local conns = pointWatchers[point]
@@ -3155,6 +3270,29 @@ local function disconnectPointWatcher(point)
 		conn:Disconnect()
 	end
 	pointWatchers[point] = nil
+	junctionLastPositions[point] = nil
+end
+
+local function moveGroupedControlPointsWithJunction(junction)
+	local previousPosition = junctionLastPositions[junction]
+	if not previousPosition then
+		junctionLastPositions[junction] = junction.Position
+		return
+	end
+
+	local currentPosition = junction.Position
+	local delta = currentPosition - previousPosition
+	if delta.Magnitude <= 1e-4 then
+		junctionLastPositions[junction] = currentPosition
+		return
+	end
+
+	local radius = sanitizeJunctionRadius(junction:GetAttribute("Radius"))
+	local groupedPoints = collectControlPointsInJunctionPosition(previousPosition, radius)
+	for _, point in ipairs(groupedPoints) do
+		point.Position += delta
+	end
+	junctionLastPositions[junction] = currentPosition
 end
 
 function scheduleAutoRebuild(reason)
@@ -3208,26 +3346,28 @@ local function refreshPointWatchers()
 				}
 			end
 		end
-		end
-		for _, junction in ipairs(sortedJunctions()) do
-			alive[junction] = true
-			if not pointWatchers[junction] then
-				pointWatchers[junction] = {
-					junction:GetPropertyChangedSignal("Position"):Connect(function()
-						scheduleAutoRebuild("junction-moved")
-					end),
-					junction:GetAttributeChangedSignal("Radius"):Connect(function()
-						scheduleAutoRebuild("junction-radius-changed")
-					end),
-					junction:GetAttributeChangedSignal("Subdivisions"):Connect(function()
-						scheduleAutoRebuild("junction-subdivisions-changed")
-					end),
-					junction.AncestryChanged:Connect(function(_, parent)
-						if parent == nil then
-							disconnectPointWatcher(junction)
-						end
-					end),
-				}
+	end
+	for _, junction in ipairs(sortedJunctions()) do
+		alive[junction] = true
+		if not pointWatchers[junction] then
+			junctionLastPositions[junction] = junction.Position
+			pointWatchers[junction] = {
+				junction:GetPropertyChangedSignal("Position"):Connect(function()
+					moveGroupedControlPointsWithJunction(junction)
+					scheduleAutoRebuild("junction-moved")
+				end),
+				junction:GetAttributeChangedSignal("Radius"):Connect(function()
+					scheduleAutoRebuild("junction-radius-changed")
+				end),
+				junction:GetAttributeChangedSignal("Subdivisions"):Connect(function()
+					scheduleAutoRebuild("junction-subdivisions-changed")
+				end),
+				junction.AncestryChanged:Connect(function(_, parent)
+					if parent == nil then
+						disconnectPointWatcher(junction)
+					end
+				end),
+			}
 		end
 	end
 
@@ -3423,7 +3563,11 @@ btnAddJunctionCamera.MouseButton1Click:Connect(function()
 		return
 	end
 	ChangeHistoryService:SetWaypoint("cab87 roads before add junction camera")
-	local junction = addJunction(pos, sanitizeJunctionRadius(junctionRadiusInput.Text), sanitizeJunctionSubdivisions(junctionSubdivisionsInput.Text))
+	local junction, err = addConnectedJunction(pos, sanitizeJunctionRadius(junctionRadiusInput.Text), sanitizeJunctionSubdivisions(junctionSubdivisionsInput.Text))
+	if not junction then
+		updateStatus(err or "Could not add junction")
+		return
+	end
 	ChangeHistoryService:SetWaypoint("cab87 roads after add junction camera")
 	Selection:Set({ junction })
 	refreshJunctionRadiusInput()
@@ -3439,7 +3583,11 @@ btnAddJunctionSelected.MouseButton1Click:Connect(function()
 		return
 	end
 	ChangeHistoryService:SetWaypoint("cab87 roads before add junction selection")
-	local junction = addJunction(sel[1].Position, sanitizeJunctionRadius(junctionRadiusInput.Text), sanitizeJunctionSubdivisions(junctionSubdivisionsInput.Text))
+	local junction, err = addConnectedJunction(sel[1].Position, sanitizeJunctionRadius(junctionRadiusInput.Text), sanitizeJunctionSubdivisions(junctionSubdivisionsInput.Text))
+	if not junction then
+		updateStatus(err or "Could not add junction")
+		return
+	end
 	ChangeHistoryService:SetWaypoint("cab87 roads after add junction selection")
 	Selection:Set({ junction })
 	refreshJunctionRadiusInput()

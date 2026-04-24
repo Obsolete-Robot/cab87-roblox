@@ -11,6 +11,9 @@ const JUNCTION_VERTEX_EPSILON = 0.05;
 const JUNCTION_SUBDIVISIONS_DEFAULT = 0;
 const JUNCTION_SUBDIVISIONS_MIN = 0;
 const JUNCTION_SUBDIVISIONS_MAX = 12;
+const JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE = 0.5;
+const JUNCTION_NATURAL_INTERSECTION_MAX_RADIUS_SCALE = 2.5;
+const JUNCTION_NATURAL_INTERSECTION_MAX_WIDTH_SCALE = 4;
 const SAMPLE_STEP_STUDS = 8;
 const ENDPOINT_WELD_DISTANCE = 22;
 const INTERSECTION_RADIUS_SCALE = 0.5;
@@ -289,7 +292,7 @@ function setJunctionModeEnabled(enabled) {
 
 function getJunctionModeStatus() {
 	return state.junctionModeEnabled
-		? "Junction Mode enabled. Click empty space to add, drag centers to move, drag radius rings to scale, Alt-click a junction to delete."
+		? "Junction Mode enabled. Click an existing curve point to add, drag centers to move grouped points, drag radius rings to scale, Alt-click to delete."
 		: "Junction Mode disabled.";
 }
 
@@ -438,6 +441,7 @@ function clearImageSourceState() {
 
 function buildSessionPayload() {
 	const selected = getSelectedPointRecord();
+	const exportableJunctions = state.junctions.filter(junctionHasCurveConnections);
 	return {
 		version: 2,
 		sampleStepStuds: SAMPLE_STEP_STUDS,
@@ -449,7 +453,7 @@ function buildSessionPayload() {
 		splines: state.splines
 			.filter((spline) => spline.points.length >= 2)
 			.map(cloneSplineForExport),
-		junctions: state.junctions.map(cloneJunctionForExport),
+		junctions: exportableJunctions.map(cloneJunctionForExport),
 		editorState: {
 			camera: {
 				x: roundNumber(state.cameraX, 3),
@@ -463,7 +467,7 @@ function buildSessionPayload() {
 					pointIndex: selected.pointIndex,
 				}
 				: null,
-			selectedJunctionIndex: state.junctions.findIndex((junction) => junction.id === state.selectedJunctionId),
+			selectedJunctionIndex: exportableJunctions.findIndex((junction) => junction.id === state.selectedJunctionId),
 			image: hasLoadedImage()
 				? {
 					fileName: state.image.fileName,
@@ -1437,6 +1441,8 @@ function addPortalForChain(junction, chain, boundaryPoint, outsidePoint) {
 	const portal = {
 		chain,
 		point: clonePoint(boundaryPoint),
+		tangent,
+		halfWidth,
 		left: makePoint(boundaryPoint.x - (right.x * halfWidth), boundaryPoint.z - (right.z * halfWidth), boundaryPoint.y ?? 0),
 		right: makePoint(boundaryPoint.x + (right.x * halfWidth), boundaryPoint.z + (right.z * halfWidth), boundaryPoint.y ?? 0),
 	};
@@ -1663,6 +1669,74 @@ function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPoint, s
 	}
 }
 
+function appendBoundaryPoint(boundary, point) {
+	if (boundary.length === 0 || distanceXZ(boundary[boundary.length - 1], point) > 0.05) {
+		boundary.push(point);
+	}
+}
+
+function addLinearSubdivisionPoints(boundary, fromPoint, toPoint, subdivisions) {
+	for (let index = 1; index <= subdivisions; index += 1) {
+		const alpha = index / (subdivisions + 1);
+		appendBoundaryPoint(boundary, lerpPoint(fromPoint, toPoint, alpha));
+	}
+}
+
+function isNaturalJunctionCorner(junction, fromEntry, toEntry, point) {
+	if (!fromEntry.portal || !toEntry.portal) {
+		return false;
+	}
+
+	const fromAdvance = dot2D(subtract2D(point, fromEntry.point), fromEntry.portal.tangent);
+	const toAdvance = dot2D(subtract2D(point, toEntry.point), toEntry.portal.tangent);
+	if (fromAdvance > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE || toAdvance > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE) {
+		return false;
+	}
+
+	const maxDistance = Math.max(
+		junction.radius * JUNCTION_NATURAL_INTERSECTION_MAX_RADIUS_SCALE,
+		((fromEntry.portal.halfWidth ?? 0) + (toEntry.portal.halfWidth ?? 0)) * JUNCTION_NATURAL_INTERSECTION_MAX_WIDTH_SCALE,
+	);
+	return distanceXZ(point, junction.center) <= Math.max(maxDistance, JUNCTION_RADIUS_MIN);
+}
+
+function naturalJunctionCorner(junction, fromEntry, toEntry) {
+	if (!fromEntry.portal || !toEntry.portal) {
+		return null;
+	}
+
+	const intersection = lineIntersectionXZ(
+		fromEntry.point,
+		fromEntry.portal.tangent,
+		toEntry.point,
+		toEntry.portal.tangent,
+	);
+	if (!intersection) {
+		return null;
+	}
+
+	const point = makePoint(
+		intersection.x,
+		intersection.z,
+		((fromEntry.point.y ?? 0) + (toEntry.point.y ?? 0)) * 0.5,
+	);
+	return isNaturalJunctionCorner(junction, fromEntry, toEntry, point) ? point : null;
+}
+
+function addConnectorBoundaryPoints(boundary, junction, fromEntry, toEntry, subdivisions) {
+	const corner = naturalJunctionCorner(junction, fromEntry, toEntry);
+	if (corner) {
+		addLinearSubdivisionPoints(boundary, fromEntry.point, corner, subdivisions);
+		appendBoundaryPoint(boundary, corner);
+		addLinearSubdivisionPoints(boundary, corner, toEntry.point, subdivisions);
+		return;
+	}
+
+	if (subdivisions > 0) {
+		addConnectorSubdivisionPoints(boundary, junction, fromEntry.point, toEntry.point, subdivisions);
+	}
+}
+
 function buildJunctionBoundary(junction) {
 	const entries = sortedJunctionBoundaryEntries(junction);
 	if (entries.length === 0) {
@@ -1674,10 +1748,15 @@ function buildJunctionBoundary(junction) {
 	for (let index = 0; index < entries.length; index += 1) {
 		const entry = entries[index];
 		const next = entries[(index + 1) % entries.length];
-		boundary.push(entry.point);
+		appendBoundaryPoint(boundary, entry.point);
 		if (subdivisions > 0 && !entriesSharePortal(entry, next)) {
-			addConnectorSubdivisionPoints(boundary, junction, entry.point, next.point, subdivisions);
+			addConnectorBoundaryPoints(boundary, junction, entry, next, subdivisions);
+		} else if (!entriesSharePortal(entry, next)) {
+			addConnectorBoundaryPoints(boundary, junction, entry, next, 0);
 		}
+	}
+	if (boundary.length >= 2 && distanceXZ(boundary[0], boundary[boundary.length - 1]) <= 0.05) {
+		boundary.pop();
 	}
 	return boundary;
 }
@@ -1915,7 +1994,9 @@ function computeMeshPreview() {
 		return { chains: [], junctions: [] };
 	}
 
-	const junctions = state.junctions.map(cloneJunctionForPreview);
+	const junctions = state.junctions
+		.filter(junctionHasCurveConnections)
+		.map(cloneJunctionForPreview);
 	const chains = applyExplicitJunctionsToChains(sourceChains, junctions);
 
 	for (const chain of chains) {
@@ -2575,28 +2656,66 @@ function deleteSelectedPoint() {
 	requestRender();
 }
 
-function addJunctionAt(worldPoint) {
+function findJunctionContainingControlPoint(pointHit) {
+	if (!pointHit) {
+		return null;
+	}
+	const point = pointHit.spline.points[pointHit.pointIndex];
+	return state.junctions.find((junction) => distanceXZ(point, junction) <= junction.radius + 0.001) || null;
+}
+
+function addJunctionAtControlPoint(pointHit) {
+	if (!pointHit) {
+		setStatus("Junction Mode adds junctions from existing curve points. Add or click a curve point first.");
+		return null;
+	}
+
+	const existing = findJunctionContainingControlPoint(pointHit);
+	if (existing) {
+		state.selectedJunctionId = existing.id;
+		state.selectedPoint = null;
+		refreshInspector();
+		requestRender();
+		return existing;
+	}
+
 	const selected = getSelectedJunction();
 	const radius = selected ? selected.radius : sanitizeJunctionRadius(elements.junctionRadiusInput.value);
 	const subdivisions = selected ? selected.subdivisions : sanitizeJunctionSubdivisions(elements.junctionSubdivisionsInput.value);
-	const junction = makeJunction(worldPoint, radius, subdivisions);
+	const point = pointHit.spline.points[pointHit.pointIndex];
+	const junction = makeJunction(point, radius, subdivisions);
+	const records = collectControlPointsInJunction(junction);
+	if (collectAutoJunctionConnections(junction, records).length === 0) {
+		setStatus("Junctions need a curve point with a connected road segment. Add another point to the curve first.");
+		return null;
+	}
+
 	state.junctions.push(junction);
 	state.selectedJunctionId = junction.id;
 	state.selectedPoint = null;
 	markMeshPreviewDirty();
 	refreshInspector();
 	requestRender();
-	setStatus(`Added ${junction.name} at X ${formatNumber(junction.x, 1)}, Z ${formatNumber(junction.z, 1)}.`);
+	setStatus(`Added ${junction.name} from ${pointHit.spline.name}:${pointHit.pointIndex + 1}.`);
 	return junction;
 }
 
 function startJunctionDrag(junction, pointerId) {
 	state.selectedJunctionId = junction.id;
 	state.selectedPoint = null;
+	const groupedPoints = collectControlPointsInJunction(junction).map((record) => ({
+		point: record.point,
+		startX: record.point.x,
+		startY: record.point.y ?? 0,
+		startZ: record.point.z,
+	}));
 	state.drag = {
 		mode: "junction",
 		junctionId: junction.id,
 		pointerId,
+		startX: junction.x,
+		startZ: junction.z,
+		groupedPoints,
 	};
 	refreshInspector();
 	requestRender();
@@ -2743,6 +2862,11 @@ function collectAutoJunctionConnections(junction, records) {
 	}
 
 	return connections;
+}
+
+function junctionHasCurveConnections(junction) {
+	const records = collectControlPointsInJunction(junction);
+	return records.length > 0 && collectAutoJunctionConnections(junction, records).length > 0;
 }
 
 function angleBetweenUnitDirections(a, b) {
@@ -2976,9 +3100,13 @@ function handleCanvasPointerDown(event) {
 			elements.canvas.setPointerCapture(event.pointerId);
 			return;
 		}
-		const junction = addJunctionAt(world);
+		const pointHit = pickPoint(localX, localY);
+		const junction = addJunctionAtControlPoint(pointHit);
+		if (!junction) {
+			return;
+		}
 		startJunctionDrag(junction, event.pointerId);
-		setStatus(`Added and dragging ${junction.name}.`);
+		setStatus(`Dragging ${junction.name} with ${state.drag.groupedPoints.length} grouped point${state.drag.groupedPoints.length === 1 ? "" : "s"}.`);
 		elements.canvas.setPointerCapture(event.pointerId);
 		return;
 	}
@@ -3047,13 +3175,21 @@ function handleCanvasPointerMove(event) {
 		const junction = state.junctions.find((item) => item.id === state.drag.junctionId);
 		if (!junction) {
 			return;
+			}
+			const world = screenToWorld(localX, localY);
+			const dx = world.x - state.drag.startX;
+			const dz = world.z - state.drag.startZ;
+			junction.x = roundNumber(world.x, 3);
+			junction.z = roundNumber(world.z, 3);
+			for (const groupedPoint of state.drag.groupedPoints) {
+				groupedPoint.point.x = roundNumber(groupedPoint.startX + dx, 3);
+				groupedPoint.point.y = roundNumber(groupedPoint.startY, 3);
+				groupedPoint.point.z = roundNumber(groupedPoint.startZ + dz, 3);
+			}
+			markMeshPreviewDirty();
+			refreshInspector();
+			requestRender();
 		}
-		const world = screenToWorld(localX, localY);
-		junction.x = roundNumber(world.x, 3);
-		junction.z = roundNumber(world.z, 3);
-		markMeshPreviewDirty();
-		requestRender();
-	}
 
 	if (state.drag.mode === "junction-radius") {
 		const junction = state.junctions.find((item) => item.id === state.drag.junctionId);
