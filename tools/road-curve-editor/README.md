@@ -10,7 +10,15 @@ Windows:
 run.bat
 ```
 
-If Python is available, that starts a local static server at `http://127.0.0.1:8000/index.html`. Otherwise it opens `index.html` directly.
+macOS:
+
+```sh
+./run.command
+```
+
+You can also double-click `run.command` in Finder.
+
+If Python is available, these scripts start a local static server at `http://127.0.0.1:8000/index.html`. Otherwise they open `index.html` directly.
 
 Manual:
 
