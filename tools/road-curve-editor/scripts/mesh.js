@@ -1,15 +1,7 @@
 // Mesh preview orchestration and caching.
 
 function computeMeshPreview() {
-	const sourceChains = state.splines
-		.filter((spline) => spline.points.length >= 2)
-		.map((spline) => ({
-			spline,
-			points: spline.points.map(clonePoint),
-			samples: samplePositions(spline.points.map(createVector), spline.closed, SAMPLE_STEP_STUDS),
-			closed: spline.closed,
-			width: spline.width,
-		}));
+	const sourceChains = buildSourceChainsFromSplines(state.splines);
 
 	if (sourceChains.length === 0) {
 		return { chains: [], junctions: [] };

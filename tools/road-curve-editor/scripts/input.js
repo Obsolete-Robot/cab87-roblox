@@ -53,7 +53,7 @@ function handleCanvasPointerDown(event) {
 			return;
 		}
 		startJunctionDrag(junction, event.pointerId);
-		setStatus(`Dragging ${junction.name} with ${state.drag.groupedPoints.length} grouped point${state.drag.groupedPoints.length === 1 ? "" : "s"}.`);
+		setStatus(`Dragging ${junction.name}.`);
 		elements.canvas.setPointerCapture(event.pointerId);
 		return;
 	}
@@ -294,4 +294,3 @@ async function initialize() {
 	}
 	scheduleAutosave();
 }
-

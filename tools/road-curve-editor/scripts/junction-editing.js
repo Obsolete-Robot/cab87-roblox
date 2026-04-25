@@ -69,8 +69,8 @@ function addJunctionAtControlPoint(pointHit) {
 	const subdivisions = selected ? selected.subdivisions : sanitizeJunctionSubdivisions(elements.junctionSubdivisionsInput.value);
 	const point = pointHit.spline.points[pointHit.pointIndex];
 	const junction = makeJunction(point, radius, subdivisions);
-	const records = collectControlPointsInJunction(junction);
-	if (collectAutoJunctionConnections(junction, records).length === 0) {
+	const hitData = collectSplineJunctionHitData(junction);
+	if (hitData.roadArmCount === 0) {
 		setStatus("Junctions need a curve point with a connected road segment. Add another point to the curve first.");
 		return null;
 	}
@@ -88,19 +88,12 @@ function addJunctionAtControlPoint(pointHit) {
 function startJunctionDrag(junction, pointerId) {
 	state.selectedJunctionId = junction.id;
 	state.selectedPoint = null;
-	const groupedPoints = collectControlPointsInJunction(junction).map((record) => ({
-		point: record.point,
-		startX: record.point.x,
-		startY: record.point.y ?? 0,
-		startZ: record.point.z,
-	}));
 	state.drag = {
 		mode: "junction",
 		junctionId: junction.id,
 		pointerId,
 		startX: junction.x,
 		startZ: junction.z,
-		groupedPoints,
 	};
 	refreshInspector();
 	requestRender();
@@ -117,15 +110,8 @@ function updateDraggedJunction(localX, localY) {
 	}
 
 	const world = screenToWorld(localX, localY);
-	const dx = world.x - state.drag.startX;
-	const dz = world.z - state.drag.startZ;
 	junction.x = roundNumber(world.x, 3);
 	junction.z = roundNumber(world.z, 3);
-	for (const groupedPoint of state.drag.groupedPoints) {
-		groupedPoint.point.x = roundNumber(groupedPoint.startX + dx, 3);
-		groupedPoint.point.y = roundNumber(groupedPoint.startY, 3);
-		groupedPoint.point.z = roundNumber(groupedPoint.startZ + dz, 3);
-	}
 	markMeshPreviewDirty();
 	refreshInspector();
 	requestRender();
@@ -292,8 +278,7 @@ function collectAutoJunctionConnections(junction, records) {
 }
 
 function junctionHasCurveConnections(junction) {
-	const records = collectControlPointsInJunction(junction);
-	return records.length > 0 && collectAutoJunctionConnections(junction, records).length > 0;
+	return collectSplineJunctionHitData(junction).roadArmCount > 0;
 }
 
 function autoSelectedJunction() {
@@ -303,21 +288,20 @@ function autoSelectedJunction() {
 		return;
 	}
 
-	const records = collectControlPointsInJunction(selected);
-	if (records.length === 0) {
-		setStatus(`No control points are inside ${selected.name}'s radius.`);
+	const hitData = collectSplineJunctionHitData(selected);
+	if (hitData.hits.length === 0) {
+		setStatus(`No sampled road entrances were found inside ${selected.name}'s radius.`);
 		return;
 	}
 
-	for (const record of records) {
-		record.point.x = roundNumber(selected.x, 3);
-		record.point.y = roundNumber(selected.y ?? 0, 3);
-		record.point.z = roundNumber(selected.z, 3);
-	}
+	const center = computeJunctionCenterFromHits(hitData.hits, selected);
+	selected.x = roundNumber(center.x, 3);
+	selected.y = roundNumber(center.y ?? selected.y ?? 0, 3);
+	selected.z = roundNumber(center.z, 3);
 
 	markMeshPreviewDirty();
 	renderSplineList();
 	refreshInspector();
 	requestRender();
-	setStatus(`Auto-fit ${selected.name}: centered ${records.length} control point${records.length === 1 ? "" : "s"}. Radius is only used to choose grouped points.`);
+	setStatus(`Auto-fit ${selected.name}: centered from ${hitData.roadArmCount} sampled road arm${hitData.roadArmCount === 1 ? "" : "s"}.`);
 }

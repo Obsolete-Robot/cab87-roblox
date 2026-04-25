@@ -2,16 +2,30 @@
 
 function cloneJunctionForPreview(junction) {
 	const radius = sanitizeJunctionRadius(junction.radius);
+	const center = makePoint(junction.x, junction.z, junction.y ?? 0);
 	return {
 		id: junction.id,
 		name: junction.name,
-		center: makePoint(junction.x, junction.z, junction.y ?? 0),
+		center,
+		intersectionCenter: clonePoint(center),
 		radius,
 		blendRadius: radius,
 		subdivisions: sanitizeJunctionSubdivisions(junction.subdivisions),
 		portals: [],
 		chains: new Set(),
 	};
+}
+
+function buildSourceChainsFromSplines(splines) {
+	return (splines ?? [])
+		.filter((spline) => spline.points.length >= 2)
+		.map((spline) => ({
+			spline,
+			points: spline.points.map(clonePoint),
+			samples: samplePositions(spline.points.map(createVector), spline.closed, SAMPLE_STEP_STUDS),
+			closed: spline.closed,
+			width: spline.width,
+		}));
 }
 
 function junctionContainingPoint(point, junctions) {
@@ -180,6 +194,54 @@ function emitRoadRun(processedChains, sourceChain, runVertices) {
 	if (last.junction) {
 		addPortalForChain(last.junction, chain, last.point, beforeLast.point);
 	}
+}
+
+function countRoadArmsForHit(hit) {
+	let count = 0;
+	if (hit.path?.closed || hit.pathDistance > 0.05) {
+		count += 1;
+	}
+	if (hit.path?.closed || hit.pathDistance < hit.path.totalLength - 0.05) {
+		count += 1;
+	}
+	return count;
+}
+
+function collectSplineJunctionHitData(junction) {
+	const sourceChains = buildSourceChainsFromSplines(state.splines);
+	const paths = sourceChains.map(buildChainPath).filter(Boolean);
+	const previewJunction = cloneJunctionForPreview(junction);
+	const hits = [];
+	let roadArmCount = 0;
+
+	for (const path of paths) {
+		const hit = closestPathHit(path, previewJunction.center);
+		if (!hit || hit.distance > previewJunction.radius + JUNCTION_VERTEX_EPSILON) {
+			continue;
+		}
+		hit.junction = previewJunction;
+		hits.push(hit);
+		roadArmCount += countRoadArmsForHit(hit);
+	}
+
+	return {
+		junction: previewJunction,
+		sourceChains,
+		paths,
+		hits,
+		roadArmCount,
+	};
+}
+
+function computeJunctionCenterFromHits(hits, fallbackCenter) {
+	if (!hits || hits.length === 0) {
+		return clonePoint(fallbackCenter);
+	}
+
+	return computeExplicitJunctionCenter({
+		center: fallbackCenter,
+		hits,
+	});
 }
 
 function collectExplicitJunctionHits(paths, junctions) {
@@ -489,14 +551,13 @@ function splitPathByExplicitJunctions(processedChains, path, hits) {
 
 function applyExplicitJunctionsToChains(chains, junctions) {
 	const processedChains = [];
-	const paths = chains.map(buildChainPath).filter(Boolean);
-	const hitsByPath = collectExplicitJunctionHits(paths, junctions);
-	finalizeExplicitJunctionCenters(junctions);
 	for (const junction of junctions) {
-		assignExplicitJunctionCutDistances(junction);
+		junction.portals = [];
+		junction.chains = new Set();
+		junction.intersectionCenter = clonePoint(junction.center);
 	}
-	for (const path of paths) {
-		splitPathByExplicitJunctions(processedChains, path, hitsByPath.get(path));
+	for (const chain of chains) {
+		splitChainByExplicitJunctions(chain, junctions, processedChains);
 	}
 	finalizeJunctionPortals(junctions);
 	return processedChains;

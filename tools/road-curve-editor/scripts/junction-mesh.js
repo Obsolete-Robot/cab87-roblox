@@ -70,10 +70,20 @@ function calculateIntersectionGeometry(center, roads) {
 		.filter(Boolean)
 		.sort((a, b) => a.angle - b.angle);
 
-	const vertices = [];
 	const corners = [];
+	const vertices = [];
+	const hubPolygon = [];
+	const roadPolygons = [];
+	const roadCutDistances = new Map();
 	if (sortedRoads.length < 2) {
-		return { vertices, sortedRoads, roadCutDistances: new Map(), corners };
+		return {
+			vertices,
+			hubPolygon,
+			sortedRoads,
+			roadCutDistances,
+			corners,
+			roadPolygons,
+		};
 	}
 
 	for (let index = 0; index < sortedRoads.length; index += 1) {
@@ -118,8 +128,8 @@ function calculateIntersectionGeometry(center, roads) {
 			if (
 				intersection.tA > maxExtension
 				|| intersection.tB > maxExtension
-				|| intersection.tA < 0
-				|| intersection.tB < 0
+				|| intersection.tA < -halfWidth
+				|| intersection.tB < -nextHalfWidth
 			) {
 				const safeFromT = Math.min(maxExtension, Math.max(0, intersection.tA));
 				const safeToT = Math.min(maxExtension, Math.max(0, intersection.tB));
@@ -141,12 +151,57 @@ function calculateIntersectionGeometry(center, roads) {
 		}
 
 		corners[index] = points;
-		vertices.push(...points);
 	}
 
-	const roadCutDistances = new Map();
+	corners.forEach((points) => {
+		points.forEach((point) => {
+			hubPolygon.push(clonePoint(point));
+		});
+	});
+
 	sortedRoads.forEach((road, index) => {
 		const previousIndex = (index - 1 + sortedRoads.length) % sortedRoads.length;
+		const previousCorner = corners[previousIndex] || [];
+		const currentCorner = corners[index] || [];
+		if (previousCorner.length === 0 || currentCorner.length === 0) {
+			return;
+		}
+
+		const baseLeft = clonePoint(previousCorner[previousCorner.length - 1]);
+		const baseRight = clonePoint(currentCorner[0]);
+		const side = roadRightFromTangent(road.direction);
+		const endPoint = road.endPoint || makePoint(
+			center.x + (road.direction.x * Math.max(road.width, road.halfWidth + 30)),
+			center.z + (road.direction.z * Math.max(road.width, road.halfWidth + 30)),
+			center.y ?? 0,
+		);
+		const endLeft = makePoint(
+			endPoint.x + (side.x * road.halfWidth),
+			endPoint.z + (side.z * road.halfWidth),
+			center.y ?? 0,
+		);
+		const endRight = makePoint(
+			endPoint.x - (side.x * road.halfWidth),
+			endPoint.z - (side.z * road.halfWidth),
+			center.y ?? 0,
+		);
+
+		roadPolygons.push({
+			id: road.id,
+			road,
+			baseLeft,
+			baseRight,
+			polygon: [
+				clonePoint(baseLeft),
+				clonePoint(baseRight),
+				clonePoint(endRight),
+				clonePoint(endLeft),
+			],
+		});
+
+		vertices.push(...previousCorner.map(clonePoint));
+		vertices.push(clonePoint(endLeft), clonePoint(endRight));
+
 		const cornerPoints = [...(corners[previousIndex] || []), ...(corners[index] || [])];
 		let maxProjection = 0;
 		for (const point of cornerPoints) {
@@ -159,7 +214,14 @@ function calculateIntersectionGeometry(center, roads) {
 		roadCutDistances.set(road.id, cutDistance + 15);
 	});
 
-	return { vertices, sortedRoads, roadCutDistances, corners };
+	return {
+		vertices,
+		hubPolygon,
+		sortedRoads,
+		roadCutDistances,
+		corners,
+		roadPolygons,
+	};
 }
 
 function junctionCoreBoundaryLimit(junction) {
@@ -496,31 +558,26 @@ function applySimplifiedJunctionGeometry(junction) {
 		portal,
 	}));
 	const geometry = calculateIntersectionGeometry(center, roads);
-	if (geometry.vertices.length < 3) {
+	if (geometry.hubPolygon.length < 3) {
 		return false;
 	}
 
+	const roadPolygonsById = new Map(geometry.roadPolygons.map((roadPolygon) => [roadPolygon.id, roadPolygon]));
 	for (const road of geometry.sortedRoads) {
 		const portal = road.portal;
 		if (!portal) {
 			continue;
 		}
-		const side = roadRightFromTangent(portal.tangent);
-		const point = portal.boundaryPoint ?? portal.point;
-		portal.coreLeft = makePoint(
-			point.x - (side.x * (portal.halfWidth ?? 0)),
-			point.z - (side.z * (portal.halfWidth ?? 0)),
-			point.y ?? 0,
-		);
-		portal.coreRight = makePoint(
-			point.x + (side.x * (portal.halfWidth ?? 0)),
-			point.z + (side.z * (portal.halfWidth ?? 0)),
-			point.y ?? 0,
-		);
+		const roadPolygon = roadPolygonsById.get(road.id);
+		if (!roadPolygon) {
+			continue;
+		}
+		portal.coreLeft = clonePoint(roadPolygon.baseLeft);
+		portal.coreRight = clonePoint(roadPolygon.baseRight);
 	}
 
-	junction.coreBoundary = geometry.vertices;
-	junction.surfaceBoundary = geometry.vertices;
+	junction.coreBoundary = geometry.hubPolygon.map(clonePoint);
+	junction.surfaceBoundary = geometry.hubPolygon.map(clonePoint);
 	junction.intersectionGeometry = geometry;
 	return true;
 }
@@ -684,14 +741,51 @@ function convexHullXZ(points) {
 	return hull.length >= 3 ? hull : points;
 }
 
+function portalSectionMouthPoints(portal) {
+	const fallbackLeft = clonePoint(portal.left);
+	const fallbackRight = clonePoint(portal.right);
+	const sections = portal.chain?.sections;
+	if (!sections || sections.rowCount <= 0) {
+		return [fallbackLeft, fallbackRight];
+	}
+
+	const samples = portal.chain?.samples;
+	if (!samples || samples.length === 0) {
+		return [fallbackLeft, fallbackRight];
+	}
+
+	const startDistance = distanceXZ(samples[0], portal.boundaryPoint ?? portal.point);
+	const endDistance = distanceXZ(samples[samples.length - 1], portal.boundaryPoint ?? portal.point);
+	const rowIndex = startDistance <= endDistance ? 0 : sections.rowCount - 1;
+	let mouthLeft = sections.left?.[rowIndex];
+	let mouthRight = sections.right?.[rowIndex];
+	if (!mouthLeft || !mouthRight) {
+		return [fallbackLeft, fallbackRight];
+	}
+
+	const directDistance = distanceXZ(mouthLeft, portal.left) + distanceXZ(mouthRight, portal.right);
+	const swappedDistance = distanceXZ(mouthLeft, portal.right) + distanceXZ(mouthRight, portal.left);
+	if (swappedDistance < directDistance) {
+		[mouthLeft, mouthRight] = [mouthRight, mouthLeft];
+	}
+
+	return [clonePoint(mouthLeft), clonePoint(mouthRight)];
+}
+
 function portalConnectorPoints(portal) {
-	const coreLeft = portal.coreLeft ?? portal.left;
-	const coreRight = portal.coreRight ?? portal.right;
+	let coreLeft = clonePoint(portal.coreLeft ?? portal.left);
+	let coreRight = clonePoint(portal.coreRight ?? portal.right);
+	const [mouthLeft, mouthRight] = portalSectionMouthPoints(portal);
+	const directDistance = distanceXZ(coreLeft, mouthLeft) + distanceXZ(coreRight, mouthRight);
+	const swappedDistance = distanceXZ(coreLeft, mouthRight) + distanceXZ(coreRight, mouthLeft);
+	if (swappedDistance < directDistance) {
+		[coreLeft, coreRight] = [coreRight, coreLeft];
+	}
 	return [
-		clonePoint(coreLeft),
-		clonePoint(coreRight),
-		clonePoint(portal.left),
-		clonePoint(portal.right),
+		coreLeft,
+		coreRight,
+		mouthLeft,
+		mouthRight,
 	];
 }
 
