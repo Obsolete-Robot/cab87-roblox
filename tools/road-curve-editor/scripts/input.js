@@ -106,48 +106,15 @@ function handleCanvasPointerMove(event) {
 	}
 
 	if (state.drag.mode === "point") {
-		const record = getSelectedPointRecord();
-		if (!record) {
-			return;
-		}
-		const world = screenToWorld(localX, localY);
-		record.point.x = roundNumber(world.x, 3);
-		record.point.z = roundNumber(world.z, 3);
-		markMeshPreviewDirty();
-		refreshInspector();
-		requestRender();
+		updateDraggedPoint(localX, localY);
 	}
 
 	if (state.drag.mode === "junction") {
-		const junction = state.junctions.find((item) => item.id === state.drag.junctionId);
-		if (!junction) {
-			return;
-			}
-			const world = screenToWorld(localX, localY);
-			const dx = world.x - state.drag.startX;
-			const dz = world.z - state.drag.startZ;
-			junction.x = roundNumber(world.x, 3);
-			junction.z = roundNumber(world.z, 3);
-			for (const groupedPoint of state.drag.groupedPoints) {
-				groupedPoint.point.x = roundNumber(groupedPoint.startX + dx, 3);
-				groupedPoint.point.y = roundNumber(groupedPoint.startY, 3);
-				groupedPoint.point.z = roundNumber(groupedPoint.startZ + dz, 3);
-			}
-			markMeshPreviewDirty();
-			refreshInspector();
-			requestRender();
-		}
+		updateDraggedJunction(localX, localY);
+	}
 
 	if (state.drag.mode === "junction-radius") {
-		const junction = state.junctions.find((item) => item.id === state.drag.junctionId);
-		if (!junction) {
-			return;
-		}
-		const world = screenToWorld(localX, localY);
-		junction.radius = sanitizeJunctionRadius(distanceXZ(world, junction));
-		markMeshPreviewDirty();
-		refreshInspector();
-		requestRender();
+		updateDraggedJunctionRadius(localX, localY);
 	}
 }
 
