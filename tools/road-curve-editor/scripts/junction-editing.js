@@ -88,12 +88,19 @@ function addJunctionAtControlPoint(pointHit) {
 function startJunctionDrag(junction, pointerId) {
 	state.selectedJunctionId = junction.id;
 	state.selectedPoint = null;
+	const groupedPoints = collectControlPointsInJunction(junction).map((record) => ({
+		point: record.point,
+		startX: record.point.x,
+		startY: record.point.y ?? 0,
+		startZ: record.point.z,
+	}));
 	state.drag = {
 		mode: "junction",
 		junctionId: junction.id,
 		pointerId,
 		startX: junction.x,
 		startZ: junction.z,
+		groupedPoints,
 	};
 	refreshInspector();
 	requestRender();
@@ -110,8 +117,15 @@ function updateDraggedJunction(localX, localY) {
 	}
 
 	const world = screenToWorld(localX, localY);
+	const dx = world.x - state.drag.startX;
+	const dz = world.z - state.drag.startZ;
 	junction.x = roundNumber(world.x, 3);
 	junction.z = roundNumber(world.z, 3);
+	for (const groupedPoint of state.drag.groupedPoints ?? []) {
+		groupedPoint.point.x = roundNumber(groupedPoint.startX + dx, 3);
+		groupedPoint.point.y = roundNumber(groupedPoint.startY, 3);
+		groupedPoint.point.z = roundNumber(groupedPoint.startZ + dz, 3);
+	}
 	markMeshPreviewDirty();
 	refreshInspector();
 	requestRender();

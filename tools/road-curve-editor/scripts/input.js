@@ -43,7 +43,7 @@ function handleCanvasPointerDown(event) {
 		}
 		if (junctionHit) {
 			startJunctionDrag(junctionHit, event.pointerId);
-			setStatus(`Dragging ${junctionHit.name}.`);
+			setStatus(`Dragging ${junctionHit.name} with ${state.drag.groupedPoints.length} grouped point${state.drag.groupedPoints.length === 1 ? "" : "s"}.`);
 			elements.canvas.setPointerCapture(event.pointerId);
 			return;
 		}
@@ -53,7 +53,7 @@ function handleCanvasPointerDown(event) {
 			return;
 		}
 		startJunctionDrag(junction, event.pointerId);
-		setStatus(`Dragging ${junction.name}.`);
+		setStatus(`Dragging ${junction.name} with ${state.drag.groupedPoints.length} grouped point${state.drag.groupedPoints.length === 1 ? "" : "s"}.`);
 		elements.canvas.setPointerCapture(event.pointerId);
 		return;
 	}

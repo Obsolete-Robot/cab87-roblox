@@ -26,7 +26,7 @@ function setJunctionModeEnabled(enabled) {
 
 function getJunctionModeStatus() {
 	return state.junctionModeEnabled
-		? "Junction Mode enabled. Click an existing curve point to add, drag centers to move junctions, drag radius rings to scale, Alt-click to delete."
+		? "Junction Mode enabled. Click an existing curve point to add, drag centers to move junctions and grouped points, drag radius rings to scale, Alt-click to delete."
 		: "Junction Mode disabled.";
 }
 
