@@ -55,17 +55,12 @@
 			<section class="panel">
 				<div class="panel-header">
 					<h2>Junctions</h2>
-					<p>Use Junction Mode to add, move, delete, and resize merge nodes. Roundabouts use one node per entry on the loop.</p>
+					<p>Use Junction Mode to add, move, delete, and shape simple junctions. Radius clips the incoming roads and defines which control points move with the junction.</p>
 				</div>
 
 				<label class="field">
 					<span>Junction Radius</span>
 					<input id="junctionRadiusInput" type="number" min="6" max="220" step="1">
-				</label>
-
-				<label class="field">
-					<span>Crosswalk Length</span>
-					<input id="junctionCrosswalkLengthInput" type="number" min="0" max="80" step="1">
 				</label>
 
 				<label class="field">
@@ -140,7 +135,7 @@
 					<li>Split Curve: select an interior point on an open curve</li>
 					<li>Junction Mode: click an existing curve point to add</li>
 					<li>Junction Mode: drag center to move the junction and grouped points</li>
-					<li>Junction Mode: drag radius ring to scale, Alt-click to delete</li>
+					<li>Junction Mode: drag radius ring to change road entrance clipping, Alt-click to delete</li>
 					<li>Right drag or middle drag: pan</li>
 					<li>Mouse wheel: zoom</li>
 				</ul>
@@ -158,6 +153,19 @@
 		</main>
 	</div>
 
+	<script src="scripts/core.js"></script>
+	<script src="scripts/spline.js"></script>
+	<script src="scripts/spline-mesh.js"></script>
+	<script src="scripts/ui.js"></script>
+	<script src="scripts/image.js"></script>
+	<script src="scripts/session.js"></script>
+	<script src="scripts/junction-mesh.js"></script>
+	<script src="scripts/junction-processing.js"></script>
+	<script src="scripts/mesh.js"></script>
+	<script src="scripts/rendering.js"></script>
+	<script src="scripts/spline-editing.js"></script>
+	<script src="scripts/junction-editing.js"></script>
+	<script src="scripts/input.js"></script>
 	<script src="app.js"></script>
 </body>
 </html>

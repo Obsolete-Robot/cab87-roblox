@@ -4,6 +4,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
+local RoadJunctionGeometry = require(Shared:WaitForChild("RoadJunctionGeometry"))
 local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
@@ -163,6 +164,94 @@ local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 	junction.chains[chain] = true
 end
 
+local function closestSampleIndex(samples, point)
+	local bestIndex = nil
+	local bestDistance = math.huge
+	for index, sample in ipairs(samples or {}) do
+		local d = distanceXZ(sample, point)
+		if d < bestDistance then
+			bestIndex = index
+			bestDistance = d
+		end
+	end
+	return bestIndex, bestDistance
+end
+
+local function rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex)
+	local chainKeys = portalKeys[chain]
+	if not chainKeys then
+		chainKeys = {}
+		portalKeys[chain] = chainKeys
+	end
+
+	local key = tostring(boundaryIndex) .. ":" .. tostring(outsideIndex)
+	if chainKeys[key] then
+		return false
+	end
+	chainKeys[key] = true
+	return true
+end
+
+local function addMemberPortalForSample(portalKeys, junction, chain, boundaryIndex, outsideIndex)
+	local samples = chain and chain.samples
+	if not samples then
+		return
+	end
+
+	local boundaryPoint = samples[boundaryIndex]
+	local outsidePoint = samples[outsideIndex]
+	if not boundaryPoint or not outsidePoint or distanceXZ(boundaryPoint, outsidePoint) <= 0.05 then
+		return
+	end
+
+	if not rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex) then
+		return
+	end
+
+	addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
+end
+
+local function addMemberPortalsAroundSample(portalKeys, junction, chain, sampleIndex)
+	local samples = chain and chain.samples
+	if not samples or #samples < 2 or not sampleIndex then
+		return
+	end
+
+	if chain.closed and #samples > 2 and (sampleIndex == 1 or sampleIndex == #samples) then
+		addMemberPortalForSample(portalKeys, junction, chain, 1, 2)
+		addMemberPortalForSample(portalKeys, junction, chain, 1, #samples - 1)
+	elseif sampleIndex <= 1 then
+		addMemberPortalForSample(portalKeys, junction, chain, 1, 2)
+	elseif sampleIndex >= #samples then
+		addMemberPortalForSample(portalKeys, junction, chain, #samples, #samples - 1)
+	else
+		addMemberPortalForSample(portalKeys, junction, chain, sampleIndex, sampleIndex - 1)
+		addMemberPortalForSample(portalKeys, junction, chain, sampleIndex, sampleIndex + 1)
+	end
+end
+
+local function attachMemberJunctionPortals(junctions)
+	for _, junction in ipairs(junctions or {}) do
+		junction.portals = {}
+		junction.chains = junction.chains or {}
+		local portalKeys = {}
+		for _, member in ipairs(junction.members or {}) do
+			local chain = member.chain
+			if chain and chain.samples then
+				junction.chains[chain] = true
+				local sampleIndex = member.index
+				if sampleIndex and (not chain.samples[sampleIndex] or distanceXZ(chain.samples[sampleIndex], junction.center) > 0.1) then
+					sampleIndex = nil
+				end
+				if not sampleIndex then
+					sampleIndex = closestSampleIndex(chain.samples, junction.center)
+				end
+				addMemberPortalsAroundSample(portalKeys, junction, chain, sampleIndex)
+			end
+		end
+	end
+end
+
 local function portalLineT(portal, point)
 	return (point - portal.boundaryPoint):Dot(portal.tangent)
 end
@@ -269,7 +358,7 @@ end
 
 local function junctionCoreBoundaryLimit(junction)
 	local center = getJunctionMeshCenter(junction)
-	local limit = math.max(RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength) * 2, 8)
+	local limit = 8
 	for _, portal in ipairs(junction.portals or {}) do
 		local width = (portal.halfWidth or 0) * 2
 		limit = math.max(
@@ -398,25 +487,11 @@ local function buildJunctionCoreBoundary(junction)
 end
 
 local function buildJunctionSurfaceBoundary(junction)
-	local portals = sortedJunctionPortals(junction)
-	if #portals < 2 then
-		return {}
-	end
-
 	local boundary = {}
-	for i, portal in ipairs(portals) do
-		local nextPortal = portals[(i % #portals) + 1]
-		local right = roadRightFromTangent(portal.tangent)
-		appendOrderedJunctionPoint(boundary, portal.point + right * (portal.halfWidth or 0))
-		appendOrderedJunctionPoint(boundary, portal.point - right * (portal.halfWidth or 0))
-
-		if portal.coreLeft and nextPortal.coreRight then
-			appendOrderedJunctionPoint(boundary, portal.coreLeft)
-			appendOrderedJunctionPoint(boundary, nextPortal.coreRight)
-		end
+	for _, point in ipairs(junction.coreBoundary or {}) do
+		table.insert(boundary, point)
 	end
-
-	return finalizeOrderedJunctionBoundary(boundary)
+	return boundary
 end
 
 local function pointLineDistanceXZ(point, linePoint, lineDir)
@@ -461,15 +536,14 @@ local function boundaryPointOnPortalSide(boundary, portal, sideSign)
 end
 
 local function annotateProcessedPortalCore(junction, portal)
-	local crosswalkLength = RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength)
-	local corePoint = portal.point - portal.tangent * crosswalkLength
+	local corePoint = portal.point
 	local right = roadRightFromTangent(portal.tangent)
 	portal.boundaryPoint = corePoint
 	portal.corePoint = corePoint
 	portal.coreLeft = corePoint - right * portal.halfWidth
 	portal.coreRight = corePoint + right * portal.halfWidth
 	portal.coreT = 0
-	portal.mouthT = crosswalkLength
+	portal.mouthT = 0
 end
 
 local function updateProcessedPortalCoreGeometry(junction, portal)
@@ -488,32 +562,100 @@ local function updateProcessedPortalCoreGeometry(junction, portal)
 	portal.mouthT = portalLineT(portal, portal.point)
 end
 
+local function applySimplifiedProcessedJunctionGeometry(junction)
+	local portals = junction.portals or {}
+	if #portals < 2 then
+		return false
+	end
+
+	local center = getJunctionMeshCenter(junction)
+	local roads = {}
+	for index, portal in ipairs(portals) do
+		table.insert(roads, {
+			id = tostring(index),
+			direction = portal.tangent,
+			endPoint = portal.boundaryPoint or portal.point,
+			width = (portal.halfWidth or 0) * 2,
+			portal = portal,
+		})
+	end
+
+	local geometry = RoadJunctionGeometry.calculate(center, roads)
+	local hubPolygon = geometry.hubPolygon or {}
+	if #hubPolygon < 3 then
+		return false
+	end
+
+	local roadPolygonsById = {}
+	for _, roadPolygon in ipairs(geometry.roadPolygons or {}) do
+		roadPolygonsById[roadPolygon.id] = roadPolygon
+	end
+	for _, road in ipairs(geometry.sortedRoads) do
+		local portal = road.portal
+		local roadPolygon = roadPolygonsById[road.id]
+		if portal and roadPolygon then
+			portal.coreLeft = roadPolygon.baseLeft
+			portal.coreRight = roadPolygon.baseRight
+		end
+	end
+
+	junction.coreBoundary = {}
+	junction.surfaceBoundary = {}
+	for _, point in ipairs(hubPolygon) do
+		table.insert(junction.coreBoundary, point)
+		table.insert(junction.surfaceBoundary, point)
+	end
+	junction.intersectionGeometry = geometry
+	return true
+end
+
+local function finalizeMemberJunctionPortals(junctions)
+	for _, junction in ipairs(junctions or {}) do
+		junction.intersectionCenter = junction.center
+		local hasSimplifiedGeometry = applySimplifiedProcessedJunctionGeometry(junction)
+		if not hasSimplifiedGeometry then
+			junction.coreBoundary = buildJunctionCoreBoundary(junction)
+		end
+		for _, portal in ipairs(junction.portals or {}) do
+			updateProcessedPortalCoreGeometry(junction, portal)
+		end
+		if not hasSimplifiedGeometry then
+			junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction)
+		end
+	end
+end
+
 local function attachProcessedChainEndpointsToJunctions(chains, junctions)
+	local portalKeysByJunction = {}
 	for _, junction in ipairs(junctions) do
 		junction.portals = {}
 		junction.chains = {}
+		portalKeysByJunction[junction] = {}
 	end
 
 	for _, chain in ipairs(chains) do
 		if #chain.samples >= 2 then
 			local first = chain.samples[1]
-			local second = chain.samples[2]
 			local last = chain.samples[#chain.samples]
-			local beforeLast = chain.samples[#chain.samples - 1]
 			for _, junction in ipairs(junctions) do
 				local tolerance = math.max(1, chain.width * 0.08)
 				local attachDistance = math.max(
 					junction.radius,
 					tonumber(junction.portalAttachDistance) or 0,
-					junction.radius
-						+ RoadSplineData.sanitizeJunctionCrosswalkLength(junction.crosswalkLength)
-						+ sanitizeRoadWidth(chain.width)
+					junction.radius + sanitizeRoadWidth(chain.width)
 				) + tolerance
-				if chain.componentId == junction.componentId and distanceXZ(first, junction.center) <= attachDistance then
-					addPortalForChain(junction, chain, first, second)
-				end
-				if chain.componentId == junction.componentId and distanceXZ(last, junction.center) <= attachDistance then
-					addPortalForChain(junction, chain, last, beforeLast)
+				if chain.componentId == junction.componentId then
+					if distanceXZ(first, junction.center) <= attachDistance then
+						addMemberPortalForSample(portalKeysByJunction[junction], junction, chain, 1, 2)
+					end
+					if distanceXZ(last, junction.center) <= attachDistance then
+						addMemberPortalForSample(portalKeysByJunction[junction], junction, chain, #chain.samples, #chain.samples - 1)
+					end
+					for sampleIndex, sample in ipairs(chain.samples) do
+						if distanceXZ(sample, junction.center) <= 0.1 then
+							addMemberPortalsAroundSample(portalKeysByJunction[junction], junction, chain, sampleIndex)
+						end
+					end
 				end
 			end
 		end
@@ -524,11 +666,16 @@ local function attachProcessedChainEndpointsToJunctions(chains, junctions)
 			annotateProcessedPortalCore(junction, portal)
 		end
 		junction.intersectionCenter = junction.center
-		junction.coreBoundary = buildJunctionCoreBoundary(junction)
+		local hasSimplifiedGeometry = applySimplifiedProcessedJunctionGeometry(junction)
+		if not hasSimplifiedGeometry then
+			junction.coreBoundary = buildJunctionCoreBoundary(junction)
+		end
 		for _, portal in ipairs(junction.portals or {}) do
 			updateProcessedPortalCoreGeometry(junction, portal)
 		end
-		junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction)
+		if not hasSimplifiedGeometry then
+			junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction)
+		end
 	end
 end
 
@@ -712,7 +859,7 @@ local function mergeJunctions(rawJunctions)
 
 	local junctions = {}
 	for _, cluster in ipairs(clusters) do
-		local radius = cluster.width * INTERSECTION_RADIUS_SCALE
+		local radius = math.max(cluster.width * INTERSECTION_RADIUS_SCALE, ENDPOINT_WELD_DISTANCE * 0.5 + 1)
 		local blendRadius = math.max(cluster.width * INTERSECTION_BLEND_SCALE, radius + 0.05)
 		local chainLookup = {}
 		for _, member in ipairs(cluster.members) do
@@ -1752,10 +1899,8 @@ local function addIntersectionPatchToMesh(state, junction)
 		end
 	end
 
-	if not (junction.surfaceBoundary and #junction.surfaceBoundary >= 3) then
-		for _, portal in ipairs(junction.portals or {}) do
-			addPortalConnectorToMesh(state, portal, fallbackCenter.Y)
-		end
+	for _, portal in ipairs(junction.portals or {}) do
+		addPortalConnectorToMesh(state, portal, fallbackCenter.Y)
 	end
 end
 
@@ -1897,6 +2042,8 @@ local function buildClientRoadMesh(root, world)
 
 		junctions = mergeJunctions(rawJunctions)
 		applyJunctionsToChains(chains, junctions)
+		attachMemberJunctionPortals(junctions)
+		finalizeMemberJunctionPortals(junctions)
 	end
 
 	local oldVisuals = world:FindFirstChild(CLIENT_VISUALS_NAME)
