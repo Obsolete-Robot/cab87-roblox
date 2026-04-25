@@ -1609,22 +1609,30 @@ local function applySimplifiedJunctionGeometry(junction)
 	end
 
 	local geometry = RoadJunctionGeometry.calculate(center, roads)
-	if #geometry.vertices < 3 then
+	local hubPolygon = geometry.hubPolygon or {}
+	if #hubPolygon < 3 then
 		return false
 	end
 
+	local roadPolygonsById = {}
+	for _, roadPolygon in ipairs(geometry.roadPolygons or {}) do
+		roadPolygonsById[roadPolygon.id] = roadPolygon
+	end
 	for _, road in ipairs(geometry.sortedRoads) do
 		local portal = road.portal
-		if portal then
-			local side = roadRightFromTangent(portal.tangent)
-			local point = portal.boundaryPoint or portal.point
-			portal.coreLeft = point - side * (portal.halfWidth or 0)
-			portal.coreRight = point + side * (portal.halfWidth or 0)
+		local roadPolygon = roadPolygonsById[road.id]
+		if portal and roadPolygon then
+			portal.coreLeft = roadPolygon.baseLeft
+			portal.coreRight = roadPolygon.baseRight
 		end
 	end
 
-	junction.coreBoundary = geometry.vertices
-	junction.surfaceBoundary = geometry.vertices
+	junction.coreBoundary = {}
+	junction.surfaceBoundary = {}
+	for _, point in ipairs(hubPolygon) do
+		table.insert(junction.coreBoundary, point)
+		table.insert(junction.surfaceBoundary, point)
+	end
 	junction.intersectionGeometry = geometry
 	return true
 end

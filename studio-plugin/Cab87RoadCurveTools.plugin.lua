@@ -2767,7 +2767,11 @@ end
 local function calculateSimplifiedIntersectionGeometry(center, roads)
 	local sortedRoads = {}
 	for index, road in ipairs(roads or {}) do
-		local direction = horizontalUnit(road.direction or ((road.endPoint or center) - center))
+		local directionSource = road.direction
+		if not directionSource and road.endPoint then
+			directionSource = road.endPoint - center
+		end
+		local direction = horizontalUnit(directionSource or Vector3.zero)
 		if direction then
 			local copied = {}
 			for key, value in pairs(road) do
@@ -2787,13 +2791,17 @@ local function calculateSimplifiedIntersectionGeometry(center, roads)
 	end)
 
 	local vertices = {}
+	local hubPolygon = {}
+	local roadPolygons = {}
 	local corners = {}
 	if #sortedRoads < 2 then
 		return {
 			vertices = vertices,
+			hubPolygon = hubPolygon,
 			sortedRoads = sortedRoads,
 			roadCutDistances = {},
 			corners = corners,
+			roadPolygons = roadPolygons,
 		}
 	end
 
@@ -2823,7 +2831,7 @@ local function calculateSimplifiedIntersectionGeometry(center, roads)
 		local points = {}
 
 		if intersection then
-			if fromT > maxExtension or toT > maxExtension or fromT < 0 or toT < 0 then
+			if fromT > maxExtension or toT > maxExtension or fromT < -halfWidth or toT < -nextHalfWidth then
 				local safeFromT = math.clamp(fromT, 0, maxExtension)
 				local safeToT = math.clamp(toT, 0, maxExtension)
 				table.insert(points, Vector3.new(
@@ -2845,8 +2853,11 @@ local function calculateSimplifiedIntersectionGeometry(center, roads)
 		end
 
 		corners[index] = points
+	end
+
+	for _, points in ipairs(corners) do
 		for _, point in ipairs(points) do
-			table.insert(vertices, point)
+			table.insert(hubPolygon, point)
 		end
 	end
 
@@ -2857,11 +2868,49 @@ local function calculateSimplifiedIntersectionGeometry(center, roads)
 			previousIndex = #sortedRoads
 		end
 
+		local previousCorner = corners[previousIndex] or {}
+		local currentCorner = corners[index] or {}
+		if #previousCorner > 0 and #currentCorner > 0 then
+			local baseLeft = previousCorner[#previousCorner]
+			local baseRight = currentCorner[1]
+			local side = roadRightFromTangent(road.direction)
+			local endPoint = road.endPoint or (center + road.direction * math.max(road.width, road.halfWidth + 30))
+			local endLeft = Vector3.new(
+				endPoint.X + side.X * road.halfWidth,
+				center.Y,
+				endPoint.Z + side.Z * road.halfWidth
+			)
+			local endRight = Vector3.new(
+				endPoint.X - side.X * road.halfWidth,
+				center.Y,
+				endPoint.Z - side.Z * road.halfWidth
+			)
+
+			table.insert(roadPolygons, {
+				id = road.id,
+				road = road,
+				baseLeft = baseLeft,
+				baseRight = baseRight,
+				polygon = {
+					baseLeft,
+					baseRight,
+					endRight,
+					endLeft,
+				},
+			})
+
+			for _, point in ipairs(previousCorner) do
+				table.insert(vertices, point)
+			end
+			table.insert(vertices, endLeft)
+			table.insert(vertices, endRight)
+		end
+
 		local maxProjection = 0
-		for _, point in ipairs(corners[previousIndex] or {}) do
+		for _, point in ipairs(previousCorner) do
 			maxProjection = math.max(maxProjection, (point - center):Dot(road.direction))
 		end
-		for _, point in ipairs(corners[index] or {}) do
+		for _, point in ipairs(currentCorner) do
 			maxProjection = math.max(maxProjection, (point - center):Dot(road.direction))
 		end
 
@@ -2870,9 +2919,11 @@ local function calculateSimplifiedIntersectionGeometry(center, roads)
 
 	return {
 		vertices = vertices,
+		hubPolygon = hubPolygon,
 		sortedRoads = sortedRoads,
 		roadCutDistances = roadCutDistances,
 		corners = corners,
+		roadPolygons = roadPolygons,
 	}
 end
 
@@ -3160,22 +3211,30 @@ local function applySimplifiedJunctionGeometry(junction)
 	end
 
 	local geometry = calculateSimplifiedIntersectionGeometry(getJunctionMeshCenter(junction), roads)
-	if #geometry.vertices < 3 then
+	local hubPolygon = geometry.hubPolygon or {}
+	if #hubPolygon < 3 then
 		return false
 	end
 
+	local roadPolygonsById = {}
+	for _, roadPolygon in ipairs(geometry.roadPolygons or {}) do
+		roadPolygonsById[roadPolygon.id] = roadPolygon
+	end
 	for _, road in ipairs(geometry.sortedRoads) do
 		local portal = road.portal
-		if portal then
-			local side = roadRightFromTangent(portal.tangent)
-			local point = portal.boundaryPoint or portal.point
-			portal.coreLeft = point - side * (portal.halfWidth or 0)
-			portal.coreRight = point + side * (portal.halfWidth or 0)
+		local roadPolygon = roadPolygonsById[road.id]
+		if portal and roadPolygon then
+			portal.coreLeft = roadPolygon.baseLeft
+			portal.coreRight = roadPolygon.baseRight
 		end
 	end
 
-	junction.coreBoundary = geometry.vertices
-	junction.surfaceBoundary = geometry.vertices
+	junction.coreBoundary = {}
+	junction.surfaceBoundary = {}
+	for _, point in ipairs(hubPolygon) do
+		table.insert(junction.coreBoundary, point)
+		table.insert(junction.surfaceBoundary, point)
+	end
 	junction.intersectionGeometry = geometry
 	return true
 end

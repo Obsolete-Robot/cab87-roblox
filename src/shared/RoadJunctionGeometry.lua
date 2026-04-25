@@ -74,14 +74,18 @@ function RoadJunctionGeometry.calculate(center, roads)
 	local sortedRoads = copySortedRoads(center, roads)
 	local roadCount = #sortedRoads
 	local vertices = {}
+	local hubPolygon = {}
+	local roadPolygons = {}
 	local corners = {}
 
 	if roadCount < 2 then
 		return {
 			vertices = vertices,
+			hubPolygon = hubPolygon,
 			sortedRoads = sortedRoads,
 			roadCutDistances = {},
 			corners = corners,
+			roadPolygons = roadPolygons,
 		}
 	end
 
@@ -93,10 +97,9 @@ function RoadJunctionGeometry.calculate(center, roads)
 		local nextSide = roadSideFromDirection(nextDirection)
 		local halfWidth = road.halfWidth
 		local nextHalfWidth = nextRoad.halfWidth
-
 		local endPoint = road.endPoint
 		if typeof(endPoint) ~= "Vector3" then
-			endPoint = center + direction * math.max(halfWidth + CUT_PADDING_NEAR + CUT_PADDING_FAR, road.width)
+			endPoint = center + direction * math.max(road.width, halfWidth + CUT_PADDING_NEAR + CUT_PADDING_FAR)
 		end
 
 		table.insert(vertices, Vector3.new(
@@ -125,7 +128,7 @@ function RoadJunctionGeometry.calculate(center, roads)
 		local intersection, fromT, toT = lineIntersectionWithParametersXZ(fromSide, direction, toSide, nextDirection)
 
 		if intersection then
-			if fromT > maxExtension or toT > maxExtension or fromT < 0 or toT < 0 then
+			if fromT > maxExtension or toT > maxExtension or fromT < -halfWidth or toT < -nextHalfWidth then
 				local safeFromT = math.clamp(fromT, 0, maxExtension)
 				local safeToT = math.clamp(toT, 0, maxExtension)
 				table.insert(cornerPoints, Vector3.new(
@@ -147,24 +150,68 @@ function RoadJunctionGeometry.calculate(center, roads)
 		end
 
 		corners[index] = cornerPoints
-		for _, point in ipairs(cornerPoints) do
-			table.insert(vertices, point)
+	end
+
+	for _, points in ipairs(corners) do
+		for _, point in ipairs(points) do
+			table.insert(hubPolygon, point)
 		end
 	end
 
 	local roadCutDistances = {}
 	for index, road in ipairs(sortedRoads) do
-		local maxProjection = 0
 		local previousIndex = index - 1
 		if previousIndex < 1 then
 			previousIndex = roadCount
 		end
 
+		local previousCorner = corners[previousIndex] or {}
+		local currentCorner = corners[index] or {}
+		if #previousCorner > 0 and #currentCorner > 0 then
+			local baseLeft = previousCorner[#previousCorner]
+			local baseRight = currentCorner[1]
+			local side = roadSideFromDirection(road.direction)
+			local endPoint = road.endPoint
+			if typeof(endPoint) ~= "Vector3" then
+				endPoint = center + road.direction * math.max(road.width, road.halfWidth + CUT_PADDING_NEAR + CUT_PADDING_FAR)
+			end
+			local endLeft = Vector3.new(
+				endPoint.X + side.X * road.halfWidth,
+				center.Y,
+				endPoint.Z + side.Z * road.halfWidth
+			)
+			local endRight = Vector3.new(
+				endPoint.X - side.X * road.halfWidth,
+				center.Y,
+				endPoint.Z - side.Z * road.halfWidth
+			)
+
+			table.insert(roadPolygons, {
+				id = road.id,
+				road = road,
+				baseLeft = baseLeft,
+				baseRight = baseRight,
+				polygon = {
+					baseLeft,
+					baseRight,
+					endRight,
+					endLeft,
+				},
+			})
+
+			for _, point in ipairs(previousCorner) do
+				table.insert(vertices, point)
+			end
+			table.insert(vertices, endLeft)
+			table.insert(vertices, endRight)
+		end
+
+		local maxProjection = 0
 		local cornerPoints = {}
-		for _, point in ipairs(corners[previousIndex] or {}) do
+		for _, point in ipairs(previousCorner) do
 			table.insert(cornerPoints, point)
 		end
-		for _, point in ipairs(corners[index] or {}) do
+		for _, point in ipairs(currentCorner) do
 			table.insert(cornerPoints, point)
 		end
 
@@ -181,9 +228,11 @@ function RoadJunctionGeometry.calculate(center, roads)
 
 	return {
 		vertices = vertices,
+		hubPolygon = hubPolygon,
 		sortedRoads = sortedRoads,
 		roadCutDistances = roadCutDistances,
 		corners = corners,
+		roadPolygons = roadPolygons,
 	}
 end
 
