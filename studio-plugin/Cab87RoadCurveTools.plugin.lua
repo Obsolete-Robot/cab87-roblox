@@ -26,10 +26,6 @@ local JUNCTION_RADIUS = 22
 local JUNCTION_MIN_RADIUS = 6
 local JUNCTION_MAX_RADIUS = 220
 local JUNCTION_RADIUS_STEP = 4
-local JUNCTION_CROSSWALK_LENGTH = 8
-local JUNCTION_MIN_CROSSWALK_LENGTH = 0
-local JUNCTION_MAX_CROSSWALK_LENGTH = 80
-local JUNCTION_CROSSWALK_LENGTH_STEP = 1
 local JUNCTION_SUBDIVISIONS = 0
 local JUNCTION_MIN_SUBDIVISIONS = 0
 local JUNCTION_MAX_SUBDIVISIONS = 12
@@ -88,7 +84,6 @@ local bulkImportInProgress = false
 local wireframeEnabled = plugin:GetSetting("cab87_road_wireframe") == true
 local importPlaneY = plugin:GetSetting(IMPORT_PLANE_Y_SETTING)
 local defaultJunctionRadius = JUNCTION_RADIUS
-local defaultJunctionCrosswalkLength = JUNCTION_CROSSWALK_LENGTH
 local defaultJunctionSubdivisions = JUNCTION_SUBDIVISIONS
 local lastWireframeEdges = {}
 
@@ -124,14 +119,6 @@ local function sanitizeJunctionRadius(value)
 		return JUNCTION_RADIUS
 	end
 	return math.clamp(radius, JUNCTION_MIN_RADIUS, JUNCTION_MAX_RADIUS)
-end
-
-local function sanitizeJunctionCrosswalkLength(value)
-	local length = tonumber(value)
-	if not length then
-		return JUNCTION_CROSSWALK_LENGTH
-	end
-	return math.clamp(length, JUNCTION_MIN_CROSSWALK_LENGTH, JUNCTION_MAX_CROSSWALK_LENGTH)
 end
 
 local function sanitizeJunctionSubdivisions(value)
@@ -464,10 +451,9 @@ local function sortedJunctions()
 	return junctions
 end
 
-local function createJunctionPart(parent, name, pos, radius, subdivisions, crosswalkLength)
+local function createJunctionPart(parent, name, pos, radius, subdivisions)
 	radius = sanitizeJunctionRadius(radius)
 	subdivisions = sanitizeJunctionSubdivisions(subdivisions)
-	crosswalkLength = sanitizeJunctionCrosswalkLength(crosswalkLength)
 	local part = Instance.new("Part")
 	part.Name = name
 	part.Shape = Enum.PartType.Ball
@@ -482,26 +468,25 @@ local function createJunctionPart(parent, name, pos, radius, subdivisions, cross
 	part.Position = pos
 	part.Locked = false
 	part:SetAttribute("Radius", radius)
-	part:SetAttribute("CrosswalkLength", crosswalkLength)
 	part:SetAttribute("Subdivisions", subdivisions)
 	part:SetAttribute(MARKER_TYPE_ATTR, "RoadJunction")
 	part.Parent = parent
 	return part
 end
 
-local function addJunction(pos, radius, subdivisions, crosswalkLength)
+local function addJunction(pos, radius, subdivisions)
 	local folder = getOrCreateJunctionsFolder()
-	return createJunctionPart(folder, junctionName(#sortedJunctions() + 1), pos, radius, subdivisions, crosswalkLength)
+	return createJunctionPart(folder, junctionName(#sortedJunctions() + 1), pos, radius, subdivisions)
 end
 
 local positionHasConnectedControlPoint
 
-local function addConnectedJunction(pos, radius, subdivisions, crosswalkLength)
+local function addConnectedJunction(pos, radius, subdivisions)
 	radius = sanitizeJunctionRadius(radius)
 	if not positionHasConnectedControlPoint(pos, radius) then
 		return nil, "Junctions must overlap an existing curve point with a connected road segment"
 	end
-	return addJunction(pos, radius, subdivisions, crosswalkLength), nil
+	return addJunction(pos, radius, subdivisions), nil
 end
 
 local function getSelectedJunction()
@@ -522,14 +507,6 @@ local function getActiveJunctionRadius()
 		return sanitizeJunctionRadius(selected:GetAttribute("Radius"))
 	end
 	return defaultJunctionRadius
-end
-
-local function getActiveJunctionCrosswalkLength()
-	local selected = getSelectedJunction()
-	if selected then
-		return sanitizeJunctionCrosswalkLength(selected:GetAttribute("CrosswalkLength"))
-	end
-	return defaultJunctionCrosswalkLength
 end
 
 local function getActiveJunctionSubdivisions()
@@ -729,15 +706,6 @@ local function formatJunctionRadius(radius)
 	return string.format("%.1f", radius)
 end
 
-local function formatJunctionCrosswalkLength(length)
-	length = sanitizeJunctionCrosswalkLength(length)
-	local rounded = math.floor(length + 0.5)
-	if math.abs(length - rounded) < 0.01 then
-		return tostring(rounded)
-	end
-	return string.format("%.1f", length)
-end
-
 local function formatJunctionSubdivisions(subdivisions)
 	return tostring(sanitizeJunctionSubdivisions(subdivisions))
 end
@@ -856,7 +824,6 @@ local function parseImportedCurveJson(contents, planeY)
 					table.insert(summary.importedJunctions, {
 						position = Vector3.new(x, planeY + y, z),
 						radius = sanitizeJunctionRadius(junctionData.radius),
-						crosswalkLength = sanitizeJunctionCrosswalkLength(junctionData.crosswalkLength),
 						subdivisions = sanitizeJunctionSubdivisions(junctionData.subdivisions),
 					})
 					summary.importedJunctionCount += 1
@@ -2240,17 +2207,14 @@ local function collectAuthoredJunctions()
 	local junctions = {}
 	for _, junctionPart in ipairs(sortedJunctions()) do
 		local radius = sanitizeJunctionRadius(junctionPart:GetAttribute("Radius"))
-		local crosswalkLength = sanitizeJunctionCrosswalkLength(junctionPart:GetAttribute("CrosswalkLength"))
 		local subdivisions = sanitizeJunctionSubdivisions(junctionPart:GetAttribute("Subdivisions"))
 		junctionPart:SetAttribute("Radius", radius)
-		junctionPart:SetAttribute("CrosswalkLength", crosswalkLength)
 		junctionPart:SetAttribute("Subdivisions", subdivisions)
 		table.insert(junctions, {
 			instance = junctionPart,
 			name = junctionPart.Name,
 			center = junctionPart.Position,
 			radius = radius,
-			crosswalkLength = crosswalkLength,
 			blendRadius = radius,
 			subdivisions = subdivisions,
 			portals = {},
@@ -2544,6 +2508,46 @@ local function finalizeExplicitJunctionCenters(junctions)
 	end
 end
 
+local function getJunctionCutDistanceFallback(hit)
+	local width = hit and hit.chain and hit.chain.width or ROAD_WIDTH
+	return sanitizeRoadWidth(width) * 0.5 + 30
+end
+
+local function assignExplicitJunctionCutDistances(junction)
+	local roads = {}
+	for hitIndex, hit in ipairs(junction.hits or {}) do
+		local path = hit.path
+		local lineDir = horizontalUnit(hit.lineDir or Vector3.zAxis) or Vector3.zAxis
+		hit.beforeRoadId = string.format("%d:before", hitIndex)
+		hit.afterRoadId = string.format("%d:after", hitIndex)
+		hit.hasBeforeRoad = path and (path.closed or hit.pathDistance > 0.05) or false
+		hit.hasAfterRoad = path and (path.closed or hit.pathDistance < path.totalLength - 0.05) or false
+
+		if hit.hasBeforeRoad then
+			table.insert(roads, {
+				id = hit.beforeRoadId,
+				direction = -lineDir,
+				width = hit.chain and hit.chain.width or ROAD_WIDTH,
+			})
+		end
+		if hit.hasAfterRoad then
+			table.insert(roads, {
+				id = hit.afterRoadId,
+				direction = lineDir,
+				width = hit.chain and hit.chain.width or ROAD_WIDTH,
+			})
+		end
+	end
+
+	local geometry = calculateSimplifiedIntersectionGeometry(junction.intersectionCenter or junction.center, roads)
+	junction.cutGeometry = geometry
+	for _, hit in ipairs(junction.hits or {}) do
+		local fallback = getJunctionCutDistanceFallback(hit)
+		hit.beforeCutDistance = hit.hasBeforeRoad and (geometry.roadCutDistances[hit.beforeRoadId] or fallback) or 0
+		hit.afterCutDistance = hit.hasAfterRoad and (geometry.roadCutDistances[hit.afterRoadId] or fallback) or 0
+	end
+end
+
 local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 	if not junction or not chain or not outsidePoint then
 		return
@@ -2566,6 +2570,94 @@ local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 		right = boundaryPoint + right * halfWidth,
 	})
 	junction.chains[chain] = true
+end
+
+local function closestSampleIndex(samples, point)
+	local bestIndex = nil
+	local bestDistance = math.huge
+	for index, sample in ipairs(samples or {}) do
+		local d = distanceXZ(sample, point)
+		if d < bestDistance then
+			bestIndex = index
+			bestDistance = d
+		end
+	end
+	return bestIndex, bestDistance
+end
+
+local function rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex)
+	local chainKeys = portalKeys[chain]
+	if not chainKeys then
+		chainKeys = {}
+		portalKeys[chain] = chainKeys
+	end
+
+	local key = tostring(boundaryIndex) .. ":" .. tostring(outsideIndex)
+	if chainKeys[key] then
+		return false
+	end
+	chainKeys[key] = true
+	return true
+end
+
+local function addMemberPortalForSample(portalKeys, junction, chain, boundaryIndex, outsideIndex)
+	local samples = chain and chain.samples
+	if not samples then
+		return
+	end
+
+	local boundaryPoint = samples[boundaryIndex]
+	local outsidePoint = samples[outsideIndex]
+	if not boundaryPoint or not outsidePoint or distanceXZ(boundaryPoint, outsidePoint) <= 0.05 then
+		return
+	end
+
+	if not rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex) then
+		return
+	end
+
+	addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
+end
+
+local function addMemberPortalsAroundSample(portalKeys, junction, chain, sampleIndex)
+	local samples = chain and chain.samples
+	if not samples or #samples < 2 or not sampleIndex then
+		return
+	end
+
+	if chain.closed and #samples > 2 and (sampleIndex == 1 or sampleIndex == #samples) then
+		addMemberPortalForSample(portalKeys, junction, chain, 1, 2)
+		addMemberPortalForSample(portalKeys, junction, chain, 1, #samples - 1)
+	elseif sampleIndex <= 1 then
+		addMemberPortalForSample(portalKeys, junction, chain, 1, 2)
+	elseif sampleIndex >= #samples then
+		addMemberPortalForSample(portalKeys, junction, chain, #samples, #samples - 1)
+	else
+		addMemberPortalForSample(portalKeys, junction, chain, sampleIndex, sampleIndex - 1)
+		addMemberPortalForSample(portalKeys, junction, chain, sampleIndex, sampleIndex + 1)
+	end
+end
+
+local function attachMemberJunctionPortals(junctions)
+	for _, junction in ipairs(junctions or {}) do
+		junction.portals = {}
+		junction.chains = junction.chains or {}
+		local portalKeys = {}
+		for _, member in ipairs(junction.members or {}) do
+			local chain = member.chain
+			if chain and chain.samples then
+				junction.chains[chain] = true
+				local sampleIndex = member.index
+				if sampleIndex and (not chain.samples[sampleIndex] or distanceXZ(chain.samples[sampleIndex], junction.center) > 0.1) then
+					sampleIndex = nil
+				end
+				if not sampleIndex then
+					sampleIndex = closestSampleIndex(chain.samples, junction.center)
+				end
+				addMemberPortalsAroundSample(portalKeys, junction, chain, sampleIndex)
+			end
+		end
+	end
 end
 
 local function portalLineT(portal, point)
@@ -2670,6 +2762,118 @@ local function lineIntersectionWithParametersXZ(a, dirA, b, dirB)
 	local tA = (dx * dirB.Z - dz * dirB.X) / denom
 	local tB = (dx * dirA.Z - dz * dirA.X) / denom
 	return Vector3.new(a.X + dirA.X * tA, a.Y, a.Z + dirA.Z * tA), tA, tB
+end
+
+local function calculateSimplifiedIntersectionGeometry(center, roads)
+	local sortedRoads = {}
+	for index, road in ipairs(roads or {}) do
+		local direction = horizontalUnit(road.direction or ((road.endPoint or center) - center))
+		if direction then
+			local copied = {}
+			for key, value in pairs(road) do
+				copied[key] = value
+			end
+			copied.id = copied.id or tostring(index)
+			copied.width = sanitizeRoadWidth(copied.width)
+			copied.halfWidth = copied.width * 0.5
+			copied.direction = direction
+			copied.angle = math.atan2(direction.Z, direction.X)
+			table.insert(sortedRoads, copied)
+		end
+	end
+
+	table.sort(sortedRoads, function(a, b)
+		return a.angle < b.angle
+	end)
+
+	local vertices = {}
+	local corners = {}
+	if #sortedRoads < 2 then
+		return {
+			vertices = vertices,
+			sortedRoads = sortedRoads,
+			roadCutDistances = {},
+			corners = corners,
+		}
+	end
+
+	for index, road in ipairs(sortedRoads) do
+		local nextRoad = sortedRoads[(index % #sortedRoads) + 1]
+		local side = roadRightFromTangent(road.direction)
+		local nextSide = roadRightFromTangent(nextRoad.direction)
+		local halfWidth = road.halfWidth
+		local nextHalfWidth = nextRoad.halfWidth
+		local endPoint = road.endPoint or (center + road.direction * math.max(road.width, halfWidth + 30))
+
+		table.insert(vertices, Vector3.new(
+			endPoint.X + side.X * halfWidth,
+			center.Y,
+			endPoint.Z + side.Z * halfWidth
+		))
+		table.insert(vertices, Vector3.new(
+			endPoint.X - side.X * halfWidth,
+			center.Y,
+			endPoint.Z - side.Z * halfWidth
+		))
+
+		local fromSide = Vector3.new(center.X - side.X * halfWidth, center.Y, center.Z - side.Z * halfWidth)
+		local toSide = Vector3.new(center.X + nextSide.X * nextHalfWidth, center.Y, center.Z + nextSide.Z * nextHalfWidth)
+		local intersection, fromT, toT = lineIntersectionWithParametersXZ(fromSide, road.direction, toSide, nextRoad.direction)
+		local maxExtension = math.max(halfWidth, nextHalfWidth) * 1.5 + 50
+		local points = {}
+
+		if intersection then
+			if fromT > maxExtension or toT > maxExtension or fromT < 0 or toT < 0 then
+				local safeFromT = math.clamp(fromT, 0, maxExtension)
+				local safeToT = math.clamp(toT, 0, maxExtension)
+				table.insert(points, Vector3.new(
+					fromSide.X + road.direction.X * safeFromT,
+					center.Y,
+					fromSide.Z + road.direction.Z * safeFromT
+				))
+				table.insert(points, Vector3.new(
+					toSide.X + nextRoad.direction.X * safeToT,
+					center.Y,
+					toSide.Z + nextRoad.direction.Z * safeToT
+				))
+			else
+				table.insert(points, Vector3.new(intersection.X, center.Y, intersection.Z))
+			end
+		else
+			table.insert(points, fromSide)
+			table.insert(points, toSide)
+		end
+
+		corners[index] = points
+		for _, point in ipairs(points) do
+			table.insert(vertices, point)
+		end
+	end
+
+	local roadCutDistances = {}
+	for index, road in ipairs(sortedRoads) do
+		local previousIndex = index - 1
+		if previousIndex < 1 then
+			previousIndex = #sortedRoads
+		end
+
+		local maxProjection = 0
+		for _, point in ipairs(corners[previousIndex] or {}) do
+			maxProjection = math.max(maxProjection, (point - center):Dot(road.direction))
+		end
+		for _, point in ipairs(corners[index] or {}) do
+			maxProjection = math.max(maxProjection, (point - center):Dot(road.direction))
+		end
+
+		roadCutDistances[road.id] = math.max(maxProjection, road.halfWidth) + 30
+	end
+
+	return {
+		vertices = vertices,
+		sortedRoads = sortedRoads,
+		roadCutDistances = roadCutDistances,
+		corners = corners,
+	}
 end
 
 local function junctionCoreBoundaryLimit(junction)
@@ -2938,15 +3142,73 @@ local function trimChainEndpointToPortal(junction, portal)
 	end
 end
 
+local function applySimplifiedJunctionGeometry(junction)
+	local portals = junction.portals or {}
+	if #portals < 2 then
+		return false
+	end
+
+	local roads = {}
+	for index, portal in ipairs(portals) do
+		table.insert(roads, {
+			id = tostring(index),
+			direction = portal.tangent,
+			endPoint = portal.boundaryPoint or portal.point,
+			width = (portal.halfWidth or 0) * 2,
+			portal = portal,
+		})
+	end
+
+	local geometry = calculateSimplifiedIntersectionGeometry(getJunctionMeshCenter(junction), roads)
+	if #geometry.vertices < 3 then
+		return false
+	end
+
+	for _, road in ipairs(geometry.sortedRoads) do
+		local portal = road.portal
+		if portal then
+			local side = roadRightFromTangent(portal.tangent)
+			local point = portal.boundaryPoint or portal.point
+			portal.coreLeft = point - side * (portal.halfWidth or 0)
+			portal.coreRight = point + side * (portal.halfWidth or 0)
+		end
+	end
+
+	junction.coreBoundary = geometry.vertices
+	junction.surfaceBoundary = geometry.vertices
+	junction.intersectionGeometry = geometry
+	return true
+end
+
 local function finalizeJunctionPortals(junctions)
 	for _, junction in ipairs(junctions) do
-		junction.coreBoundary = buildJunctionCoreBoundary(junction)
+		local hasSimplifiedGeometry = applySimplifiedJunctionGeometry(junction)
+		if not hasSimplifiedGeometry then
+			junction.coreBoundary = buildJunctionCoreBoundary(junction)
+		end
 		for _, portal in ipairs(junction.portals or {}) do
 			updatePortalGeometry(junction, portal)
 		end
-		junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction)
+		if not hasSimplifiedGeometry then
+			junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction)
+		end
 		for _, portal in ipairs(junction.portals or {}) do
 			trimChainEndpointToPortal(junction, portal)
+		end
+	end
+end
+
+local function finalizeAutomaticJunctionPortals(junctions)
+	for _, junction in ipairs(junctions) do
+		local hasSimplifiedGeometry = applySimplifiedJunctionGeometry(junction)
+		if not hasSimplifiedGeometry then
+			junction.coreBoundary = buildJunctionCoreBoundary(junction)
+		end
+		for _, portal in ipairs(junction.portals or {}) do
+			updatePortalGeometry(junction, portal)
+		end
+		if not hasSimplifiedGeometry then
+			junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction)
 		end
 	end
 end
@@ -3007,9 +3269,8 @@ local function splitOpenPathByExplicitHits(processedChains, path, hits)
 	local cursor = 0
 	local startPortal = nil
 	for _, hit in ipairs(hits) do
-		local cutDistance = math.max(sanitizeJunctionRadius(hit.junction.radius), 0)
-		local beforeDistance = math.max(0, hit.pathDistance - cutDistance)
-		local afterDistance = math.min(path.totalLength, hit.pathDistance + cutDistance)
+		local beforeDistance = math.max(0, hit.pathDistance - math.max(hit.beforeCutDistance or 0, 0))
+		local afterDistance = math.min(path.totalLength, hit.pathDistance + math.max(hit.afterCutDistance or 0, 0))
 
 		if beforeDistance > cursor + 0.05 then
 			emitExplicitRoadRun(
@@ -3041,8 +3302,8 @@ local function splitClosedPathByExplicitHits(processedChains, path, hits)
 
 	for i, hit in ipairs(hits) do
 		local nextHit = hits[(i % #hits) + 1]
-		local hitCutDistance = math.max(sanitizeJunctionRadius(hit.junction.radius), 0)
-		local nextCutDistance = math.max(sanitizeJunctionRadius(nextHit.junction.radius), 0)
+		local hitCutDistance = math.max(hit.afterCutDistance or 0, 0)
+		local nextCutDistance = math.max(nextHit.beforeCutDistance or 0, 0)
 		local startDistance = (hit.pathDistance + hitCutDistance) % path.totalLength
 		local endDistance = (nextHit.pathDistance - nextCutDistance) % path.totalLength
 		local effectiveEnd = endDistance
@@ -3197,6 +3458,9 @@ local function applyExplicitJunctionsToChains(chains, junctions)
 
 	local hitsByPath = collectExplicitJunctionHits(paths, junctions)
 	finalizeExplicitJunctionCenters(junctions)
+	for _, junction in ipairs(junctions) do
+		assignExplicitJunctionCutDistances(junction)
+	end
 	for _, path in ipairs(paths) do
 		splitPathByExplicitJunctions(processedChains, path, hitsByPath[path])
 	end
@@ -3358,7 +3622,7 @@ local function mergeJunctions(rawJunctions)
 
 	local junctions = {}
 	for _, cluster in ipairs(clusters) do
-		local radius = cluster.width * INTERSECTION_RADIUS_SCALE
+		local radius = math.max(cluster.width * INTERSECTION_RADIUS_SCALE, ENDPOINT_WELD_DISTANCE * 0.5 + 1)
 		local blendRadius = math.max(cluster.width * INTERSECTION_BLEND_SCALE, radius + 0.05)
 		local chainLookup = {}
 		for _, member in ipairs(cluster.members) do
@@ -3558,6 +3822,57 @@ local function buildRoadComponents(chains, junctions)
 	return components
 end
 
+local function collectAutomaticJunctions(chains)
+	local rawJunctions = collectEndpointJunctions(chains)
+	for _, junction in ipairs(collectCrossIntersections(chains)) do
+		table.insert(rawJunctions, junction)
+	end
+
+	local junctions = mergeJunctions(rawJunctions)
+	for index, junction in ipairs(junctions) do
+		junction.name = string.format("AutoJunction%04d", index)
+		junction.automatic = true
+	end
+	return junctions
+end
+
+local function authoredJunctionSuppressionRadius(junction)
+	local center = junction.intersectionCenter or junction.center
+	local radius = junction.radius or 0
+	for _, portal in ipairs(junction.portals or {}) do
+		local point = portal.boundaryPoint or portal.point or center
+		radius = math.max(radius, distanceXZ(point, center) + (portal.halfWidth or 0))
+	end
+	return radius
+end
+
+local function mergeAuthoredAndAutomaticJunctions(authoredJunctions, automaticJunctions)
+	local junctions = {}
+	for _, junction in ipairs(authoredJunctions or {}) do
+		table.insert(junctions, junction)
+	end
+
+	for _, automatic in ipairs(automaticJunctions or {}) do
+		local duplicate = false
+		for _, authored in ipairs(authoredJunctions or {}) do
+			local duplicateDistance = math.max(
+				(automatic.width or ROAD_WIDTH) * 0.5,
+				automatic.radius or 0,
+				authoredJunctionSuppressionRadius(authored)
+			)
+			if distanceXZ(automatic.center, authored.center) <= duplicateDistance then
+				duplicate = true
+				break
+			end
+		end
+		if not duplicate then
+			table.insert(junctions, automatic)
+		end
+	end
+
+	return junctions
+end
+
 local function buildRoadNetworkMeshes(chains, junctions, targetModel)
 	local components = buildRoadComponents(chains, junctions)
 	local totalSpans = 0
@@ -3617,9 +3932,24 @@ local function rebuildRoadMeshPreferred()
 
 	local tempNetwork = createTemporaryNetworkModel()
 
-	local junctions = collectAuthoredJunctions()
-	chains = applyExplicitJunctionsToChains(chains, junctions)
-	roadDebugLog("rebuild authored junctions: junctions=%d processedChains=%d", #junctions, #chains)
+	local authoredJunctions = collectAuthoredJunctions()
+	chains = applyExplicitJunctionsToChains(chains, authoredJunctions)
+	local automaticJunctions = collectAutomaticJunctions(chains)
+	local junctions = mergeAuthoredAndAutomaticJunctions(authoredJunctions, automaticJunctions)
+	automaticJunctions = {}
+	for index = #authoredJunctions + 1, #junctions do
+		table.insert(automaticJunctions, junctions[index])
+	end
+	applyJunctionsToChains(chains, automaticJunctions)
+	attachMemberJunctionPortals(automaticJunctions)
+	finalizeAutomaticJunctionPortals(automaticJunctions)
+	roadDebugLog(
+		"rebuild junctions: authored=%d automatic=%d active=%d processedChains=%d",
+		#authoredJunctions,
+		#automaticJunctions,
+		#junctions,
+		#chains
+	)
 
 	local okMesh, meshInfo = buildRoadNetworkMeshes(chains, junctions, tempNetwork)
 	local totalSpans = 0
@@ -3960,10 +4290,6 @@ local junctionRadiusRow = makeControlRow()
 local btnJunctionRadiusDown = makeInlineButton(junctionRadiusRow, "-4", 42)
 local junctionRadiusInput = makeTextBox(junctionRadiusRow, "Junction radius")
 local btnJunctionRadiusUp = makeInlineButton(junctionRadiusRow, "+4", 42)
-local junctionCrosswalkRow = makeControlRow()
-local btnJunctionCrosswalkDown = makeInlineButton(junctionCrosswalkRow, "-1", 42)
-local junctionCrosswalkInput = makeTextBox(junctionCrosswalkRow, "Crosswalk length")
-local btnJunctionCrosswalkUp = makeInlineButton(junctionCrosswalkRow, "+1", 42)
 local junctionSubdivisionsRow = makeControlRow()
 local btnJunctionSubdivisionsDown = makeInlineButton(junctionSubdivisionsRow, "-1", 42)
 local junctionSubdivisionsInput = makeTextBox(junctionSubdivisionsRow, "Junction subdivisions")
@@ -4010,10 +4336,6 @@ end
 
 local function refreshJunctionRadiusInput()
 	junctionRadiusInput.Text = formatJunctionRadius(getActiveJunctionRadius())
-end
-
-local function refreshJunctionCrosswalkInput()
-	junctionCrosswalkInput.Text = formatJunctionCrosswalkLength(getActiveJunctionCrosswalkLength())
 end
 
 local function refreshJunctionSubdivisionsInput()
@@ -4071,29 +4393,6 @@ local function updateSelectedJunctionRadius(value, reason)
 		updateStatus(string.format("Default junction radius set to %s studs", formatJunctionRadius(radius)))
 	end
 	refreshJunctionRadiusInput()
-end
-
-local function updateSelectedJunctionCrosswalkLength(value, reason)
-	local junction = getSelectedJunction()
-	local crosswalkLength = tonumber(value)
-	if not crosswalkLength then
-		refreshJunctionCrosswalkInput()
-		updateStatus("Enter a numeric crosswalk length")
-		return
-	end
-
-	crosswalkLength = sanitizeJunctionCrosswalkLength(crosswalkLength)
-	if junction then
-		ChangeHistoryService:SetWaypoint("cab87 roads before junction crosswalk length change")
-		junction:SetAttribute("CrosswalkLength", crosswalkLength)
-		ChangeHistoryService:SetWaypoint("cab87 roads after junction crosswalk length change")
-		scheduleAutoRebuild(reason or "junction-crosswalk-length-changed")
-		updateStatus(string.format("Set %s crosswalk length to %s studs", junction.Name, formatJunctionCrosswalkLength(crosswalkLength)))
-	else
-		defaultJunctionCrosswalkLength = crosswalkLength
-		updateStatus(string.format("Default crosswalk length set to %s studs", formatJunctionCrosswalkLength(crosswalkLength)))
-	end
-	refreshJunctionCrosswalkInput()
 end
 
 local function updateSelectedJunctionSubdivisions(value, reason)
@@ -4254,9 +4553,6 @@ local function refreshPointWatchers()
 				junction:GetAttributeChangedSignal("Radius"):Connect(function()
 					scheduleAutoRebuild("junction-radius-changed")
 				end),
-				junction:GetAttributeChangedSignal("CrosswalkLength"):Connect(function()
-					scheduleAutoRebuild("junction-crosswalk-length-changed")
-				end),
 				junction:GetAttributeChangedSignal("Subdivisions"):Connect(function()
 					scheduleAutoRebuild("junction-subdivisions-changed")
 				end),
@@ -4293,7 +4589,7 @@ local function applyImportedCurves(importedSplines, replaceExisting, importedJun
 			table.insert(created, createImportedSpline(data))
 		end
 		for _, junctionData in ipairs(importedJunctions or {}) do
-			addJunction(junctionData.position, junctionData.radius, junctionData.subdivisions, junctionData.crosswalkLength)
+			addJunction(junctionData.position, junctionData.radius, junctionData.subdivisions)
 		end
 
 		if #created == 0 then
@@ -4430,18 +4726,6 @@ junctionRadiusInput.FocusLost:Connect(function()
 	updateSelectedJunctionRadius(junctionRadiusInput.Text, "junction-radius-changed")
 end)
 
-btnJunctionCrosswalkDown.MouseButton1Click:Connect(function()
-	updateSelectedJunctionCrosswalkLength(getActiveJunctionCrosswalkLength() - JUNCTION_CROSSWALK_LENGTH_STEP, "junction-crosswalk-length-changed")
-end)
-
-btnJunctionCrosswalkUp.MouseButton1Click:Connect(function()
-	updateSelectedJunctionCrosswalkLength(getActiveJunctionCrosswalkLength() + JUNCTION_CROSSWALK_LENGTH_STEP, "junction-crosswalk-length-changed")
-end)
-
-junctionCrosswalkInput.FocusLost:Connect(function()
-	updateSelectedJunctionCrosswalkLength(junctionCrosswalkInput.Text, "junction-crosswalk-length-changed")
-end)
-
 btnJunctionSubdivisionsDown.MouseButton1Click:Connect(function()
 	updateSelectedJunctionSubdivisions(getActiveJunctionSubdivisions() - JUNCTION_SUBDIVISIONS_STEP, "junction-subdivisions-changed")
 end)
@@ -4473,7 +4757,7 @@ btnAddJunctionCamera.MouseButton1Click:Connect(function()
 		return
 	end
 	ChangeHistoryService:SetWaypoint("cab87 roads before add junction camera")
-	local junction, err = addConnectedJunction(pos, sanitizeJunctionRadius(junctionRadiusInput.Text), sanitizeJunctionSubdivisions(junctionSubdivisionsInput.Text), sanitizeJunctionCrosswalkLength(junctionCrosswalkInput.Text))
+	local junction, err = addConnectedJunction(pos, sanitizeJunctionRadius(junctionRadiusInput.Text), sanitizeJunctionSubdivisions(junctionSubdivisionsInput.Text))
 	if not junction then
 		updateStatus(err or "Could not add junction")
 		return
@@ -4481,7 +4765,6 @@ btnAddJunctionCamera.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads after add junction camera")
 	Selection:Set({ junction })
 	refreshJunctionRadiusInput()
-	refreshJunctionCrosswalkInput()
 	refreshJunctionSubdivisionsInput()
 	scheduleAutoRebuild("junction-added")
 	updateStatus("Added " .. junction.Name)
@@ -4494,7 +4777,7 @@ btnAddJunctionSelected.MouseButton1Click:Connect(function()
 		return
 	end
 	ChangeHistoryService:SetWaypoint("cab87 roads before add junction selection")
-	local junction, err = addConnectedJunction(sel[1].Position, sanitizeJunctionRadius(junctionRadiusInput.Text), sanitizeJunctionSubdivisions(junctionSubdivisionsInput.Text), sanitizeJunctionCrosswalkLength(junctionCrosswalkInput.Text))
+	local junction, err = addConnectedJunction(sel[1].Position, sanitizeJunctionRadius(junctionRadiusInput.Text), sanitizeJunctionSubdivisions(junctionSubdivisionsInput.Text))
 	if not junction then
 		updateStatus(err or "Could not add junction")
 		return
@@ -4502,7 +4785,6 @@ btnAddJunctionSelected.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 roads after add junction selection")
 	Selection:Set({ junction })
 	refreshJunctionRadiusInput()
-	refreshJunctionCrosswalkInput()
 	refreshJunctionSubdivisionsInput()
 	scheduleAutoRebuild("junction-added")
 	updateStatus("Added " .. junction.Name .. " from selection")
@@ -4519,7 +4801,6 @@ btnDeleteJunction.MouseButton1Click:Connect(function()
 	junction:Destroy()
 	ChangeHistoryService:SetWaypoint("cab87 roads after delete junction")
 	refreshJunctionRadiusInput()
-	refreshJunctionCrosswalkInput()
 	refreshJunctionSubdivisionsInput()
 	scheduleAutoRebuild("junction-deleted")
 	updateStatus("Deleted " .. name)
@@ -4714,7 +4995,6 @@ Selection.SelectionChanged:Connect(function()
 			refreshPointWatchers()
 		elseif getSelectedJunction() then
 			refreshJunctionRadiusInput()
-			refreshJunctionCrosswalkInput()
 			refreshJunctionSubdivisionsInput()
 		end
 	end
@@ -4782,7 +5062,6 @@ refreshPointWatchers()
 refreshCurveModeButton()
 refreshRoadWidthInput()
 refreshJunctionRadiusInput()
-refreshJunctionCrosswalkInput()
 refreshJunctionSubdivisionsInput()
 refreshImportPlaneInput()
 refreshAutoRebuildButton()

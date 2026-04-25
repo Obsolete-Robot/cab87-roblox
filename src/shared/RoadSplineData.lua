@@ -11,15 +11,11 @@ RoadSplineData.RUNTIME_DATA_NAME = "AuthoredRoadSplineData"
 RoadSplineData.JUNCTIONS_NAME = "Junctions"
 RoadSplineData.ROAD_WIDTH_ATTR = RoadSampling.ROAD_WIDTH_ATTR
 RoadSplineData.JUNCTION_SUBDIVISIONS_ATTR = "Subdivisions"
-RoadSplineData.JUNCTION_CROSSWALK_LENGTH_ATTR = "CrosswalkLength"
 RoadSplineData.JUNCTION_PORTAL_ATTACH_DISTANCE_ATTR = "PortalAttachDistance"
 
 local JUNCTION_SUBDIVISIONS_DEFAULT = 0
 local JUNCTION_SUBDIVISIONS_MIN = 0
 local JUNCTION_SUBDIVISIONS_MAX = 12
-local JUNCTION_CROSSWALK_LENGTH_DEFAULT = 8
-local JUNCTION_CROSSWALK_LENGTH_MIN = 0
-local JUNCTION_CROSSWALK_LENGTH_MAX = 80
 
 function RoadSplineData.sanitizeJunctionSubdivisions(value)
 	local subdivisions = tonumber(value)
@@ -27,14 +23,6 @@ function RoadSplineData.sanitizeJunctionSubdivisions(value)
 		return JUNCTION_SUBDIVISIONS_DEFAULT
 	end
 	return math.clamp(math.floor(subdivisions + 0.5), JUNCTION_SUBDIVISIONS_MIN, JUNCTION_SUBDIVISIONS_MAX)
-end
-
-function RoadSplineData.sanitizeJunctionCrosswalkLength(value)
-	local length = tonumber(value)
-	if not length then
-		return JUNCTION_CROSSWALK_LENGTH_DEFAULT
-	end
-	return math.clamp(length, JUNCTION_CROSSWALK_LENGTH_MIN, JUNCTION_CROSSWALK_LENGTH_MAX)
 end
 
 function RoadSplineData.sortedChildren(parent, className)
@@ -199,13 +187,11 @@ function RoadSplineData.collectJunctions(root, options)
 		if center then
 			local radius = math.max(tonumber(junctionData:GetAttribute("Radius")) or defaultRadius, minRadius)
 			local subdivisions = RoadSplineData.sanitizeJunctionSubdivisions(junctionData:GetAttribute(RoadSplineData.JUNCTION_SUBDIVISIONS_ATTR))
-			local crosswalkLength = RoadSplineData.sanitizeJunctionCrosswalkLength(junctionData:GetAttribute(RoadSplineData.JUNCTION_CROSSWALK_LENGTH_ATTR))
 			table.insert(junctions, {
 				instance = junctionData,
 				name = junctionData.Name,
 				center = center,
 				radius = radius,
-				crosswalkLength = crosswalkLength,
 				subdivisions = subdivisions,
 				componentId = tonumber(junctionData:GetAttribute("ComponentId")) or 1,
 				portalAttachDistance = tonumber(junctionData:GetAttribute(RoadSplineData.JUNCTION_PORTAL_ATTACH_DISTANCE_ATTR)),

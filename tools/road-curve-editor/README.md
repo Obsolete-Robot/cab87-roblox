@@ -38,7 +38,7 @@ Manual:
    - New points enter drag immediately on creation.
 5. Use `Split Curve` after selecting an interior point on an open curve to split it into two curves sharing that split point.
 6. Use `New`, `Prev`, `Next`, `Delete`, `Road Width`, `Closed loop`, and `Roblox Mesh Preview` to manage splines and preview the authored-road mesh footprint/wireframe.
-7. Use `Junction Mode` to click an existing curve point and create a junction from real road geometry. Dragging a junction center moves every control point grouped inside that junction radius by the same offset; empty canvas clicks do not create orphan junctions. Use `Auto Junction` on a selected junction to snap included control points to the junction center and size the junction from the widest intersecting road. Junction mesh corners use the natural intersections of neighboring road edges where possible, with the radius acting as the cut/selection envelope. Road ribbons are cut at that radius and joined to the natural junction hull with explicit bridge strips, so crosswalk spacing can be derived from the finished hull instead of changing the intersection shape. Increase `Junction Subdivisions` above `0` to add more triangles along those connector corners. Roundabouts should be authored as a closed loop with one junction at each entry/exit on the loop.
+7. Use `Junction Mode` to click an existing curve point and create a junction from real road geometry. Dragging a junction center moves every control point grouped inside that junction radius by the same offset; empty canvas clicks do not create orphan junctions. Use `Auto Junction` on a selected junction to snap included control points to the junction center. Radius is only the point selection envelope; the final junction polygon and road cut distances are derived from connected road directions and widths. Roundabouts should be authored as a closed loop with one junction at each entry/exit on the loop.
 8. The browser autosaves the editor session locally and restores it after refresh, including incomplete curves. Large trace images may exceed browser storage quota; in that case the curve data still autosaves without the image data.
 9. Export `cab87-road-curves.json` to save the full editor session, including camera state and the trace image data/transform.
 10. Use `Import Session JSON` in the browser tool to resume where you left off.
@@ -69,7 +69,7 @@ The exported payload stays shaped for the Studio plugin importer and adds an `ed
     }
   ],
   "junctions": [
-    { "id": "Junction001", "x": 64, "y": 0, "z": 32, "radius": 22, "crosswalkLength": 8, "subdivisions": 0 }
+    { "id": "Junction001", "x": 64, "y": 0, "z": 32, "radius": 22, "subdivisions": 0 }
   ],
   "editorState": {
     "camera": { "x": 12, "z": 48, "zoom": 1.35 },

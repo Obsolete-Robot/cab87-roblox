@@ -11,9 +11,6 @@ const JUNCTION_VERTEX_EPSILON = 0.05;
 const JUNCTION_SUBDIVISIONS_DEFAULT = 0;
 const JUNCTION_SUBDIVISIONS_MIN = 0;
 const JUNCTION_SUBDIVISIONS_MAX = 12;
-const JUNCTION_CROSSWALK_LENGTH_DEFAULT = 8;
-const JUNCTION_CROSSWALK_LENGTH_MIN = 0;
-const JUNCTION_CROSSWALK_LENGTH_MAX = 80;
 const JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE = 0.5;
 const SAMPLE_STEP_STUDS = 8;
 const ENDPOINT_WELD_DISTANCE = 22;
@@ -49,7 +46,6 @@ const elements = {
 	splitSplineButton: document.getElementById("splitSplineButton"),
 	centerViewButton: document.getElementById("centerViewButton"),
 	junctionRadiusInput: document.getElementById("junctionRadiusInput"),
-	junctionCrosswalkLengthInput: document.getElementById("junctionCrosswalkLengthInput"),
 	junctionSubdivisionsInput: document.getElementById("junctionSubdivisionsInput"),
 	junctionModeButton: document.getElementById("junctionModeButton"),
 	autoJunctionButton: document.getElementById("autoJunctionButton"),
@@ -138,14 +134,6 @@ function sanitizeJunctionSubdivisions(value) {
 	);
 }
 
-function sanitizeJunctionCrosswalkLength(value) {
-	const length = Number(value);
-	if (!Number.isFinite(length)) {
-		return JUNCTION_CROSSWALK_LENGTH_DEFAULT;
-	}
-	return Math.min(JUNCTION_CROSSWALK_LENGTH_MAX, Math.max(JUNCTION_CROSSWALK_LENGTH_MIN, length));
-}
-
 function roundNumber(value, decimals = 3) {
 	const factor = 10 ** decimals;
 	return Math.round(value * factor) / factor;
@@ -176,7 +164,6 @@ function makeJunction(
 	position,
 	radius = JUNCTION_RADIUS_DEFAULT,
 	subdivisions = JUNCTION_SUBDIVISIONS_DEFAULT,
-	crosswalkLength = JUNCTION_CROSSWALK_LENGTH_DEFAULT,
 ) {
 	return {
 		id: `junction-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -186,7 +173,6 @@ function makeJunction(
 		z: roundNumber(position.z, 3),
 		radius: sanitizeJunctionRadius(radius),
 		subdivisions: sanitizeJunctionSubdivisions(subdivisions),
-		crosswalkLength: sanitizeJunctionCrosswalkLength(crosswalkLength),
 	};
 }
 
@@ -326,7 +312,6 @@ function refreshInspector() {
 	setJunctionModeEnabled(state.junctionModeEnabled);
 	const selectedJunction = getSelectedJunction();
 	elements.junctionRadiusInput.value = formatNumber(selectedJunction ? selectedJunction.radius : JUNCTION_RADIUS_DEFAULT, 1);
-	elements.junctionCrosswalkLengthInput.value = formatNumber(selectedJunction ? sanitizeJunctionCrosswalkLength(selectedJunction.crosswalkLength) : JUNCTION_CROSSWALK_LENGTH_DEFAULT, 1);
 	elements.junctionSubdivisionsInput.value = String(selectedJunction ? sanitizeJunctionSubdivisions(selectedJunction.subdivisions) : JUNCTION_SUBDIVISIONS_DEFAULT);
 	elements.imageOffsetXInput.value = formatNumber(state.image.offsetX, 1);
 	elements.imageOffsetZInput.value = formatNumber(state.image.offsetZ, 1);
@@ -398,7 +383,6 @@ function cloneJunctionForExport(junction) {
 	return {
 		id: junction.name || junction.id,
 		radius: roundNumber(sanitizeJunctionRadius(junction.radius), 3),
-		crosswalkLength: roundNumber(sanitizeJunctionCrosswalkLength(junction.crosswalkLength), 3),
 		subdivisions: sanitizeJunctionSubdivisions(junction.subdivisions),
 		x: roundNumber(junction.x, 3),
 		y: roundNumber(junction.y ?? 0, 3),
@@ -573,7 +557,6 @@ function normalizeImportedJunction(junctionData, index) {
 		},
 		junctionData.radius,
 		junctionData.subdivisions,
-		junctionData.crosswalkLength,
 	);
 	junction.name = typeof junctionData.id === "string" && junctionData.id.trim().length > 0
 		? junctionData.id.trim()
@@ -1414,7 +1397,6 @@ function cloneJunctionForPreview(junction) {
 		center: makePoint(junction.x, junction.z, junction.y ?? 0),
 		radius,
 		blendRadius: radius,
-		crosswalkLength: sanitizeJunctionCrosswalkLength(junction.crosswalkLength),
 		subdivisions: sanitizeJunctionSubdivisions(junction.subdivisions),
 		portals: [],
 		chains: new Set(),
@@ -1477,6 +1459,91 @@ function addPortalForChain(junction, chain, boundaryPoint, outsidePoint) {
 	junction.chains.add(chain);
 }
 
+function closestSampleIndex(samples, point) {
+	let bestIndex = null;
+	let bestDistance = Infinity;
+	for (let index = 0; index < (samples?.length ?? 0); index += 1) {
+		const distance = distanceXZ(samples[index], point);
+		if (distance < bestDistance) {
+			bestIndex = index;
+			bestDistance = distance;
+		}
+	}
+	return bestIndex;
+}
+
+function rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex) {
+	let chainKeys = portalKeys.get(chain);
+	if (!chainKeys) {
+		chainKeys = new Set();
+		portalKeys.set(chain, chainKeys);
+	}
+
+	const key = `${boundaryIndex}:${outsideIndex}`;
+	if (chainKeys.has(key)) {
+		return false;
+	}
+	chainKeys.add(key);
+	return true;
+}
+
+function addMemberPortalForSample(portalKeys, junction, chain, boundaryIndex, outsideIndex) {
+	const boundaryPoint = chain?.samples?.[boundaryIndex];
+	const outsidePoint = chain?.samples?.[outsideIndex];
+	if (!boundaryPoint || !outsidePoint || distanceXZ(boundaryPoint, outsidePoint) <= 0.05) {
+		return;
+	}
+	if (!rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex)) {
+		return;
+	}
+	addPortalForChain(junction, chain, boundaryPoint, outsidePoint);
+}
+
+function addMemberPortalsAroundSample(portalKeys, junction, chain, sampleIndex) {
+	const samples = chain?.samples;
+	if (!samples || samples.length < 2 || !Number.isInteger(sampleIndex)) {
+		return;
+	}
+
+	const lastIndex = samples.length - 1;
+	if (chain.closed && samples.length > 2 && (sampleIndex === 0 || sampleIndex === lastIndex)) {
+		addMemberPortalForSample(portalKeys, junction, chain, 0, 1);
+		addMemberPortalForSample(portalKeys, junction, chain, 0, lastIndex - 1);
+	} else if (sampleIndex <= 0) {
+		addMemberPortalForSample(portalKeys, junction, chain, 0, 1);
+	} else if (sampleIndex >= lastIndex) {
+		addMemberPortalForSample(portalKeys, junction, chain, lastIndex, lastIndex - 1);
+	} else {
+		addMemberPortalForSample(portalKeys, junction, chain, sampleIndex, sampleIndex - 1);
+		addMemberPortalForSample(portalKeys, junction, chain, sampleIndex, sampleIndex + 1);
+	}
+}
+
+function attachMemberJunctionPortals(junctions) {
+	for (const junction of junctions ?? []) {
+		junction.portals = [];
+		junction.chains = junction.chains ?? new Set();
+		const portalKeys = new Map();
+		for (const member of junction.members ?? []) {
+			const chain = member.chain;
+			if (!chain?.samples) {
+				continue;
+			}
+			junction.chains.add(chain);
+			let sampleIndex = Number.isInteger(member.index)
+				? member.index
+				: closestSampleIndex(chain.samples, junction.center);
+			if (
+				Number.isInteger(sampleIndex)
+				&& (!chain.samples[sampleIndex] || distanceXZ(chain.samples[sampleIndex], junction.center) > 0.1)
+			) {
+				sampleIndex = closestSampleIndex(chain.samples, junction.center);
+			}
+			addMemberPortalsAroundSample(portalKeys, junction, chain, sampleIndex);
+		}
+	}
+}
+
 function portalLineT(portal, point) {
 	return dot2D(subtract2D(point, portal.boundaryPoint), portal.tangent);
 }
@@ -1525,6 +1592,118 @@ function lineIntersectionWithParametersXZ(a, dirA, b, dirB) {
 		tA,
 		tB,
 	};
+}
+
+function calculateIntersectionGeometry(center, roads) {
+	const sortedRoads = roads
+		.map((road, index) => {
+			const direction = horizontalUnit(road.direction || subtract2D(road.endPoint || center, center));
+			if (!direction) {
+				return null;
+			}
+			const width = sanitizeRoadWidth(road.width);
+			return {
+				...road,
+				id: road.id ?? String(index),
+				width,
+				halfWidth: width * 0.5,
+				direction,
+				angle: Math.atan2(direction.z, direction.x),
+			};
+		})
+		.filter(Boolean)
+		.sort((a, b) => a.angle - b.angle);
+
+	const vertices = [];
+	const corners = [];
+	if (sortedRoads.length < 2) {
+		return { vertices, sortedRoads, roadCutDistances: new Map(), corners };
+	}
+
+	for (let index = 0; index < sortedRoads.length; index += 1) {
+		const road = sortedRoads[index];
+		const nextRoad = sortedRoads[(index + 1) % sortedRoads.length];
+		const side = roadRightFromTangent(road.direction);
+		const nextSide = roadRightFromTangent(nextRoad.direction);
+		const halfWidth = road.halfWidth;
+		const nextHalfWidth = nextRoad.halfWidth;
+		const endPoint = road.endPoint || makePoint(
+			center.x + (road.direction.x * Math.max(road.width, halfWidth + 30)),
+			center.z + (road.direction.z * Math.max(road.width, halfWidth + 30)),
+			center.y ?? 0,
+		);
+
+		vertices.push(makePoint(
+			endPoint.x + (side.x * halfWidth),
+			endPoint.z + (side.z * halfWidth),
+			center.y ?? 0,
+		));
+		vertices.push(makePoint(
+			endPoint.x - (side.x * halfWidth),
+			endPoint.z - (side.z * halfWidth),
+			center.y ?? 0,
+		));
+
+		const fromSide = makePoint(
+			center.x - (side.x * halfWidth),
+			center.z - (side.z * halfWidth),
+			center.y ?? 0,
+		);
+		const toSide = makePoint(
+			center.x + (nextSide.x * nextHalfWidth),
+			center.z + (nextSide.z * nextHalfWidth),
+			center.y ?? 0,
+		);
+		const maxExtension = Math.max(halfWidth, nextHalfWidth) * 1.5 + 50;
+		const intersection = lineIntersectionWithParametersXZ(fromSide, road.direction, toSide, nextRoad.direction);
+		const points = [];
+
+		if (intersection) {
+			if (
+				intersection.tA > maxExtension
+				|| intersection.tB > maxExtension
+				|| intersection.tA < 0
+				|| intersection.tB < 0
+			) {
+				const safeFromT = Math.min(maxExtension, Math.max(0, intersection.tA));
+				const safeToT = Math.min(maxExtension, Math.max(0, intersection.tB));
+				points.push(makePoint(
+					fromSide.x + (road.direction.x * safeFromT),
+					fromSide.z + (road.direction.z * safeFromT),
+					center.y ?? 0,
+				));
+				points.push(makePoint(
+					toSide.x + (nextRoad.direction.x * safeToT),
+					toSide.z + (nextRoad.direction.z * safeToT),
+					center.y ?? 0,
+				));
+			} else {
+				points.push(makePoint(intersection.point.x, intersection.point.z, center.y ?? 0));
+			}
+		} else {
+			points.push(fromSide, toSide);
+		}
+
+		corners[index] = points;
+		vertices.push(...points);
+	}
+
+	const roadCutDistances = new Map();
+	sortedRoads.forEach((road, index) => {
+		const previousIndex = (index - 1 + sortedRoads.length) % sortedRoads.length;
+		const cornerPoints = [...(corners[previousIndex] || []), ...(corners[index] || [])];
+		let maxProjection = 0;
+		for (const point of cornerPoints) {
+			const projection = dot2D(subtract2D(point, center), road.direction);
+			if (projection > maxProjection) {
+				maxProjection = projection;
+			}
+		}
+		const cutDistance = Math.max(maxProjection, road.halfWidth) + 15;
+		roadCutDistances.set(road.id, cutDistance + 15);
+	});
+
+	return { vertices, sortedRoads, roadCutDistances, corners };
 }
 
 function junctionCoreBoundaryLimit(junction) {
@@ -1847,15 +2026,78 @@ function trimChainEndpointToPortal(junction, portal) {
 	}
 }
 
+function applySimplifiedJunctionGeometry(junction) {
+	if (!junction.portals || junction.portals.length < 2) {
+		return false;
+	}
+
+	const center = getJunctionMeshCenter(junction);
+	const roads = junction.portals.map((portal, index) => ({
+		id: String(index),
+		direction: portal.tangent,
+		endPoint: portal.boundaryPoint ?? portal.point,
+		width: (portal.halfWidth ?? 0) * 2,
+		portal,
+	}));
+	const geometry = calculateIntersectionGeometry(center, roads);
+	if (geometry.vertices.length < 3) {
+		return false;
+	}
+
+	for (const road of geometry.sortedRoads) {
+		const portal = road.portal;
+		if (!portal) {
+			continue;
+		}
+		const side = roadRightFromTangent(portal.tangent);
+		const point = portal.boundaryPoint ?? portal.point;
+		portal.coreLeft = makePoint(
+			point.x - (side.x * (portal.halfWidth ?? 0)),
+			point.z - (side.z * (portal.halfWidth ?? 0)),
+			point.y ?? 0,
+		);
+		portal.coreRight = makePoint(
+			point.x + (side.x * (portal.halfWidth ?? 0)),
+			point.z + (side.z * (portal.halfWidth ?? 0)),
+			point.y ?? 0,
+		);
+	}
+
+	junction.coreBoundary = geometry.vertices;
+	junction.surfaceBoundary = geometry.vertices;
+	junction.intersectionGeometry = geometry;
+	return true;
+}
+
 function finalizeJunctionPortals(junctions) {
 	for (const junction of junctions) {
-		junction.coreBoundary = buildJunctionCoreBoundary(junction);
+		const hasSimplifiedGeometry = applySimplifiedJunctionGeometry(junction);
+		if (!hasSimplifiedGeometry) {
+			junction.coreBoundary = buildJunctionCoreBoundary(junction);
+		}
 		for (const portal of junction.portals || []) {
 			updatePortalGeometry(junction, portal);
 		}
-		junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction);
+		if (!hasSimplifiedGeometry) {
+			junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction);
+		}
 		for (const portal of junction.portals || []) {
 			trimChainEndpointToPortal(junction, portal);
+		}
+	}
+}
+
+function finalizeAutomaticJunctionPortals(junctions) {
+	for (const junction of junctions) {
+		const hasSimplifiedGeometry = applySimplifiedJunctionGeometry(junction);
+		if (!hasSimplifiedGeometry) {
+			junction.coreBoundary = buildJunctionCoreBoundary(junction);
+		}
+		for (const portal of junction.portals || []) {
+			updatePortalGeometry(junction, portal);
+		}
+		if (!hasSimplifiedGeometry) {
+			junction.surfaceBoundary = buildJunctionSurfaceBoundary(junction);
 		}
 	}
 }
@@ -2079,6 +2321,45 @@ function finalizeExplicitJunctionCenters(junctions) {
 	}
 }
 
+function getJunctionCutDistanceFallback(hit) {
+	return sanitizeRoadWidth(hit?.chain?.width ?? ROAD_WIDTH_DEFAULT) * 0.5 + 30;
+}
+
+function assignExplicitJunctionCutDistances(junction) {
+	const roads = [];
+	for (let index = 0; index < (junction.hits ?? []).length; index += 1) {
+		const hit = junction.hits[index];
+		const lineDir = horizontalUnit(hit.lineDir || { x: 0, z: 1 }) || { x: 0, z: 1 };
+		hit.beforeRoadId = `${index}:before`;
+		hit.afterRoadId = `${index}:after`;
+		hit.hasBeforeRoad = Boolean(hit.path && (hit.path.closed || hit.pathDistance > 0.05));
+		hit.hasAfterRoad = Boolean(hit.path && (hit.path.closed || hit.pathDistance < hit.path.totalLength - 0.05));
+
+		if (hit.hasBeforeRoad) {
+			roads.push({
+				id: hit.beforeRoadId,
+				direction: scale2D(lineDir, -1),
+				width: hit.chain?.width ?? ROAD_WIDTH_DEFAULT,
+			});
+		}
+		if (hit.hasAfterRoad) {
+			roads.push({
+				id: hit.afterRoadId,
+				direction: lineDir,
+				width: hit.chain?.width ?? ROAD_WIDTH_DEFAULT,
+			});
+		}
+	}
+
+	const geometry = calculateIntersectionGeometry(junction.intersectionCenter ?? junction.center, roads);
+	junction.cutGeometry = geometry;
+	for (const hit of junction.hits ?? []) {
+		const fallback = getJunctionCutDistanceFallback(hit);
+		hit.beforeCutDistance = hit.hasBeforeRoad ? (geometry.roadCutDistances.get(hit.beforeRoadId) ?? fallback) : 0;
+		hit.afterCutDistance = hit.hasAfterRoad ? (geometry.roadCutDistances.get(hit.afterRoadId) ?? fallback) : 0;
+	}
+}
+
 function splitChainByExplicitJunctions(chain, junctions, processedChains) {
 	const closedLoop = chain.closed || sampleLoopIsClosed(chain.samples);
 	const baseSamples = getUniqueRoadSamples(chain.samples, closedLoop);
@@ -2218,9 +2499,8 @@ function splitOpenPathByExplicitHits(processedChains, path, hits) {
 	let cursor = 0;
 	let startPortal = null;
 	for (const hit of hits) {
-		const cutDistance = Math.max(sanitizeJunctionRadius(hit.junction.radius), 0);
-		const beforeDistance = Math.max(0, hit.pathDistance - cutDistance);
-		const afterDistance = Math.min(path.totalLength, hit.pathDistance + cutDistance);
+		const beforeDistance = Math.max(0, hit.pathDistance - Math.max(hit.beforeCutDistance ?? 0, 0));
+		const afterDistance = Math.min(path.totalLength, hit.pathDistance + Math.max(hit.afterCutDistance ?? 0, 0));
 		if (beforeDistance > cursor + 0.05) {
 			emitExplicitRoadRun(
 				processedChains,
@@ -2249,8 +2529,8 @@ function splitClosedPathByExplicitHits(processedChains, path, hits) {
 	for (let index = 0; index < hits.length; index += 1) {
 		const hit = hits[index];
 		const nextHit = hits[(index + 1) % hits.length];
-		const hitCutDistance = Math.max(sanitizeJunctionRadius(hit.junction.radius), 0);
-		const nextCutDistance = Math.max(sanitizeJunctionRadius(nextHit.junction.radius), 0);
+		const hitCutDistance = Math.max(hit.afterCutDistance ?? 0, 0);
+		const nextCutDistance = Math.max(nextHit.beforeCutDistance ?? 0, 0);
 		const startDistance = (hit.pathDistance + hitCutDistance) % path.totalLength;
 		const endDistance = (nextHit.pathDistance - nextCutDistance + path.totalLength) % path.totalLength;
 		let effectiveEnd = endDistance;
@@ -2287,6 +2567,9 @@ function applyExplicitJunctionsToChains(chains, junctions) {
 	const paths = chains.map(buildChainPath).filter(Boolean);
 	const hitsByPath = collectExplicitJunctionHits(paths, junctions);
 	finalizeExplicitJunctionCenters(junctions);
+	for (const junction of junctions) {
+		assignExplicitJunctionCutDistances(junction);
+	}
 	for (const path of paths) {
 		splitPathByExplicitJunctions(processedChains, path, hitsByPath.get(path));
 	}
@@ -2675,8 +2958,11 @@ function mergeJunctions(rawJunctions) {
 		members: cluster.members,
 		chains: new Set(cluster.members.map((member) => member.chain).filter(Boolean)),
 		width: cluster.width,
-		radius: cluster.width * INTERSECTION_RADIUS_SCALE,
-		blendRadius: Math.max(cluster.width * INTERSECTION_BLEND_SCALE, (cluster.width * INTERSECTION_RADIUS_SCALE) + 0.05),
+		radius: Math.max(cluster.width * INTERSECTION_RADIUS_SCALE, (ENDPOINT_WELD_DISTANCE * 0.5) + 1),
+		blendRadius: Math.max(
+			cluster.width * INTERSECTION_BLEND_SCALE,
+			Math.max(cluster.width * INTERSECTION_RADIUS_SCALE, (ENDPOINT_WELD_DISTANCE * 0.5) + 1) + 0.05,
+		),
 	}));
 }
 
@@ -2741,10 +3027,54 @@ function applyJunctionsToChains(chains, junctions) {
 					const blendRadius = bestJunction.blendRadius ?? (bestJunction.radius + 0.05);
 					alpha = 1 - ((bestDistance - bestJunction.radius) / Math.max(blendRadius - bestJunction.radius, 0.001));
 				}
-				chain.samples[index] = lerpPoint(sample, bestJunction.center, alpha);
+				chain.samples[index] = makePoint(
+					sample.x,
+					sample.z,
+					(sample.y ?? 0) + (((bestJunction.center.y ?? 0) - (sample.y ?? 0)) * alpha),
+				);
 			}
 		}
 	}
+}
+
+function collectAutomaticJunctions(chains) {
+	const rawJunctions = collectEndpointJunctions(chains);
+	rawJunctions.push(...collectCrossIntersections(chains));
+	return mergeJunctions(rawJunctions).map((junction, index) => ({
+		...junction,
+		id: `auto-junction-${index}`,
+		name: `AutoJunction${String(index + 1).padStart(4, "0")}`,
+		automatic: true,
+		portals: [],
+	}));
+}
+
+function authoredJunctionSuppressionRadius(junction) {
+	const center = junction.intersectionCenter ?? junction.center;
+	let radius = junction.radius ?? 0;
+	for (const portal of junction.portals ?? []) {
+		const point = portal.boundaryPoint ?? portal.point ?? center;
+		radius = Math.max(radius, distanceXZ(point, center) + (portal.halfWidth ?? 0));
+	}
+	return radius;
+}
+
+function mergeAuthoredAndAutomaticJunctions(authoredJunctions, automaticJunctions) {
+	const junctions = [...authoredJunctions];
+	for (const automatic of automaticJunctions) {
+		const duplicate = authoredJunctions.some((authored) => {
+			const duplicateDistance = Math.max(
+				(automatic.width ?? ROAD_WIDTH_DEFAULT) * 0.5,
+				automatic.radius ?? 0,
+				authoredJunctionSuppressionRadius(authored),
+			);
+			return distanceXZ(automatic.center, authored.center) <= duplicateDistance;
+		});
+		if (!duplicate) {
+			junctions.push(automatic);
+		}
+	}
+	return junctions;
 }
 
 function computeMeshPreview() {
@@ -2766,12 +3096,17 @@ function computeMeshPreview() {
 		.filter(junctionHasCurveConnections)
 		.map(cloneJunctionForPreview);
 	const chains = applyExplicitJunctionsToChains(sourceChains, junctions);
+	const activeJunctions = mergeAuthoredAndAutomaticJunctions(junctions, collectAutomaticJunctions(chains));
+	const automaticJunctions = activeJunctions.slice(junctions.length);
+	applyJunctionsToChains(chains, automaticJunctions);
+	attachMemberJunctionPortals(automaticJunctions);
+	finalizeAutomaticJunctionPortals(automaticJunctions);
 
 	for (const chain of chains) {
 		chain.sections = buildRoadCrossSections(chain.samples, chain.width);
 	}
 
-	return { chains, junctions };
+	return { chains, junctions: activeJunctions };
 }
 
 function getMeshPreview() {
@@ -3487,9 +3822,8 @@ function addJunctionAtControlPoint(pointHit) {
 	const selected = getSelectedJunction();
 	const radius = selected ? selected.radius : sanitizeJunctionRadius(elements.junctionRadiusInput.value);
 	const subdivisions = selected ? selected.subdivisions : sanitizeJunctionSubdivisions(elements.junctionSubdivisionsInput.value);
-	const crosswalkLength = selected ? selected.crosswalkLength : sanitizeJunctionCrosswalkLength(elements.junctionCrosswalkLengthInput.value);
 	const point = pointHit.spline.points[pointHit.pointIndex];
-	const junction = makeJunction(point, radius, subdivisions, crosswalkLength);
+	const junction = makeJunction(point, radius, subdivisions);
 	const records = collectControlPointsInJunction(junction);
 	if (collectAutoJunctionConnections(junction, records).length === 0) {
 		setStatus("Junctions need a curve point with a connected road segment. Add another point to the curve first.");
@@ -3567,18 +3901,6 @@ function updateSelectedJunctionRadiusFromInput() {
 		markMeshPreviewDirty();
 		requestRender();
 		setStatus(`Set ${selected.name} radius to ${formatNumber(radius, 1)} studs.`);
-	}
-	refreshInspector();
-}
-
-function updateSelectedJunctionCrosswalkLengthFromInput() {
-	const selected = getSelectedJunction();
-	const crosswalkLength = sanitizeJunctionCrosswalkLength(elements.junctionCrosswalkLengthInput.value);
-	if (selected) {
-		selected.crosswalkLength = crosswalkLength;
-		markMeshPreviewDirty();
-		requestRender();
-		setStatus(`Set ${selected.name} crosswalk length to ${formatNumber(crosswalkLength, 1)} studs.`);
 	}
 	refreshInspector();
 }
@@ -3737,25 +4059,11 @@ function autoSelectedJunction() {
 		return;
 	}
 
-	let records = collectControlPointsInJunction(selected);
+	const records = collectControlPointsInJunction(selected);
 	if (records.length === 0) {
 		setStatus(`No control points are inside ${selected.name}'s radius.`);
 		return;
 	}
-
-	let connections = collectAutoJunctionConnections(selected, records);
-	let radius = calculateLargestRoadAutoJunctionRadius(records, connections);
-	for (let pass = 0; pass < 4; pass += 1) {
-		selected.radius = radius;
-		const expandedRecords = collectControlPointsInJunction(selected);
-		if (sameControlPointRecords(records, expandedRecords)) {
-			break;
-		}
-		records = expandedRecords;
-		connections = collectAutoJunctionConnections(selected, records);
-		radius = calculateLargestRoadAutoJunctionRadius(records, connections);
-	}
-	selected.radius = radius;
 
 	for (const record of records) {
 		record.point.x = roundNumber(selected.x, 3);
@@ -3767,7 +4075,7 @@ function autoSelectedJunction() {
 	renderSplineList();
 	refreshInspector();
 	requestRender();
-	setStatus(`Auto-fit ${selected.name}: centered ${records.length} control point${records.length === 1 ? "" : "s"} and sized from the widest intersecting road at ${formatNumber(selected.radius, 1)} studs.`);
+	setStatus(`Auto-fit ${selected.name}: centered ${records.length} control point${records.length === 1 ? "" : "s"}. Radius is only used to choose grouped points.`);
 }
 
 function createSplineAndActivate() {
@@ -4170,8 +4478,6 @@ function bindEvents() {
 	elements.deleteJunctionButton.addEventListener("click", deleteSelectedJunction);
 	elements.junctionRadiusInput.addEventListener("change", updateSelectedJunctionRadiusFromInput);
 	elements.junctionRadiusInput.addEventListener("blur", updateSelectedJunctionRadiusFromInput);
-	elements.junctionCrosswalkLengthInput.addEventListener("change", updateSelectedJunctionCrosswalkLengthFromInput);
-	elements.junctionCrosswalkLengthInput.addEventListener("blur", updateSelectedJunctionCrosswalkLengthFromInput);
 	elements.junctionSubdivisionsInput.addEventListener("change", updateSelectedJunctionSubdivisionsFromInput);
 	elements.junctionSubdivisionsInput.addEventListener("blur", updateSelectedJunctionSubdivisionsFromInput);
 	elements.exportButton.addEventListener("click", exportCurves);
