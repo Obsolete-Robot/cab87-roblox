@@ -27,6 +27,18 @@ function handleCanvasPointerDown(event) {
 		return;
 	}
 
+	if (state.softSelectionEnabled) {
+		const anchor = pickSoftSelectionAnchor(localX, localY);
+		if (!anchor) {
+			setStatus("Soft Select is on. Drag a point or junction center to move nearby map controls.");
+			requestRender({ skipAutosave: true });
+			return;
+		}
+		startSoftSelectionDrag(anchor, world, event.pointerId);
+		elements.canvas.setPointerCapture(event.pointerId);
+		return;
+	}
+
 	if (state.junctionModeEnabled) {
 		const radiusHit = pickJunctionRadius(localX, localY);
 		const junctionHit = pickJunction(localX, localY);
@@ -93,6 +105,9 @@ function handleCanvasPointerMove(event) {
 	updateCursorReadout(localX, localY);
 
 	if (!state.drag) {
+		if (state.softSelectionEnabled) {
+			requestRender({ skipAutosave: true });
+		}
 		return;
 	}
 
@@ -115,6 +130,10 @@ function handleCanvasPointerMove(event) {
 
 	if (state.drag.mode === "junction-radius") {
 		updateDraggedJunctionRadius(localX, localY);
+	}
+
+	if (state.drag.mode === "soft-selection") {
+		updateDraggedSoftSelection(localX, localY);
 	}
 }
 
@@ -159,6 +178,9 @@ function handleKeyDown(event) {
 	} else if (event.key.toLowerCase() === "j") {
 		event.preventDefault();
 		focusJunctionPanel();
+	} else if (event.key.toLowerCase() === "s") {
+		event.preventDefault();
+		focusSoftSelectionPanel();
 	}
 }
 
@@ -214,6 +236,10 @@ function bindEvents() {
 	elements.junctionRadiusInput.addEventListener("blur", updateSelectedJunctionRadiusFromInput);
 	elements.junctionSubdivisionsInput.addEventListener("change", updateSelectedJunctionSubdivisionsFromInput);
 	elements.junctionSubdivisionsInput.addEventListener("blur", updateSelectedJunctionSubdivisionsFromInput);
+	elements.softSelectionRadiusInput.addEventListener("change", updateSoftSelectionRadiusFromInput);
+	elements.softSelectionRadiusInput.addEventListener("blur", updateSoftSelectionRadiusFromInput);
+	elements.softSelectionRadiusSlider.addEventListener("input", updateSoftSelectionRadiusFromSlider);
+	elements.softSelectionRadiusSlider.addEventListener("change", updateSoftSelectionRadiusFromSlider);
 	elements.exportButton.addEventListener("click", exportCurves);
 	elements.importButton.addEventListener("click", () => {
 		elements.curveJsonInput.click();

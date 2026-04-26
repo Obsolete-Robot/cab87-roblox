@@ -37,6 +37,17 @@
 					</svg>
 					<span class="visually-hidden">Junctions</span>
 				</button>
+				<button id="sidebarTabSoftSelection" class="sidebar-tab" type="button" role="tab" aria-selected="false" aria-controls="sidebarPanelSoftSelection" data-sidebar-tab="soft-selection" title="Soft Select">
+					<svg aria-hidden="true" viewBox="0 0 24 24">
+						<circle cx="12" cy="12" r="7"></circle>
+						<circle cx="12" cy="12" r="2"></circle>
+						<path d="M12 3V6"></path>
+						<path d="M12 18V21"></path>
+						<path d="M3 12H6"></path>
+						<path d="M18 12H21"></path>
+					</svg>
+					<span class="visually-hidden">Soft Select</span>
+				</button>
 				<button id="sidebarTabImage" class="sidebar-tab" type="button" role="tab" aria-selected="false" aria-controls="sidebarPanelImage" data-sidebar-tab="image" title="Trace Image">
 					<svg aria-hidden="true" viewBox="0 0 24 24">
 						<rect x="4" y="5" width="16" height="14" rx="2"></rect>
@@ -124,6 +135,19 @@
 					</div>
 				</section>
 
+				<section id="sidebarPanelSoftSelection" class="panel sidebar-panel" role="tabpanel" aria-labelledby="sidebarTabSoftSelection" data-sidebar-panel="soft-selection" hidden>
+					<div class="panel-header">
+						<h2>Soft Select</h2>
+						<p>Drag a point or junction center to move nearby map controls with distance falloff.</p>
+					</div>
+
+					<label class="field">
+						<span>Soft Radius</span>
+						<input id="softSelectionRadiusInput" type="number" min="12" max="1000" step="5">
+						<input id="softSelectionRadiusSlider" type="range" min="12" max="1000" step="1">
+					</label>
+				</section>
+
 				<section id="sidebarPanelImage" class="panel sidebar-panel" role="tabpanel" aria-labelledby="sidebarTabImage" data-sidebar-panel="image" hidden>
 					<div class="panel-header">
 						<h2>Trace Image</h2>
@@ -185,6 +209,8 @@
 						<li>Junctions tab: click an existing curve point to add</li>
 						<li>Junctions tab: drag center to move the junction and grouped points</li>
 						<li>Junctions tab: drag radius ring to change road entrance clipping, Alt-click to delete</li>
+						<li>Soft Select tab: drag a point or junction center to move nearby controls</li>
+						<li>S: open Soft Select</li>
 						<li>Right drag or middle drag: pan</li>
 						<li>Mouse wheel: zoom</li>
 					</ul>
@@ -219,6 +245,7 @@
 	<script src="scripts/rendering.js"></script>
 	<script src="scripts/spline-editing.js"></script>
 	<script src="scripts/junction-editing.js"></script>
+	<script src="scripts/soft-selection.js"></script>
 	<script src="scripts/input.js"></script>
 	<script src="app.js"></script>
 </body>

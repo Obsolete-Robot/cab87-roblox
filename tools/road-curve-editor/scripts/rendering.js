@@ -14,8 +14,10 @@ function screenToWorld(x, y) {
 	};
 }
 
-function requestRender() {
-	scheduleAutosave();
+function requestRender(options = {}) {
+	if (!options.skipAutosave) {
+		scheduleAutosave();
+	}
 	if (renderQueued) {
 		return;
 	}
@@ -97,6 +99,53 @@ function drawTraceImage() {
 	ctx.save();
 	ctx.globalAlpha = Math.min(1, Math.max(0, state.image.opacity / 100));
 	ctx.drawImage(image, center.x - (width * 0.5), center.y - (height * 0.5), width, height);
+	ctx.restore();
+}
+
+function drawSoftSelectionOverlay() {
+	const softDrag = state.drag && state.drag.mode === "soft-selection" ? state.drag : null;
+	if (!state.softSelectionEnabled && !softDrag) {
+		return;
+	}
+
+	const center = softDrag
+		? { x: softDrag.originX, z: softDrag.originZ }
+		: state.mouseWorld;
+	const radius = softDrag ? softDrag.radius : sanitizeSoftSelectionRadius(state.softSelectionRadius);
+	const screen = worldToScreen(center.x, center.z);
+	const radiusPixels = radius * state.zoom;
+
+	ctx.save();
+	ctx.beginPath();
+	ctx.arc(screen.x, screen.y, radiusPixels, 0, Math.PI * 2);
+	ctx.fillStyle = "rgba(44, 112, 122, 0.09)";
+	ctx.fill();
+	ctx.setLineDash([8, 7]);
+	ctx.lineWidth = 1.5;
+	ctx.strokeStyle = "rgba(44, 112, 122, 0.72)";
+	ctx.stroke();
+	ctx.setLineDash([]);
+
+	ctx.beginPath();
+	ctx.arc(screen.x, screen.y, 4.5, 0, Math.PI * 2);
+	ctx.fillStyle = "rgba(44, 112, 122, 0.85)";
+	ctx.fill();
+
+	if (softDrag) {
+		for (const target of softDrag.targets) {
+			const targetScreen = worldToScreen(target.target.x, target.target.z);
+			ctx.beginPath();
+			ctx.arc(targetScreen.x, targetScreen.y, 3.5 + (4 * target.weight), 0, Math.PI * 2);
+			ctx.fillStyle = target.type === "junction"
+				? `rgba(28, 132, 125, ${0.28 + (target.weight * 0.48)})`
+				: `rgba(255, 175, 69, ${0.24 + (target.weight * 0.5)})`;
+			ctx.fill();
+			ctx.lineWidth = 1;
+			ctx.strokeStyle = `rgba(255, 250, 242, ${0.45 + (target.weight * 0.45)})`;
+			ctx.stroke();
+		}
+	}
+
 	ctx.restore();
 }
 
@@ -404,6 +453,7 @@ function render() {
 		});
 	}
 
+	drawSoftSelectionOverlay();
 	state.splines.forEach((spline, index) => {
 		drawControlPolygon(spline, index === state.activeSplineIndex);
 	});

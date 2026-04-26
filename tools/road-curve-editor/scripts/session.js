@@ -91,6 +91,7 @@ function buildSessionPayload() {
 				: null,
 			meshPreviewEnabled: state.meshPreviewEnabled,
 			junctionModeEnabled: state.junctionModeEnabled,
+			softSelectionRadius: roundNumber(sanitizeSoftSelectionRadius(state.softSelectionRadius), 3),
 		},
 	};
 }
@@ -261,6 +262,10 @@ async function importSessionFromText(text, options = {}) {
 		? payload.editorState
 		: null;
 	state.meshPreviewEnabled = editorState ? editorState.meshPreviewEnabled === true : false;
+	state.softSelectionEnabled = state.activeSidebarPanel === "soft-selection";
+	state.softSelectionRadius = editorState
+		? sanitizeSoftSelectionRadius(editorState.softSelectionRadius)
+		: SOFT_SELECTION_RADIUS_DEFAULT;
 	state.junctionModeEnabled = state.activeSidebarPanel === "junctions";
 
 	if (editorState && Number.isInteger(editorState.activeSplineIndex)) {

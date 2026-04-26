@@ -41,7 +41,12 @@ local INTERSECTION_HEIGHT_TOLERANCE_MAX = ROAD_MESH_THICKNESS * 4
 local INTERSECTION_HEIGHT_TOLERANCE_WIDTH_SCALE = 0.18
 local ROAD_LOG_PREFIX = "[cab87 roads server]"
 
-local function formatLogMessage(message, ...)
+-- This module has many road-geometry helpers; keep helper names out of the
+-- top-level local register pool so Luau stays below its 200-local limit.
+local moduleEnvironment = getfenv(1)
+setfenv(1, setmetatable({}, { __index = moduleEnvironment }))
+
+function formatLogMessage(message, ...)
 	local ok, formatted = pcall(string.format, tostring(message), ...)
 	if ok then
 		return formatted
@@ -49,23 +54,23 @@ local function formatLogMessage(message, ...)
 	return tostring(message)
 end
 
-local function roadDebugLog(message, ...)
+function roadDebugLog(message, ...)
 	if Config.authoredRoadDebugLogging == true then
 		print(ROAD_LOG_PREFIX .. " " .. formatLogMessage(message, ...))
 	end
 end
 
-local function roadDebugWarn(message, ...)
+function roadDebugWarn(message, ...)
 	warn(ROAD_LOG_PREFIX .. " " .. formatLogMessage(message, ...))
 end
 
 local dataModelContentWarningShown = false
 
-local function vectorToYaw(vector)
+function vectorToYaw(vector)
 	return math.atan2(vector.X, vector.Z)
 end
 
-local function makePart(parent, props)
+function makePart(parent, props)
 	local part = Instance.new("Part")
 	part.Anchored = true
 	part.TopSurface = Enum.SurfaceType.Smooth
@@ -88,11 +93,11 @@ local getRoadSampleTangent = RoadSampling.getRoadSampleTangent
 local polylineLength = RoadSampling.polylineLength
 local samplePolylineAtFraction = RoadSampling.samplePolylineAtFraction
 
-local function getSplineRoadWidth(spline)
+function getSplineRoadWidth(spline)
 	return RoadSampling.getSplineRoadWidth(spline, RoadSampling.getConfiguredRoadWidth(Config))
 end
 
-local function sampleAuthoredSpline(points, closedCurve)
+function sampleAuthoredSpline(points, closedCurve)
 	return RoadSampling.samplePositions(
 		RoadSplineData.getPointPositions(points),
 		closedCurve,
@@ -100,7 +105,7 @@ local function sampleAuthoredSpline(points, closedCurve)
 	)
 end
 
-local function createReplicatedSplineData(root, world)
+function createReplicatedSplineData(root, world)
 	local oldData = world:FindFirstChild(RUNTIME_SPLINE_DATA_NAME)
 	if oldData then
 		oldData:Destroy()
@@ -146,7 +151,7 @@ local function createReplicatedSplineData(root, world)
 	return dataRoot
 end
 
-local function hasAncestorNamed(instance, ancestorName)
+function hasAncestorNamed(instance, ancestorName)
 	local current = instance.Parent
 	while current do
 		if current.Name == ancestorName then
@@ -158,7 +163,7 @@ local function hasAncestorNamed(instance, ancestorName)
 	return false
 end
 
-local function countRoadSurfaceParts(root)
+function countRoadSurfaceParts(root)
 	local count = 0
 	if not root then
 		return count
@@ -175,7 +180,7 @@ end
 
 local sanitizeRoadWidth = RoadSampling.sanitizeRoadWidth
 
-local function hasAssetBackedMesh(part)
+function hasAssetBackedMesh(part)
 	if not part:IsA("MeshPart") then
 		return true
 	end
@@ -186,13 +191,13 @@ local function hasAssetBackedMesh(part)
 	return ok and type(meshId) == "string" and meshId ~= ""
 end
 
-local function isTemporaryEditorMesh(part)
+function isTemporaryEditorMesh(part)
 	return part:IsA("MeshPart")
 		and part:GetAttribute("GeneratedBy") == "Cab87RoadEditor"
 		and not hasAssetBackedMesh(part)
 end
 
-local function removeEditorDebugVisuals(root)
+function removeEditorDebugVisuals(root)
 	if not root then
 		return
 	end
@@ -204,19 +209,19 @@ local function removeEditorDebugVisuals(root)
 	end
 end
 
-local function configureRuntimePart(part, canQuery)
+function configureRuntimePart(part, canQuery)
 	part.Anchored = true
 	part.CanCollide = canQuery
 	part.CanQuery = canQuery
 	part.CanTouch = false
 end
 
-local function trackPart(list, part)
+function trackPart(list, part)
 	table.insert(list, part)
 	return part
 end
 
-local function heightConnectTolerance(widthA, widthB)
+function heightConnectTolerance(widthA, widthB)
 	local width = math.min(sanitizeRoadWidth(widthA), sanitizeRoadWidth(widthB))
 	return math.clamp(
 		width * INTERSECTION_HEIGHT_TOLERANCE_WIDTH_SCALE,
@@ -225,11 +230,11 @@ local function heightConnectTolerance(widthA, widthB)
 	)
 end
 
-local function positionsConnectIn3D(a, b, widthA, widthB)
+function positionsConnectIn3D(a, b, widthA, widthB)
 	return math.abs(a.Y - b.Y) <= heightConnectTolerance(widthA, widthB)
 end
 
-local function collectSplineBuildData(root)
+function collectSplineBuildData(root)
 	return RoadSplineData.collectSampledChains(root, {
 		defaultRoadWidth = RoadSampling.getConfiguredRoadWidth(Config),
 		preserveSampledChains = false,
@@ -237,14 +242,14 @@ local function collectSplineBuildData(root)
 	})
 end
 
-local function getChainName(chain, fallback)
+function getChainName(chain, fallback)
 	if chain and chain.spline and chain.spline.Name then
 		return chain.spline.Name
 	end
 	return fallback or "unknown"
 end
 
-local function maxRoadWidthForMembers(members)
+function maxRoadWidthForMembers(members)
 	local width = nil
 	for _, member in ipairs(members) do
 		if member.chain then
@@ -254,7 +259,7 @@ local function maxRoadWidthForMembers(members)
 	return width or DEFAULT_AUTHORED_ROAD_WIDTH
 end
 
-local function collectEndpointJunctions(chains)
+function collectEndpointJunctions(chains)
 	local endpoints = {}
 	for _, chain in ipairs(chains) do
 		if not chain.closed and #chain.samples >= 2 then
@@ -299,7 +304,7 @@ local function collectEndpointJunctions(chains)
 	return junctions
 end
 
-local function segmentIntersection2D(a, b, c, d)
+function segmentIntersection2D(a, b, c, d)
 	local function cross2(u, v)
 		return u.X * v.Y - u.Y * v.X
 	end
@@ -327,7 +332,7 @@ local function segmentIntersection2D(a, b, c, d)
 	return Vector2.new(p.X + r.X * t, p.Y + r.Y * t), t, u
 end
 
-local function collectCrossIntersections(chains)
+function collectCrossIntersections(chains)
 	local junctions = {}
 	for i = 1, #chains do
 		local aChain = chains[i]
@@ -361,7 +366,7 @@ local function collectCrossIntersections(chains)
 	return junctions
 end
 
-local function mergeJunctions(rawJunctions)
+function mergeJunctions(rawJunctions)
 	local clusters = {}
 	for _, junction in ipairs(rawJunctions) do
 		local placed = false
@@ -417,7 +422,7 @@ local function mergeJunctions(rawJunctions)
 	return junctions
 end
 
-local function addInsertForChain(insertsByChain, chain, segment, t, pos)
+function addInsertForChain(insertsByChain, chain, segment, t, pos)
 	local inserts = insertsByChain[chain]
 	if not inserts then
 		inserts = {}
@@ -430,7 +435,7 @@ local function addInsertForChain(insertsByChain, chain, segment, t, pos)
 	})
 end
 
-local function applyJunctionsToChains(chains, junctions)
+function applyJunctionsToChains(chains, junctions)
 	local insertsByChain = {}
 
 	for _, junction in ipairs(junctions) do
@@ -499,7 +504,7 @@ local function applyJunctionsToChains(chains, junctions)
 	end
 end
 
-local function newMeshState()
+function newMeshState()
 	local editableMesh = AssetService:CreateEditableMesh()
 	if not editableMesh then
 		return nil, "EditableMesh creation failed"
@@ -512,18 +517,18 @@ local function newMeshState()
 	}
 end
 
-local function addMeshVertex(state, pos)
+function addMeshVertex(state, pos)
 	local vertex = state.mesh:AddVertex(pos)
 	state.vertexPositions[vertex] = pos
 	return vertex
 end
 
-local function addMeshTriangle(state, a, b, c)
+function addMeshTriangle(state, a, b, c)
 	state.mesh:AddTriangle(a, b, c)
 	state.faces += 1
 end
 
-local function roadRightFromTangent(tangent)
+function roadRightFromTangent(tangent)
 	local right = Vector3.yAxis:Cross(tangent)
 	if right.Magnitude < 1e-4 then
 		return Vector3.xAxis
@@ -531,11 +536,11 @@ local function roadRightFromTangent(tangent)
 	return right.Unit
 end
 
-local function crossXZ(a, b)
+function crossXZ(a, b)
 	return a.X * b.Z - a.Z * b.X
 end
 
-local function lineIntersectionXZ(a, dirA, b, dirB)
+function lineIntersectionXZ(a, dirA, b, dirB)
 	local denom = crossXZ(dirA, dirB)
 	if math.abs(denom) < 1e-5 then
 		return nil
@@ -547,7 +552,7 @@ local function lineIntersectionXZ(a, dirA, b, dirB)
 	return Vector3.new(a.X + dirA.X * t, a.Y, a.Z + dirA.Z * t)
 end
 
-local function addRoadLoftRowVertices(state, left, right, widthSegments)
+function addRoadLoftRowVertices(state, left, right, widthSegments)
 	local row = {}
 	for j = 0, widthSegments do
 		row[j + 1] = addMeshVertex(state, left:Lerp(right, j / widthSegments))
@@ -555,7 +560,7 @@ local function addRoadLoftRowVertices(state, left, right, widthSegments)
 	return row
 end
 
-local function sampleSmoothedCurveControls(points, closedLoop, sampleStep)
+function sampleSmoothedCurveControls(points, closedLoop, sampleStep)
 	local count = #points
 	if count < 3 then
 		return points
@@ -601,7 +606,7 @@ local function sampleSmoothedCurveControls(points, closedLoop, sampleStep)
 	return #smoothed >= count and smoothed or points
 end
 
-local function resamplePolylineControls(points, closedLoop, targetCount)
+function resamplePolylineControls(points, closedLoop, targetCount)
 	targetCount = math.floor(targetCount)
 	if targetCount <= 0 or #points == 0 then
 		return {}
@@ -623,7 +628,7 @@ local function resamplePolylineControls(points, closedLoop, targetCount)
 	return resampled
 end
 
-local function fairEdgeCurveControls(points, closedLoop, sampleStep)
+function fairEdgeCurveControls(points, closedLoop, sampleStep)
 	local length = polylineLength(points, closedLoop)
 	local targetCount
 	if length > 1e-4 then
@@ -664,7 +669,7 @@ local function fairEdgeCurveControls(points, closedLoop, sampleStep)
 	return sampleSmoothedCurveControls(relaxed, closedLoop, sampleStep)
 end
 
-local function getUniqueRoadSamples(samples, closedLoop)
+function getUniqueRoadSamples(samples, closedLoop)
 	local unique = {}
 	for _, sample in ipairs(samples) do
 		table.insert(unique, sample)
@@ -675,7 +680,7 @@ local function getUniqueRoadSamples(samples, closedLoop)
 	return unique
 end
 
-local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugLabel)
+function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugLabel)
 	if #samples < 2 then
 		return nil
 	end
@@ -768,7 +773,7 @@ local function buildRoadCrossSections(samples, roadWidth, surfaceYOffset, debugL
 	}
 end
 
-local function collectAuthoredJunctions(root)
+function collectAuthoredJunctions(root)
 	local junctions = RoadSplineData.collectJunctions(root, {
 		defaultRadius = DEFAULT_AUTHORED_ROAD_WIDTH * INTERSECTION_RADIUS_SCALE,
 		minRadius = 1,
@@ -781,7 +786,7 @@ local function collectAuthoredJunctions(root)
 	return junctions
 end
 
-local function segmentCircleIntersections(a, b, center, radius)
+function segmentCircleIntersections(a, b, center, radius)
 	local dx = b.X - a.X
 	local dz = b.Z - a.Z
 	local fx = a.X - center.X
@@ -808,7 +813,7 @@ local function segmentCircleIntersections(a, b, center, radius)
 	return result
 end
 
-local function junctionContainingPoint(point, junctions)
+function junctionContainingPoint(point, junctions)
 	local best = nil
 	local bestDistance = math.huge
 	for _, junction in ipairs(junctions) do
@@ -821,7 +826,7 @@ local function junctionContainingPoint(point, junctions)
 	return best
 end
 
-local function junctionTouchingPoint(point, junctions)
+function junctionTouchingPoint(point, junctions)
 	local best = nil
 	local bestDistance = math.huge
 	for _, junction in ipairs(junctions) do
@@ -834,11 +839,11 @@ local function junctionTouchingPoint(point, junctions)
 	return best
 end
 
-local function intervalOutsideJunctions(a, b, junctions)
+function intervalOutsideJunctions(a, b, junctions)
 	return junctionContainingPoint(a:Lerp(b, 0.5), junctions) == nil
 end
 
-local function copyChainWithSamples(sourceChain, samples, closed)
+function copyChainWithSamples(sourceChain, samples, closed)
 	local chain = {}
 	for key, value in pairs(sourceChain) do
 		chain[key] = value
@@ -855,7 +860,7 @@ local function copyChainWithSamples(sourceChain, samples, closed)
 	return chain
 end
 
-local function closestPointOnSegmentXZ(a, b, point)
+function closestPointOnSegmentXZ(a, b, point)
 	local dx = b.X - a.X
 	local dz = b.Z - a.Z
 	local lengthSq = dx * dx + dz * dz
@@ -869,7 +874,7 @@ local function closestPointOnSegmentXZ(a, b, point)
 	return t, projected, distanceXZ(projected, point)
 end
 
-local function buildChainPath(chain)
+function buildChainPath(chain)
 	local closedLoop = chain.closed or sampleLoopIsClosed(chain.samples)
 	local samples = getUniqueRoadSamples(chain.samples, closedLoop)
 	if #samples < (closedLoop and 3 or 2) then
@@ -898,7 +903,7 @@ local function buildChainPath(chain)
 	}
 end
 
-local function pathSegmentInfo(path, segmentIndex)
+function pathSegmentInfo(path, segmentIndex)
 	local samples = path.samples
 	local nextIndex = segmentIndex + 1
 	if nextIndex > #samples then
@@ -909,7 +914,7 @@ local function pathSegmentInfo(path, segmentIndex)
 	return samples[segmentIndex], samples[nextIndex], startDistance, endDistance
 end
 
-local function pathPointAtDistance(path, distance)
+function pathPointAtDistance(path, distance)
 	if path.closed then
 		distance = distance % path.totalLength
 	else
@@ -928,7 +933,7 @@ local function pathPointAtDistance(path, distance)
 	return path.samples[#path.samples], segmentCount
 end
 
-local function collectPathSamples(path, startDistance, endDistance)
+function collectPathSamples(path, startDistance, endDistance)
 	local samples = {}
 	local totalLength = path.totalLength
 	local effectiveEnd = endDistance
@@ -959,12 +964,12 @@ local function collectPathSamples(path, startDistance, endDistance)
 	return samples
 end
 
-local function pathDistanceForSegment(path, segmentIndex, t)
+function pathDistanceForSegment(path, segmentIndex, t)
 	local _, _, startDistance, endDistance = pathSegmentInfo(path, segmentIndex)
 	return startDistance + (endDistance - startDistance) * t
 end
 
-local function closestPathHit(path, point)
+function closestPathHit(path, point)
 	local best = nil
 	local segmentCount = path.closed and #path.samples or (#path.samples - 1)
 	for i = 1, segmentCount do
@@ -986,7 +991,7 @@ local function closestPathHit(path, point)
 	return best
 end
 
-local function collectExplicitJunctionHits(paths, junctions)
+function collectExplicitJunctionHits(paths, junctions)
 	local hitsByPath = {}
 	for _, path in ipairs(paths) do
 		hitsByPath[path] = {}
@@ -1010,7 +1015,7 @@ local function collectExplicitJunctionHits(paths, junctions)
 	return hitsByPath
 end
 
-local function computeExplicitJunctionCenter(junction)
+function computeExplicitJunctionCenter(junction)
 	local hits = junction.hits or {}
 	if #hits == 0 then
 		return junction.center
@@ -1044,7 +1049,7 @@ local function computeExplicitJunctionCenter(junction)
 	return count > 0 and (sum / count) or junction.center
 end
 
-local function finalizeExplicitJunctionCenters(junctions)
+function finalizeExplicitJunctionCenters(junctions)
 	for _, junction in ipairs(junctions) do
 		junction.intersectionCenter = computeExplicitJunctionCenter(junction)
 		for _, hit in ipairs(junction.hits or {}) do
@@ -1061,12 +1066,12 @@ local function finalizeExplicitJunctionCenters(junctions)
 	end
 end
 
-local function getJunctionCutDistanceFallback(hit)
+function getJunctionCutDistanceFallback(hit)
 	local width = hit and hit.chain and hit.chain.width or DEFAULT_AUTHORED_ROAD_WIDTH
 	return sanitizeRoadWidth(width) * 0.5 + 30
 end
 
-local function addHitRoadForCutDistance(roads, hit, roadId, direction)
+function addHitRoadForCutDistance(roads, hit, roadId, direction)
 	local unit = horizontalUnit(direction)
 	if not unit then
 		return false
@@ -1080,7 +1085,7 @@ local function addHitRoadForCutDistance(roads, hit, roadId, direction)
 	return true
 end
 
-local function assignExplicitJunctionCutDistances(junction)
+function assignExplicitJunctionCutDistances(junction)
 	local roads = {}
 	for hitIndex, hit in ipairs(junction.hits or {}) do
 		local path = hit.path
@@ -1108,7 +1113,7 @@ local function assignExplicitJunctionCutDistances(junction)
 	end
 end
 
-local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
+function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 	if not junction or not chain or not outsidePoint then
 		return
 	end
@@ -1132,7 +1137,7 @@ local function addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 	junction.chains[chain] = true
 end
 
-local function closestSampleIndex(samples, point)
+function closestSampleIndex(samples, point)
 	local bestIndex = nil
 	local bestDistance = math.huge
 	for index, sample in ipairs(samples or {}) do
@@ -1145,7 +1150,7 @@ local function closestSampleIndex(samples, point)
 	return bestIndex, bestDistance
 end
 
-local function rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex)
+function rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex)
 	local chainKeys = portalKeys[chain]
 	if not chainKeys then
 		chainKeys = {}
@@ -1160,7 +1165,7 @@ local function rememberPortalKey(portalKeys, chain, boundaryIndex, outsideIndex)
 	return true
 end
 
-local function addMemberPortalForSample(portalKeys, junction, chain, boundaryIndex, outsideIndex)
+function addMemberPortalForSample(portalKeys, junction, chain, boundaryIndex, outsideIndex)
 	local samples = chain and chain.samples
 	if not samples then
 		return
@@ -1179,7 +1184,7 @@ local function addMemberPortalForSample(portalKeys, junction, chain, boundaryInd
 	addPortalForChain(junction, chain, boundaryPoint, outsidePoint)
 end
 
-local function addMemberPortalsAroundSample(portalKeys, junction, chain, sampleIndex)
+function addMemberPortalsAroundSample(portalKeys, junction, chain, sampleIndex)
 	local samples = chain and chain.samples
 	if not samples or #samples < 2 or not sampleIndex then
 		return
@@ -1198,7 +1203,7 @@ local function addMemberPortalsAroundSample(portalKeys, junction, chain, sampleI
 	end
 end
 
-local function attachMemberJunctionPortals(junctions)
+function attachMemberJunctionPortals(junctions)
 	for _, junction in ipairs(junctions or {}) do
 		junction.portals = {}
 		junction.chains = junction.chains or {}
@@ -1220,11 +1225,11 @@ local function attachMemberJunctionPortals(junctions)
 	end
 end
 
-local function portalLineT(portal, point)
+function portalLineT(portal, point)
 	return (point - portal.boundaryPoint):Dot(portal.tangent)
 end
 
-local function portalLinePointAtT(portal, t)
+function portalLinePointAtT(portal, t)
 	return Vector3.new(
 		portal.boundaryPoint.X + portal.tangent.X * t,
 		portal.boundaryPoint.Y,
@@ -1232,11 +1237,11 @@ local function portalLinePointAtT(portal, t)
 	)
 end
 
-local function getJunctionMeshCenter(junction)
+function getJunctionMeshCenter(junction)
 	return junction.intersectionCenter or junction.center
 end
 
-local function computeJunctionIntersectionCenter(junction)
+function computeJunctionIntersectionCenter(junction)
 	local portals = junction.portals or {}
 	if #portals == 0 then
 		return junction.center
@@ -1249,7 +1254,7 @@ local function computeJunctionIntersectionCenter(junction)
 	return sum / #portals
 end
 
-local function appendUniqueJunctionPoint(points, point)
+function appendUniqueJunctionPoint(points, point)
 	for _, existing in ipairs(points) do
 		if distanceXZ(existing, point) <= 0.05 then
 			return
@@ -1258,11 +1263,11 @@ local function appendUniqueJunctionPoint(points, point)
 	table.insert(points, point)
 end
 
-local function junctionHullCrossXZ(origin, a, b)
+function junctionHullCrossXZ(origin, a, b)
 	return (a.X - origin.X) * (b.Z - origin.Z) - (a.Z - origin.Z) * (b.X - origin.X)
 end
 
-local function junctionConvexHullXZ(points)
+function junctionConvexHullXZ(points)
 	if #points < 3 then
 		return points
 	end
@@ -1311,7 +1316,7 @@ local function junctionConvexHullXZ(points)
 	return hull
 end
 
-local function lineIntersectionWithParametersXZ(a, dirA, b, dirB)
+function lineIntersectionWithParametersXZ(a, dirA, b, dirB)
 	local denom = crossXZ(dirA, dirB)
 	if math.abs(denom) < 1e-5 then
 		return nil
@@ -1324,7 +1329,7 @@ local function lineIntersectionWithParametersXZ(a, dirA, b, dirB)
 	return Vector3.new(a.X + dirA.X * tA, a.Y, a.Z + dirA.Z * tA), tA, tB
 end
 
-local function junctionCoreBoundaryLimit(junction)
+function junctionCoreBoundaryLimit(junction)
 	local center = getJunctionMeshCenter(junction)
 	local limit = 8
 	for _, portal in ipairs(junction.portals or {}) do
@@ -1338,7 +1343,7 @@ local function junctionCoreBoundaryLimit(junction)
 	return limit
 end
 
-local function portalSideLine(portal, sideSign)
+function portalSideLine(portal, sideSign)
 	local right = roadRightFromTangent(portal.tangent)
 	local center = getJunctionMeshCenter(portal.junction)
 	local basePoint = portalLinePointAtT(portal, portalLineT(portal, center))
@@ -1351,7 +1356,7 @@ local function portalSideLine(portal, sideSign)
 	}
 end
 
-local function collectPortalSideLines(junction)
+function collectPortalSideLines(junction)
 	local lines = {}
 	for _, portal in ipairs(junction.portals or {}) do
 		table.insert(lines, portalSideLine(portal, -1))
@@ -1360,7 +1365,7 @@ local function collectPortalSideLines(junction)
 	return lines
 end
 
-local function sortedJunctionPortals(junction)
+function sortedJunctionPortals(junction)
 	local portals = {}
 	for _, portal in ipairs(junction.portals or {}) do
 		table.insert(portals, portal)
@@ -1371,20 +1376,20 @@ local function sortedJunctionPortals(junction)
 	return portals
 end
 
-local function appendOrderedJunctionPoint(points, point)
+function appendOrderedJunctionPoint(points, point)
 	if #points == 0 or distanceXZ(points[#points], point) > 0.05 then
 		table.insert(points, point)
 	end
 end
 
-local function finalizeOrderedJunctionBoundary(points)
+function finalizeOrderedJunctionBoundary(points)
 	if #points >= 2 and distanceXZ(points[1], points[#points]) <= 0.05 then
 		table.remove(points, #points)
 	end
 	return points
 end
 
-local function junctionGapPoints(center, fromPortal, toPortal)
+function junctionGapPoints(center, fromPortal, toPortal)
 	local fromRight = roadRightFromTangent(fromPortal.tangent)
 	local toRight = roadRightFromTangent(toPortal.tangent)
 	local fromHalfWidth = fromPortal.halfWidth or 0
@@ -1418,7 +1423,7 @@ local function junctionGapPoints(center, fromPortal, toPortal)
 	return fromPoint, toPoint, { fromPoint, toPoint }
 end
 
-local function buildJunctionCoreBoundary(junction)
+function buildJunctionCoreBoundary(junction)
 	local portals = sortedJunctionPortals(junction)
 	if #portals < 2 then
 		return {}
@@ -1454,7 +1459,7 @@ local function buildJunctionCoreBoundary(junction)
 	return finalizeOrderedJunctionBoundary(boundary)
 end
 
-local function buildJunctionSurfaceBoundary(junction)
+function buildJunctionSurfaceBoundary(junction)
 	local boundary = {}
 	for _, point in ipairs(junction.coreBoundary or {}) do
 		table.insert(boundary, point)
@@ -1462,11 +1467,11 @@ local function buildJunctionSurfaceBoundary(junction)
 	return boundary
 end
 
-local function pointLineDistanceXZ(point, linePoint, lineDir)
+function pointLineDistanceXZ(point, linePoint, lineDir)
 	return math.abs(crossXZ(point - linePoint, lineDir))
 end
 
-local function boundaryPointOnPortalSide(boundary, portal, sideSign)
+function boundaryPointOnPortalSide(boundary, portal, sideSign)
 	local line = portalSideLine(portal, sideSign)
 	local best = nil
 	local bestT = -math.huge
@@ -1503,7 +1508,7 @@ local function boundaryPointOnPortalSide(boundary, portal, sideSign)
 	return best
 end
 
-local function portalSideEntriesForCore(junction)
+function portalSideEntriesForCore(junction)
 	local center = getJunctionMeshCenter(junction)
 	local entries = {}
 	for _, portal in ipairs(junction.portals or {}) do
@@ -1529,7 +1534,7 @@ local function portalSideEntriesForCore(junction)
 	return entries
 end
 
-local function isCoreCornerCandidate(junction, fromEntry, toEntry, corner)
+function isCoreCornerCandidate(junction, fromEntry, toEntry, corner)
 	if portalLineT(fromEntry.portal, corner) > JUNCTION_NATURAL_INTERSECTION_FORWARD_TOLERANCE then
 		return false
 	end
@@ -1545,7 +1550,7 @@ local function isCoreCornerCandidate(junction, fromEntry, toEntry, corner)
 	return distanceXZ(corner, center) <= math.max(maxDistance, 6)
 end
 
-local function updatePortalGeometry(junction, portal)
+function updatePortalGeometry(junction, portal)
 	if not junction.intersectionCenter then
 		junction.intersectionCenter = computeJunctionIntersectionCenter(junction)
 	end
@@ -1570,7 +1575,7 @@ local function updatePortalGeometry(junction, portal)
 	portal.mouthT = portalLineT(portal, point)
 end
 
-local function trimChainEndpointToPortal(junction, portal)
+function trimChainEndpointToPortal(junction, portal)
 	local samples = portal.chain.samples
 	if #samples < 2 then
 		return
@@ -1590,7 +1595,7 @@ local function trimChainEndpointToPortal(junction, portal)
 	end
 end
 
-local function applySimplifiedJunctionGeometry(junction)
+function applySimplifiedJunctionGeometry(junction)
 	local portals = junction.portals or {}
 	if #portals < 2 then
 		return false
@@ -1637,7 +1642,7 @@ local function applySimplifiedJunctionGeometry(junction)
 	return true
 end
 
-local function finalizeJunctionPortals(junctions)
+function finalizeJunctionPortals(junctions)
 	for _, junction in ipairs(junctions) do
 		local hasSimplifiedGeometry = applySimplifiedJunctionGeometry(junction)
 		if not hasSimplifiedGeometry then
@@ -1655,7 +1660,7 @@ local function finalizeJunctionPortals(junctions)
 	end
 end
 
-local function finalizeAutomaticJunctionPortals(junctions)
+function finalizeAutomaticJunctionPortals(junctions)
 	for _, junction in ipairs(junctions) do
 		local hasSimplifiedGeometry = applySimplifiedJunctionGeometry(junction)
 		if not hasSimplifiedGeometry then
@@ -1670,7 +1675,7 @@ local function finalizeAutomaticJunctionPortals(junctions)
 	end
 end
 
-local function emitRoadRun(processedChains, sourceChain, runVertices)
+function emitRoadRun(processedChains, sourceChain, runVertices)
 	local samples = {}
 	for _, vertex in ipairs(runVertices) do
 		table.insert(samples, vertex.point)
@@ -1694,7 +1699,7 @@ local function emitRoadRun(processedChains, sourceChain, runVertices)
 	end
 end
 
-local function emitExplicitRoadRun(processedChains, sourceChain, samples, startPortal, endPortal)
+function emitExplicitRoadRun(processedChains, sourceChain, samples, startPortal, endPortal)
 	if #samples < 2 or polylineLength(samples, false) <= 0.05 then
 		return
 	end
@@ -1710,7 +1715,7 @@ local function emitExplicitRoadRun(processedChains, sourceChain, samples, startP
 	end
 end
 
-local function portalRecordForHit(hit, distance)
+function portalRecordForHit(hit, distance)
 	return {
 		junction = hit.junction,
 		point = hit.point,
@@ -1718,7 +1723,7 @@ local function portalRecordForHit(hit, distance)
 	}
 end
 
-local function splitOpenPathByExplicitHits(processedChains, path, hits)
+function splitOpenPathByExplicitHits(processedChains, path, hits)
 	table.sort(hits, function(a, b)
 		return a.pathDistance < b.pathDistance
 	end)
@@ -1748,7 +1753,7 @@ local function splitOpenPathByExplicitHits(processedChains, path, hits)
 	end
 end
 
-local function splitClosedPathByExplicitHits(processedChains, path, hits)
+function splitClosedPathByExplicitHits(processedChains, path, hits)
 	table.sort(hits, function(a, b)
 		return a.pathDistance < b.pathDistance
 	end)
@@ -1779,7 +1784,7 @@ local function splitClosedPathByExplicitHits(processedChains, path, hits)
 	end
 end
 
-local function splitPathByExplicitJunctions(processedChains, path, hits)
+function splitPathByExplicitJunctions(processedChains, path, hits)
 	if not hits or #hits == 0 then
 		table.insert(processedChains, copyChainWithSamples(path.chain, path.samples, path.closed))
 		return
@@ -1792,7 +1797,7 @@ local function splitPathByExplicitJunctions(processedChains, path, hits)
 	end
 end
 
-local function appendRoadVertex(vertices, vertex)
+function appendRoadVertex(vertices, vertex)
 	local previous = vertices[#vertices]
 	if previous and distanceXZ(previous.point, vertex.point) <= 0.01 and previous.junction == vertex.junction then
 		return
@@ -1800,7 +1805,7 @@ local function appendRoadVertex(vertices, vertex)
 	table.insert(vertices, vertex)
 end
 
-local function splitChainByExplicitJunctions(chain, junctions, processedChains)
+function splitChainByExplicitJunctions(chain, junctions, processedChains)
 	local closedLoop = chain.closed or sampleLoopIsClosed(chain.samples)
 	local baseSamples = getUniqueRoadSamples(chain.samples, closedLoop)
 	if #baseSamples < (closedLoop and 3 or 2) or #junctions == 0 then
@@ -1903,29 +1908,21 @@ local function splitChainByExplicitJunctions(chain, junctions, processedChains)
 	end
 end
 
-local function applyExplicitJunctionsToChains(chains, junctions)
+function applyExplicitJunctionsToChains(chains, junctions)
 	local processedChains = {}
-	local paths = {}
-	for _, chain in ipairs(chains) do
-		local path = buildChainPath(chain)
-		if path then
-			table.insert(paths, path)
-		end
-	end
-
-	local hitsByPath = collectExplicitJunctionHits(paths, junctions)
-	finalizeExplicitJunctionCenters(junctions)
 	for _, junction in ipairs(junctions) do
-		assignExplicitJunctionCutDistances(junction)
+		junction.portals = {}
+		junction.chains = {}
+		junction.intersectionCenter = junction.center
 	end
-	for _, path in ipairs(paths) do
-		splitPathByExplicitJunctions(processedChains, path, hitsByPath[path])
+	for _, chain in ipairs(chains) do
+		splitChainByExplicitJunctions(chain, junctions, processedChains)
 	end
 	finalizeJunctionPortals(junctions)
 	return processedChains
 end
 
-local function addRoadRibbonToMesh(state, samples, roadWidth, debugLabel)
+function addRoadRibbonToMesh(state, samples, roadWidth, debugLabel)
 	local sections = buildRoadCrossSections(samples, roadWidth, ROAD_MESH_THICKNESS * 0.5, debugLabel)
 	if not sections then
 		return 0
@@ -1956,7 +1953,7 @@ local function addRoadRibbonToMesh(state, samples, roadWidth, debugLabel)
 	return spans
 end
 
-local function normalizePositiveAngleDelta(delta)
+function normalizePositiveAngleDelta(delta)
 	local result = delta
 	while result <= 0 do
 		result += math.pi * 2
@@ -1967,23 +1964,23 @@ local function normalizePositiveAngleDelta(delta)
 	return result
 end
 
-local function junctionBoundaryAngle(point, junction)
+function junctionBoundaryAngle(point, junction)
 	local center = getJunctionMeshCenter(junction)
 	return math.atan2(point.Z - center.Z, point.X - center.X)
 end
 
-local function boundaryEntriesSharePortal(a, b)
+function boundaryEntriesSharePortal(a, b)
 	return a.portal ~= nil and b.portal ~= nil and a.portal == b.portal
 end
 
-local function mergeBoundaryEntryPortal(target, source)
+function mergeBoundaryEntryPortal(target, source)
 	if not boundaryEntriesSharePortal(target, source) then
 		target.portal = nil
 		target.corePoint = target.point
 	end
 end
 
-local function sortedJunctionBoundaryEntries(junction)
+function sortedJunctionBoundaryEntries(junction)
 	local entries = {}
 	for _, portal in ipairs(junction.portals) do
 		table.insert(entries, { point = portal.left, corePoint = portal.coreLeft or portal.left, portal = portal })
@@ -2010,7 +2007,7 @@ local function sortedJunctionBoundaryEntries(junction)
 	return filtered
 end
 
-local function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPoint, subdivisions, surfaceY)
+function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPoint, subdivisions, surfaceY)
 	local center = getJunctionMeshCenter(junction)
 	local fromAngle = junctionBoundaryAngle(fromPoint, junction)
 	local toAngle = junctionBoundaryAngle(toPoint, junction)
@@ -2033,13 +2030,13 @@ local function addConnectorSubdivisionPoints(boundary, junction, fromPoint, toPo
 	end
 end
 
-local function appendBoundaryPoint(boundary, point)
+function appendBoundaryPoint(boundary, point)
 	if #boundary == 0 or distanceXZ(boundary[#boundary], point) > 0.05 then
 		table.insert(boundary, point)
 	end
 end
 
-local function appendUniqueBoundaryPoint(boundary, point)
+function appendUniqueBoundaryPoint(boundary, point)
 	for _, existing in ipairs(boundary) do
 		if distanceXZ(existing, point) <= 0.05 then
 			return
@@ -2048,11 +2045,11 @@ local function appendUniqueBoundaryPoint(boundary, point)
 	table.insert(boundary, point)
 end
 
-local function hullCrossXZ(origin, a, b)
+function hullCrossXZ(origin, a, b)
 	return (a.X - origin.X) * (b.Z - origin.Z) - (a.Z - origin.Z) * (b.X - origin.X)
 end
 
-local function convexHullXZ(points)
+function convexHullXZ(points)
 	if #points < 3 then
 		return points
 	end
@@ -2101,7 +2098,7 @@ local function convexHullXZ(points)
 	return hull
 end
 
-local function polygonAverageCenter(boundary, fallback)
+function polygonAverageCenter(boundary, fallback)
 	if #boundary == 0 then
 		return fallback
 	end
@@ -2114,7 +2111,7 @@ local function polygonAverageCenter(boundary, fallback)
 	return Vector3.new(center.X, fallback.Y, center.Z)
 end
 
-local function portalConnectorPoints(portal, surfaceY)
+function portalConnectorPoints(portal, surfaceY)
 	local coreLeft = portal.coreLeft or portal.left
 	local coreRight = portal.coreRight or portal.right
 	local mouthLeft = portal.left
@@ -2125,13 +2122,13 @@ local function portalConnectorPoints(portal, surfaceY)
 		Vector3.new(mouthRight.X, surfaceY, mouthRight.Z)
 end
 
-local function addLinearSubdivisionPoints(boundary, fromPoint, toPoint, subdivisions)
+function addLinearSubdivisionPoints(boundary, fromPoint, toPoint, subdivisions)
 	for i = 1, subdivisions do
 		appendBoundaryPoint(boundary, fromPoint:Lerp(toPoint, i / (subdivisions + 1)))
 	end
 end
 
-local function isNaturalJunctionCorner(junction, fromEntry, toEntry, point)
+function isNaturalJunctionCorner(junction, fromEntry, toEntry, point)
 	if not fromEntry.portal or not toEntry.portal then
 		return false
 	end
@@ -2151,7 +2148,7 @@ local function isNaturalJunctionCorner(junction, fromEntry, toEntry, point)
 	return distanceXZ(point, getJunctionMeshCenter(junction)) <= math.max(maxDistance, 6)
 end
 
-local function naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
+function naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
 	if not fromEntry.portal or not toEntry.portal then
 		return nil
 	end
@@ -2173,7 +2170,7 @@ local function naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
 	return point
 end
 
-local function addConnectorBoundaryPoints(boundary, junction, fromEntry, toEntry, subdivisions, surfaceY)
+function addConnectorBoundaryPoints(boundary, junction, fromEntry, toEntry, subdivisions, surfaceY)
 	local corner = naturalJunctionCorner(junction, fromEntry, toEntry, surfaceY)
 	if corner then
 		addLinearSubdivisionPoints(boundary, Vector3.new(fromEntry.point.X, surfaceY, fromEntry.point.Z), corner, subdivisions)
@@ -2187,7 +2184,7 @@ local function addConnectorBoundaryPoints(boundary, junction, fromEntry, toEntry
 	end
 end
 
-local function getJunctionBoundary(junction, surfaceY)
+function getJunctionBoundary(junction, surfaceY)
 	if not junction.portals or #junction.portals == 0 then
 		return {}
 	end
@@ -2218,7 +2215,7 @@ local function getJunctionBoundary(junction, surfaceY)
 	return convexHullXZ(boundary)
 end
 
-local function addPortalConnectorToMesh(state, portal, surfaceY)
+function addPortalConnectorToMesh(state, portal, surfaceY)
 	local coreLeft, coreRight, mouthLeft, mouthRight = portalConnectorPoints(portal, surfaceY)
 	if distanceXZ(coreLeft, mouthLeft) <= 0.05 and distanceXZ(coreRight, mouthRight) <= 0.05 then
 		return
@@ -2232,7 +2229,7 @@ local function addPortalConnectorToMesh(state, portal, surfaceY)
 	addMeshTriangle(state, coreLeftVertex, mouthRightVertex, coreRightVertex)
 end
 
-local function addIntersectionPatchToMesh(state, junction)
+function addIntersectionPatchToMesh(state, junction)
 	local fallbackCenter = getJunctionMeshCenter(junction) + Vector3.new(0, ROAD_MESH_THICKNESS * 0.5, 0)
 	local boundary = getJunctionBoundary(junction, fallbackCenter.Y)
 	if #boundary >= 3 then
@@ -2256,7 +2253,7 @@ local function addIntersectionPatchToMesh(state, junction)
 	end
 end
 
-local function addRoadCollisionSpanToMesh(state, leftA, rightA, leftB, rightB)
+function addRoadCollisionSpanToMesh(state, leftA, rightA, leftB, rightB)
 	if (leftB - leftA).Magnitude <= 0.05 and (rightB - rightA).Magnitude <= 0.05 then
 		return 0
 	end
@@ -2292,7 +2289,7 @@ local function addRoadCollisionSpanToMesh(state, leftA, rightA, leftB, rightB)
 	return 1
 end
 
-local function addIntersectionCollisionPatchToMesh(state, junction)
+function addIntersectionCollisionPatchToMesh(state, junction)
 	local meshCenter = getJunctionMeshCenter(junction)
 	local topCenter = meshCenter + Vector3.new(0, ROAD_MESH_THICKNESS * 0.5, 0)
 	local bottomCenter = meshCenter + Vector3.new(0, -ROAD_MESH_THICKNESS * 0.5, 0)
@@ -2328,7 +2325,24 @@ local function addIntersectionCollisionPatchToMesh(state, junction)
 	end
 end
 
-local function createRuntimeNetworkMeshPart(state, targetModel, meshName)
+function getJunctionCollisionDiameter(junction)
+	local center = getJunctionMeshCenter(junction)
+	local maxDistance = math.max(junction.radius or 0, DEFAULT_AUTHORED_ROAD_WIDTH * 0.5)
+	local boundary = getJunctionBoundary(junction, center.Y)
+	for _, point in ipairs(boundary) do
+		maxDistance = math.max(maxDistance, distanceXZ(point, center))
+	end
+	for _, portal in ipairs(junction.portals or {}) do
+		for _, point in ipairs({ portal.left, portal.right, portal.coreLeft, portal.coreRight, portal.point }) do
+			if point then
+				maxDistance = math.max(maxDistance, distanceXZ(point, center))
+			end
+		end
+	end
+	return math.max(maxDistance * 2, DEFAULT_AUTHORED_ROAD_WIDTH)
+end
+
+function createRuntimeNetworkMeshPart(state, targetModel, meshName)
 	if state.faces == 0 then
 		return false, "No mesh faces were generated"
 	end
@@ -2383,7 +2397,7 @@ local function createRuntimeNetworkMeshPart(state, targetModel, meshName)
 	return true, sourceMeshPart
 end
 
-local function buildRoadMeshComponent(chains, junctions, targetModel, meshName)
+function buildRoadMeshComponent(chains, junctions, targetModel, meshName)
 	local state, err = newMeshState()
 	if not state then
 		return false, err
@@ -2410,7 +2424,7 @@ local function buildRoadMeshComponent(chains, junctions, targetModel, meshName)
 	}
 end
 
-local function buildRoadComponents(chains, junctions)
+function buildRoadComponents(chains, junctions)
 	local parent = {}
 	for _, chain in ipairs(chains) do
 		parent[chain] = chain
@@ -2479,7 +2493,7 @@ local function buildRoadComponents(chains, junctions)
 	return components
 end
 
-local function collectAutomaticJunctions(chains)
+function collectAutomaticJunctions(chains)
 	local rawJunctions = collectEndpointJunctions(chains)
 	for _, junction in ipairs(collectCrossIntersections(chains)) do
 		table.insert(rawJunctions, junction)
@@ -2493,7 +2507,7 @@ local function collectAutomaticJunctions(chains)
 	return junctions
 end
 
-local function authoredJunctionSuppressionRadius(junction)
+function authoredJunctionSuppressionRadius(junction)
 	local center = junction.intersectionCenter or junction.center
 	local radius = junction.radius or 0
 	for _, portal in ipairs(junction.portals or {}) do
@@ -2503,7 +2517,7 @@ local function authoredJunctionSuppressionRadius(junction)
 	return radius
 end
 
-local function mergeAuthoredAndAutomaticJunctions(authoredJunctions, automaticJunctions)
+function mergeAuthoredAndAutomaticJunctions(authoredJunctions, automaticJunctions)
 	local junctions = {}
 	for _, junction in ipairs(authoredJunctions or {}) do
 		table.insert(junctions, junction)
@@ -2533,7 +2547,7 @@ local function mergeAuthoredAndAutomaticJunctions(authoredJunctions, automaticJu
 	return junctions
 end
 
-local function buildProcessedRoadNetwork(root)
+function buildProcessedRoadNetwork(root)
 	local chains = collectSplineBuildData(root)
 	if #chains == 0 then
 		return nil, "No authored spline chains found"
@@ -2583,7 +2597,7 @@ local function buildProcessedRoadNetwork(root)
 	}
 end
 
-local function createReplicatedProcessedRoadData(roadNetwork, world)
+function createReplicatedProcessedRoadData(roadNetwork, world)
 	local oldData = world:FindFirstChild(RUNTIME_SPLINE_DATA_NAME)
 	if oldData then
 		oldData:Destroy()
@@ -2645,6 +2659,21 @@ local function createReplicatedProcessedRoadData(roadNetwork, world)
 			junctionData:SetAttribute(RoadSplineData.JUNCTION_PORTAL_ATTACH_DISTANCE_ATTR, portalAttachDistance)
 			junctionData:SetAttribute(RoadSplineData.JUNCTION_SUBDIVISIONS_ATTR, RoadSplineData.sanitizeJunctionSubdivisions(junction.subdivisions))
 			junctionData:SetAttribute("ComponentId", componentIndex)
+
+			local boundary = getJunctionBoundary(junction, junctionCenter.Y)
+			if #boundary >= 3 then
+				local boundaryFolder = Instance.new("Folder")
+				boundaryFolder.Name = RoadSplineData.JUNCTION_BOUNDARY_NAME
+				boundaryFolder.Parent = junctionData
+
+				for pointIndex, point in ipairs(boundary) do
+					local boundaryPoint = Instance.new("Vector3Value")
+					boundaryPoint.Name = string.format("B%04d", pointIndex)
+					boundaryPoint.Value = point
+					boundaryPoint.Parent = boundaryFolder
+				end
+			end
+
 			junctionData.Parent = junctionsFolder
 		end
 	end
@@ -2665,7 +2694,7 @@ local function createReplicatedProcessedRoadData(roadNetwork, world)
 	return dataRoot
 end
 
-local function buildRuntimeRoadNetworkMeshes(chains, junctions, targetModel)
+function buildRuntimeRoadNetworkMeshes(chains, junctions, targetModel)
 	local components = buildRoadComponents(chains, junctions)
 	local meshParts = {}
 	local totalSpans = 0
@@ -2688,7 +2717,7 @@ local function buildRuntimeRoadNetworkMeshes(chains, junctions, targetModel)
 	}
 end
 
-local function buildRuntimeRoadMesh(roadNetwork, world, driveSurfaces)
+function buildRuntimeRoadMesh(roadNetwork, world, driveSurfaces)
 	if not roadNetwork or #(roadNetwork.chains or {}) == 0 then
 		return nil, 0, "No processed road chains found"
 	end
@@ -2725,7 +2754,7 @@ local function buildRuntimeRoadMesh(roadNetwork, world, driveSurfaces)
 	return meshModel, #meshInfoOrErr.meshParts, nil
 end
 
-local function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfaces)
+function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfaces)
 	if not roadNetwork or #(roadNetwork.chains or {}) == 0 then
 		return 0, "No processed road chains found"
 	end
@@ -2768,9 +2797,25 @@ local function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfac
 		end
 
 		for _, junction in ipairs(roadNetwork.junctions or {}) do
+			local junctionPad = createCollisionCap(
+				collisionModel,
+				getJunctionMeshCenter(junction),
+				builtCount + 1,
+				getJunctionCollisionDiameter(junction),
+				false
+			)
+			if junctionPad then
+				junctionPad.Name = string.format("RoadCollisionJunctionPad_%04d", builtCount + 1)
+				junctionPad:SetAttribute("JunctionCollision", true)
+				junctionPad:SetAttribute("JunctionName", junction.name or "")
+				trackPart(driveSurfaces, junctionPad)
+				builtCount += 1
+			end
+
 			local state, stateErr = newMeshState()
 			if not state then
-				error(tostring(stateErr), 0)
+				roadDebugWarn("junction collision mesh skipped for %s; using collision pad: %s", tostring(junction.name), tostring(stateErr))
+				continue
 			end
 
 			addIntersectionCollisionPatchToMesh(state, junction)
@@ -2783,8 +2828,11 @@ local function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfac
 				string.format("RoadCollisionJunction_%04d", builtCount + 1)
 			)
 			if not okMesh then
-				error(tostring(meshPartOrErr), 0)
+				roadDebugWarn("junction collision mesh failed for %s; using collision pad: %s", tostring(junction.name), tostring(meshPartOrErr))
+				continue
 			end
+			meshPartOrErr:SetAttribute("JunctionCollision", true)
+			meshPartOrErr:SetAttribute("JunctionName", junction.name or "")
 			trackPart(driveSurfaces, meshPartOrErr)
 			builtCount += 1
 		end
@@ -2803,7 +2851,7 @@ local function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfac
 	return builtCount, nil
 end
 
-local function createRoadStrip(parent, a, b, index, width, thickness, surfaceOffset, visible, collidable, prefix)
+function createRoadStrip(parent, a, b, index, width, thickness, surfaceOffset, visible, collidable, prefix)
 	local delta = b - a
 	local len = delta.Magnitude
 	if len <= 0.05 then
@@ -2824,7 +2872,7 @@ local function createRoadStrip(parent, a, b, index, width, thickness, surfaceOff
 	return part
 end
 
-local function createRoadCap(parent, position, index, width, thickness, surfaceOffset, visible, collidable, prefix)
+function createRoadCap(parent, position, index, width, thickness, surfaceOffset, visible, collidable, prefix)
 	local cap = makePart(parent, {
 		Name = string.format("%s_%04d", prefix, index),
 		Shape = Enum.PartType.Cylinder,
@@ -2839,7 +2887,7 @@ local function createRoadCap(parent, position, index, width, thickness, surfaceO
 	return cap
 end
 
-local function createCollisionSegment(parent, a, b, index, width, visible)
+function createCollisionSegment(parent, a, b, index, width, visible)
 	local thickness = math.max(Config.authoredRoadCollisionThickness, 0.05)
 	local surfaceOffset = Config.authoredRoadCollisionSurfaceOffset
 	local part = createRoadStrip(parent, a, b, index, width, thickness, surfaceOffset, visible, true, "AuthoredRoadCollision")
@@ -2850,7 +2898,7 @@ local function createCollisionSegment(parent, a, b, index, width, visible)
 	return part
 end
 
-local function createCollisionCap(parent, position, index, width, visible)
+function createCollisionCap(parent, position, index, width, visible)
 	local thickness = math.max(Config.authoredRoadCollisionThickness, 0.05)
 	local surfaceOffset = Config.authoredRoadCollisionSurfaceOffset
 	local cap = createRoadCap(parent, position, index, width, thickness, surfaceOffset, visible, true, "AuthoredRoadCollisionCap")
@@ -2858,15 +2906,15 @@ local function createCollisionCap(parent, position, index, width, visible)
 	return cap
 end
 
-local function createVisualSegment(parent, a, b, index, width)
+function createVisualSegment(parent, a, b, index, width)
 	return createRoadStrip(parent, a, b, index, width, VISUAL_ROAD_THICKNESS, VISUAL_ROAD_SURFACE_OFFSET, true, false, "AuthoredRoadVisual")
 end
 
-local function createVisualCap(parent, position, index, width)
+function createVisualCap(parent, position, index, width)
 	return createRoadCap(parent, position, index, width, VISUAL_ROAD_THICKNESS, VISUAL_ROAD_SURFACE_OFFSET, true, false, "AuthoredRoadVisualCap")
 end
 
-local function findFirstSpawn(root)
+function findFirstSpawn(root)
 	for _, spline in ipairs(getAuthoredSplines(root)) do
 		local points = getAuthoredSplinePoints(spline)
 		if #points > 0 then
@@ -2895,7 +2943,7 @@ local function findFirstSpawn(root)
 	}
 end
 
-local function getMarkerFolder(root)
+function getMarkerFolder(root)
 	local folderName = Config.cabCompanyMarkerFolderName or "Markers"
 	local folder = root and root:FindFirstChild(folderName)
 	if folder and folder:IsA("Folder") then
@@ -2905,7 +2953,7 @@ local function getMarkerFolder(root)
 	return nil
 end
 
-local function isCabCompanyMarker(part)
+function isCabCompanyMarker(part)
 	if not (part and part:IsA("BasePart")) then
 		return false
 	end
@@ -2914,7 +2962,7 @@ local function isCabCompanyMarker(part)
 	return markerType == "CabCompany" or markerType == "CabCompanyNode"
 end
 
-local function isPlayerSpawnMarker(part)
+function isPlayerSpawnMarker(part)
 	if not (part and part:IsA("BasePart")) then
 		return false
 	end
@@ -2922,7 +2970,7 @@ local function isPlayerSpawnMarker(part)
 	return part:GetAttribute("Cab87MarkerType") == "PlayerSpawn"
 end
 
-local function findAuthoredMarker(root, markerName, predicate)
+function findAuthoredMarker(root, markerName, predicate)
 	if not root then
 		return nil
 	end
@@ -2949,21 +2997,21 @@ local function findAuthoredMarker(root, markerName, predicate)
 	return nil
 end
 
-local function findAuthoredCabCompanyMarker(root)
+function findAuthoredCabCompanyMarker(root)
 	return findAuthoredMarker(root, Config.cabCompanyMarkerName or "CabCompanyNode", isCabCompanyMarker)
 end
 
-local function findAuthoredPlayerSpawnMarker(root)
+function findAuthoredPlayerSpawnMarker(root)
 	return findAuthoredMarker(root, Config.cabCompanyPlayerSpawnMarkerName or "PlayerSpawnPoint", isPlayerSpawnMarker)
 end
 
-local function appendParts(target, source)
+function appendParts(target, source)
 	for _, item in ipairs(source or {}) do
 		table.insert(target, item)
 	end
 end
 
-local function buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles)
+function buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles)
 	local marker = findAuthoredCabCompanyMarker(root)
 	if not marker then
 		return nil
@@ -2991,7 +3039,7 @@ local function buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacle
 	return result.spawnPose
 end
 
-local function hideEditorRootForPlay(root)
+function hideEditorRootForPlay(root)
 	for _, item in ipairs(root:GetDescendants()) do
 		if item:IsA("BasePart") then
 			item.Transparency = 1
@@ -3002,7 +3050,7 @@ local function hideEditorRootForPlay(root)
 	end
 end
 
-local function cloneRoadVisuals(root, world)
+function cloneRoadVisuals(root, world)
 	local network = root:FindFirstChild(ROAD_EDITOR_NETWORK_NAME)
 	if not (network and network:IsA("Model")) or countRoadSurfaceParts(network) == 0 then
 		return nil, 0
@@ -3022,7 +3070,7 @@ local function cloneRoadVisuals(root, world)
 	return clone, countRoadSurfaceParts(clone)
 end
 
-local function buildGeneratedRoadVisuals(root, world)
+function buildGeneratedRoadVisuals(root, world)
 	local visualModel = Instance.new("Model")
 	visualModel.Name = "AuthoredRoadGeneratedVisuals"
 	visualModel.Parent = world
@@ -3055,7 +3103,7 @@ local function buildGeneratedRoadVisuals(root, world)
 	return visualModel, segmentIndex + capIndex
 end
 
-local function buildCollision(root, world, driveSurfaces, visible)
+function buildCollision(root, world, driveSurfaces, visible)
 	local collisionModel = Instance.new("Model")
 	collisionModel.Name = "AuthoredRoadCollision"
 	collisionModel.Parent = world
@@ -3086,7 +3134,7 @@ local function buildCollision(root, world, driveSurfaces, visible)
 	return segmentIndex
 end
 
-local function useRoadNetworkFallback(network, driveSurfaces)
+function useRoadNetworkFallback(network, driveSurfaces)
 	if not (network and network:IsA("Model")) then
 		return 0
 	end
