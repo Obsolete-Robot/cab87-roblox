@@ -115,6 +115,7 @@ Use the static browser tool in `tools/road-curve-editor` when you want to trace 
 
 1. Open `tools/road-curve-editor/index.html`, or run `tools/road-curve-editor/run.bat`.
 2. Import a trace image and lay out one or more splines in the browser tool.
+   - Open **Soft Select** or press **S** to drag broad regions of spline points and junctions with radius falloff.
 3. Export `cab87-road-curves.json` to save the full browser session, including the trace image and its transform.
 4. Reopen that same file in the browser tool with **Import Session JSON** if you want to resume editing later.
 5. In Studio, set **Import Plane Y** in the Road Editor.

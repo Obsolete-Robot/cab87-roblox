@@ -39,10 +39,11 @@ Manual:
 5. Use `Split Curve` after selecting an interior point on an open curve to split it into two curves sharing that split point.
 6. Use `New`, `Prev`, `Next`, `Delete`, `Road Width`, `Closed loop`, and `Roblox Mesh Preview` to manage splines and preview the authored-road mesh footprint/wireframe.
 7. Open the `Junctions` tab to click an existing curve point and create a junction from real road geometry. Dragging a junction center moves the junction and every control point inside that junction radius by the same offset; dragging the radius ring changes both the drag grouping and where incoming roads get clipped into the junction. Use `Auto Junction` on a selected junction to recenter it from the sampled road entrances inside that radius. The final junction polygon is built from those clipped road entrances plus the authored center. Roundabouts should be authored as a closed loop with one junction at each entry/exit on the loop.
-8. The browser autosaves the editor session locally and restores it after refresh, including incomplete curves. Large trace images may exceed browser storage quota; in that case the curve data still autosaves without the image data.
-9. Export `cab87-road-curves.json` to save the full editor session, including camera state and the trace image data/transform.
-10. Use `Import Session JSON` in the browser tool to resume where you left off.
-11. In Roblox Studio, use the road editor plugin's `Import Curve JSON (Append)` or `Import Curve JSON (Replace)` action on that same JSON file.
+8. Open the `Soft Select` tab or press `S` to drag a point or junction center and move all spline points and junction centers inside the soft radius with smooth falloff. Adjust the radius with the number field or slider, up to 1000 studs.
+9. The browser autosaves the editor session locally and restores it after refresh, including incomplete curves. Large trace images may exceed browser storage quota; in that case the curve data still autosaves without the image data.
+10. Export `cab87-road-curves.json` to save the full editor session, including camera state and the trace image data/transform.
+11. Use `Import Session JSON` in the browser tool to resume where you left off.
+12. In Roblox Studio, use the road editor plugin's `Import Curve JSON (Append)` or `Import Curve JSON (Replace)` action on that same JSON file.
 
 ## JSON Format
 
@@ -85,7 +86,8 @@ The exported payload stays shaped for the Studio plugin importer and adds an `ed
       "offsetZ": 0,
       "scale": 1,
       "opacity": 55
-    }
+    },
+    "softSelectionRadius": 180
   }
 }
 ```

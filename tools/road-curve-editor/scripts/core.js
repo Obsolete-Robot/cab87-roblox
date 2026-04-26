@@ -37,6 +37,10 @@ const JUNCTION_HIT_RADIUS_PX = 13;
 const JUNCTION_RADIUS_RING_HIT_PX = 8;
 const CURVE_INSERT_HIT_RADIUS_PX = 18;
 const CURVE_END_INSERT_ALPHA_THRESHOLD = 0.28;
+const SOFT_SELECTION_RADIUS_DEFAULT = 180;
+const SOFT_SELECTION_RADIUS_MIN = 12;
+const SOFT_SELECTION_RADIUS_MAX = 1000;
+const SOFT_SELECTION_MIN_WEIGHT = 0.001;
 
 const elements = {
 	canvas: document.getElementById("editorCanvas"),
@@ -53,6 +57,8 @@ const elements = {
 	junctionSubdivisionsInput: document.getElementById("junctionSubdivisionsInput"),
 	autoJunctionButton: document.getElementById("autoJunctionButton"),
 	deleteJunctionButton: document.getElementById("deleteJunctionButton"),
+	softSelectionRadiusInput: document.getElementById("softSelectionRadiusInput"),
+	softSelectionRadiusSlider: document.getElementById("softSelectionRadiusSlider"),
 	newSplineButton: document.getElementById("newSplineButton"),
 	prevSplineButton: document.getElementById("prevSplineButton"),
 	nextSplineButton: document.getElementById("nextSplineButton"),
@@ -104,6 +110,8 @@ const state = {
 	statusMessage: "",
 	meshPreviewEnabled: false,
 	junctionModeEnabled: false,
+	softSelectionEnabled: false,
+	softSelectionRadius: SOFT_SELECTION_RADIUS_DEFAULT,
 	activeSidebarPanel: "splines",
 	meshPreviewDirty: true,
 	meshPreviewCache: null,
@@ -136,6 +144,14 @@ function sanitizeJunctionSubdivisions(value) {
 		JUNCTION_SUBDIVISIONS_MAX,
 		Math.max(JUNCTION_SUBDIVISIONS_MIN, Math.round(subdivisions)),
 	);
+}
+
+function sanitizeSoftSelectionRadius(value) {
+	const radius = Number(value);
+	if (!Number.isFinite(radius)) {
+		return SOFT_SELECTION_RADIUS_DEFAULT;
+	}
+	return Math.min(SOFT_SELECTION_RADIUS_MAX, Math.max(SOFT_SELECTION_RADIUS_MIN, radius));
 }
 
 function roundNumber(value, decimals = 3) {

@@ -4,8 +4,13 @@ function activateSidebarPanel(panelId) {
 	const hasPanel = elements.sidebarPanels.some((panel) => panel.dataset.sidebarPanel === panelId);
 	const activePanel = hasPanel ? panelId : "splines";
 	const wasJunctionModeEnabled = state.junctionModeEnabled;
+	const wasSoftSelectionEnabled = state.softSelectionEnabled;
 	state.activeSidebarPanel = activePanel;
 	setJunctionModeEnabled(activePanel === "junctions");
+	state.softSelectionEnabled = activePanel === "soft-selection";
+	if (!state.softSelectionEnabled && state.drag && state.drag.mode === "soft-selection") {
+		state.drag = null;
+	}
 
 	for (const tab of elements.sidebarTabs) {
 		const active = tab.dataset.sidebarTab === activePanel;
@@ -20,8 +25,19 @@ function activateSidebarPanel(panelId) {
 		panel.hidden = !active;
 	}
 
-	if (autosaveReady && wasJunctionModeEnabled !== state.junctionModeEnabled) {
-		setStatus(getJunctionModeStatus());
+	refreshInspector();
+	requestRender();
+
+	if (autosaveReady) {
+		if (state.softSelectionEnabled && wasSoftSelectionEnabled !== state.softSelectionEnabled) {
+			setStatus(getSoftSelectionStatus());
+		} else if (state.junctionModeEnabled && wasJunctionModeEnabled !== state.junctionModeEnabled) {
+			setStatus(getJunctionModeStatus());
+		} else if (wasSoftSelectionEnabled !== state.softSelectionEnabled) {
+			setStatus(getSoftSelectionStatus());
+		} else if (wasJunctionModeEnabled !== state.junctionModeEnabled) {
+			setStatus(getJunctionModeStatus());
+		}
 	}
 }
 
@@ -64,11 +80,14 @@ function updateStatus() {
 	const spline = getActiveSpline();
 	const selected = getSelectedPointRecord();
 	const previewMode = state.meshPreviewEnabled ? "Mesh" : "Ribbon";
+	const softMode = state.softSelectionEnabled
+		? ` | Soft ${formatNumber(state.softSelectionRadius, 1)} studs`
+		: "";
 	const selectedText = selected
 		? `Selected ${selected.spline.name}:${selected.pointIndex + 1} at X ${formatNumber(selected.point.x, 1)}, Z ${formatNumber(selected.point.z, 1)}.`
 		: "No point selected.";
 	elements.status.textContent =
-		`${spline.name} | ${spline.points.length} control points | ${spline.closed ? "Closed" : "Open"} | Width ${formatNumber(spline.width, 1)} studs | Preview ${previewMode}.\n` +
+		`${spline.name} | ${spline.points.length} control points | ${spline.closed ? "Closed" : "Open"} | Width ${formatNumber(spline.width, 1)} studs | Preview ${previewMode}${softMode}.\n` +
 		`${selectedText}\n` +
 		`${state.statusMessage || "Preview uses the same Catmull-Rom subdivision rule as the Roblox road editor sampler."}`;
 }
@@ -89,6 +108,12 @@ function focusJunctionPanel() {
 	setStatus(getJunctionModeStatus());
 }
 
+function focusSoftSelectionPanel() {
+	activateSidebarPanel("soft-selection");
+	refreshInspector();
+	setStatus(getSoftSelectionStatus());
+}
+
 function refreshInspector() {
 	const spline = getActiveSpline();
 	elements.widthInput.value = formatNumber(spline.width, 1);
@@ -98,6 +123,8 @@ function refreshInspector() {
 	const selectedJunction = getSelectedJunction();
 	elements.junctionRadiusInput.value = formatNumber(selectedJunction ? selectedJunction.radius : JUNCTION_RADIUS_DEFAULT, 1);
 	elements.junctionSubdivisionsInput.value = String(selectedJunction ? sanitizeJunctionSubdivisions(selectedJunction.subdivisions) : JUNCTION_SUBDIVISIONS_DEFAULT);
+	elements.softSelectionRadiusInput.value = formatNumber(state.softSelectionRadius, 1);
+	elements.softSelectionRadiusSlider.value = String(Math.round(state.softSelectionRadius));
 	elements.imageOffsetXInput.value = formatNumber(state.image.offsetX, 1);
 	elements.imageOffsetZInput.value = formatNumber(state.image.offsetZ, 1);
 	elements.imageScaleInput.value = formatNumber(state.image.scale, 2);
