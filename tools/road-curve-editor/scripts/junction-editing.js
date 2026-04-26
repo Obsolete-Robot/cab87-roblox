@@ -51,7 +51,7 @@ function findJunctionContainingControlPoint(pointHit) {
 
 function addJunctionAtControlPoint(pointHit) {
 	if (!pointHit) {
-		setStatus("Junction Mode adds junctions from existing curve points. Add or click a curve point first.");
+		setStatus("The Junctions tab adds junctions from existing curve points. Add or click a curve point first.");
 		return null;
 	}
 

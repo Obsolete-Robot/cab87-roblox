@@ -261,7 +261,7 @@ async function importSessionFromText(text, options = {}) {
 		? payload.editorState
 		: null;
 	state.meshPreviewEnabled = editorState ? editorState.meshPreviewEnabled === true : false;
-	state.junctionModeEnabled = editorState ? editorState.junctionModeEnabled === true : false;
+	state.junctionModeEnabled = state.activeSidebarPanel === "junctions";
 
 	if (editorState && Number.isInteger(editorState.activeSplineIndex)) {
 		state.activeSplineIndex = Math.min(

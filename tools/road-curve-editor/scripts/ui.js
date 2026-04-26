@@ -1,5 +1,60 @@
 // Sidebar UI and inspector updates.
 
+function activateSidebarPanel(panelId) {
+	const hasPanel = elements.sidebarPanels.some((panel) => panel.dataset.sidebarPanel === panelId);
+	const activePanel = hasPanel ? panelId : "splines";
+	const wasJunctionModeEnabled = state.junctionModeEnabled;
+	state.activeSidebarPanel = activePanel;
+	setJunctionModeEnabled(activePanel === "junctions");
+
+	for (const tab of elements.sidebarTabs) {
+		const active = tab.dataset.sidebarTab === activePanel;
+		tab.classList.toggle("active", active);
+		tab.setAttribute("aria-selected", String(active));
+		tab.tabIndex = active ? 0 : -1;
+	}
+
+	for (const panel of elements.sidebarPanels) {
+		const active = panel.dataset.sidebarPanel === activePanel;
+		panel.classList.toggle("active", active);
+		panel.hidden = !active;
+	}
+
+	if (autosaveReady && wasJunctionModeEnabled !== state.junctionModeEnabled) {
+		setStatus(getJunctionModeStatus());
+	}
+}
+
+function activateAdjacentSidebarPanel(direction) {
+	const tabs = elements.sidebarTabs;
+	const currentIndex = tabs.findIndex((tab) => tab.dataset.sidebarTab === state.activeSidebarPanel);
+	const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+	const nextIndex = (safeIndex + direction + tabs.length) % tabs.length;
+	const nextTab = tabs[nextIndex];
+
+	activateSidebarPanel(nextTab.dataset.sidebarTab);
+	nextTab.focus();
+}
+
+function handleSidebarTabKeyDown(event) {
+	if (event.key === "ArrowRight") {
+		event.preventDefault();
+		activateAdjacentSidebarPanel(1);
+	} else if (event.key === "ArrowLeft") {
+		event.preventDefault();
+		activateAdjacentSidebarPanel(-1);
+	} else if (event.key === "Home") {
+		event.preventDefault();
+		activateSidebarPanel(elements.sidebarTabs[0].dataset.sidebarTab);
+		elements.sidebarTabs[0].focus();
+	} else if (event.key === "End") {
+		event.preventDefault();
+		const lastTab = elements.sidebarTabs[elements.sidebarTabs.length - 1];
+		activateSidebarPanel(lastTab.dataset.sidebarTab);
+		lastTab.focus();
+	}
+}
+
 function setStatus(message) {
 	state.statusMessage = message;
 	updateStatus();
@@ -20,18 +75,16 @@ function updateStatus() {
 
 function setJunctionModeEnabled(enabled) {
 	state.junctionModeEnabled = enabled;
-	elements.junctionModeButton.classList.toggle("primary", enabled);
-	elements.junctionModeButton.textContent = enabled ? "Junction Mode: On" : "Junction Mode";
 }
 
 function getJunctionModeStatus() {
 	return state.junctionModeEnabled
-		? "Junction Mode enabled. Click an existing curve point to add, drag centers to move junctions and grouped points, drag radius rings to scale, Alt-click to delete."
-		: "Junction Mode disabled.";
+		? "Junction editing enabled. Click an existing curve point to add, drag centers to move junctions and grouped points, drag radius rings to scale, Alt-click to delete."
+		: "Junction editing disabled.";
 }
 
-function toggleJunctionMode() {
-	setJunctionModeEnabled(!state.junctionModeEnabled);
+function focusJunctionPanel() {
+	activateSidebarPanel("junctions");
 	refreshInspector();
 	setStatus(getJunctionModeStatus());
 }
@@ -41,7 +94,7 @@ function refreshInspector() {
 	elements.widthInput.value = formatNumber(spline.width, 1);
 	elements.closedToggle.checked = spline.closed;
 	elements.meshPreviewToggle.checked = state.meshPreviewEnabled;
-	setJunctionModeEnabled(state.junctionModeEnabled);
+	setJunctionModeEnabled(state.activeSidebarPanel === "junctions");
 	const selectedJunction = getSelectedJunction();
 	elements.junctionRadiusInput.value = formatNumber(selectedJunction ? selectedJunction.radius : JUNCTION_RADIUS_DEFAULT, 1);
 	elements.junctionSubdivisionsInput.value = String(selectedJunction ? sanitizeJunctionSubdivisions(selectedJunction.subdivisions) : JUNCTION_SUBDIVISIONS_DEFAULT);

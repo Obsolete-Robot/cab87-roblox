@@ -158,7 +158,7 @@ function handleKeyDown(event) {
 		setStatus(`Created ${getActiveSpline().name}.`);
 	} else if (event.key.toLowerCase() === "j") {
 		event.preventDefault();
-		toggleJunctionMode();
+		focusJunctionPanel();
 	}
 }
 
@@ -166,6 +166,13 @@ function bindEvents() {
 	window.addEventListener("resize", resizeCanvas);
 	window.addEventListener("keydown", handleKeyDown);
 	window.addEventListener("beforeunload", flushAutosave);
+
+	for (const tab of elements.sidebarTabs) {
+		tab.addEventListener("click", () => {
+			activateSidebarPanel(tab.dataset.sidebarTab);
+		});
+		tab.addEventListener("keydown", handleSidebarTabKeyDown);
+	}
 
 	elements.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 	elements.canvas.addEventListener("mousedown", (event) => {
@@ -201,7 +208,6 @@ function bindEvents() {
 	elements.deletePointButton.addEventListener("click", deleteSelectedPoint);
 	elements.splitSplineButton.addEventListener("click", splitSelectedSplineAtPoint);
 	elements.centerViewButton.addEventListener("click", centerViewOnActiveSpline);
-	elements.junctionModeButton.addEventListener("click", toggleJunctionMode);
 	elements.autoJunctionButton.addEventListener("click", autoSelectedJunction);
 	elements.deleteJunctionButton.addEventListener("click", deleteSelectedJunction);
 	elements.junctionRadiusInput.addEventListener("change", updateSelectedJunctionRadiusFromInput);
@@ -272,6 +278,7 @@ async function initialize() {
 	state.junctions = [];
 	state.image = createEmptyImageState();
 	bindEvents();
+	activateSidebarPanel(state.activeSidebarPanel);
 	resizeCanvas();
 
 	let restored = false;

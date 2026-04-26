@@ -40,6 +40,8 @@ const CURVE_END_INSERT_ALPHA_THRESHOLD = 0.28;
 
 const elements = {
 	canvas: document.getElementById("editorCanvas"),
+	sidebarTabs: Array.from(document.querySelectorAll("[data-sidebar-tab]")),
+	sidebarPanels: Array.from(document.querySelectorAll("[data-sidebar-panel]")),
 	splineList: document.getElementById("splineList"),
 	widthInput: document.getElementById("widthInput"),
 	closedToggle: document.getElementById("closedToggle"),
@@ -49,7 +51,6 @@ const elements = {
 	centerViewButton: document.getElementById("centerViewButton"),
 	junctionRadiusInput: document.getElementById("junctionRadiusInput"),
 	junctionSubdivisionsInput: document.getElementById("junctionSubdivisionsInput"),
-	junctionModeButton: document.getElementById("junctionModeButton"),
 	autoJunctionButton: document.getElementById("autoJunctionButton"),
 	deleteJunctionButton: document.getElementById("deleteJunctionButton"),
 	newSplineButton: document.getElementById("newSplineButton"),
@@ -103,6 +104,7 @@ const state = {
 	statusMessage: "",
 	meshPreviewEnabled: false,
 	junctionModeEnabled: false,
+	activeSidebarPanel: "splines",
 	meshPreviewDirty: true,
 	meshPreviewCache: null,
 };
