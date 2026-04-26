@@ -116,6 +116,24 @@ local function addRoadSegment(segments, bounds, a, b, width)
 	includePosition(bounds, b, width * 0.5)
 end
 
+local function addOverlaySegment(segments, bounds, a, b, pixelWidth)
+	if distanceXZ(a, b) < 0.5 then
+		return
+	end
+
+	table.insert(segments, {
+		ax = a.X,
+		az = a.Z,
+		bx = b.X,
+		bz = b.Z,
+		width = 0,
+		pixelWidth = pixelWidth,
+		color = Color3.fromRGB(98, 106, 108),
+	})
+	includePosition(bounds, a)
+	includePosition(bounds, b)
+end
+
 local function collectRoadPartsFromContainer(container)
 	local parts = {}
 	if not container then
@@ -161,6 +179,7 @@ end
 
 local function collectAuthoredRoadData(dataRoot)
 	local segments = {}
+	local junctionSegments = {}
 	local bounds = newBounds()
 
 	for _, chain in ipairs(RoadSplineData.collectSampledChains(dataRoot, {
@@ -173,8 +192,22 @@ local function collectAuthoredRoadData(dataRoot)
 		end
 	end
 
+	for _, junction in ipairs(RoadSplineData.collectJunctions(dataRoot, {
+		defaultRadius = RoadSampling.DEFAULT_ROAD_WIDTH * 0.5,
+		minRadius = 2,
+	})) do
+		if junction.boundary and #junction.boundary >= 3 then
+			local pixelWidth = math.max(getConfigNumber("minimapJunctionOutlinePixels", 4), 1)
+			for i = 1, #junction.boundary do
+				local nextIndex = (i % #junction.boundary) + 1
+				addOverlaySegment(junctionSegments, bounds, junction.boundary[i], junction.boundary[nextIndex], pixelWidth)
+			end
+		end
+	end
+
 	return {
 		segments = segments,
+		junctionSegments = junctionSegments,
 		bounds = bounds,
 		source = "AuthoredRoadSplineData",
 	}
@@ -214,14 +247,20 @@ local function readRoadData(world)
 	end
 
 	local mesh = collectMeshRoadData(world)
+	local dataRoot = world:FindFirstChild(RUNTIME_SPLINE_DATA_NAME)
+	local authored = nil
+	if dataRoot then
+		authored = collectAuthoredRoadData(dataRoot)
+	end
+
 	if mesh then
+		mesh.segments = authored and authored.segments or {}
+		mesh.junctionSegments = authored and authored.junctionSegments or {}
 		return mesh
 	end
 
-	local dataRoot = world:FindFirstChild(RUNTIME_SPLINE_DATA_NAME)
-	if dataRoot then
-		local authored = collectAuthoredRoadData(dataRoot)
-		if #authored.segments > 0 then
+	if authored then
+		if #authored.segments > 0 or #authored.junctionSegments > 0 then
 			return authored
 		end
 	end
@@ -415,25 +454,37 @@ local function buildRoadUi(ui, mapData)
 		return roadItems
 	end
 
+	local hasMesh = false
 	if mapData.meshParts and #mapData.meshParts > 0 then
 		for _, part in ipairs(mapData.meshParts) do
 			addMeshClone(ui, part)
 		end
 		ui.meshViewport.Visible = #ui.meshClones > 0
-		if ui.meshViewport.Visible then
-			return roadItems
-		end
+		hasMesh = ui.meshViewport.Visible
 	end
 
-	ui.meshViewport.Visible = false
-	for _, segment in ipairs(mapData.segments) do
+	if not hasMesh then
+		ui.meshViewport.Visible = false
+	end
+
+	local segments = {}
+	if not hasMesh then
+		for _, segment in ipairs(mapData.segments or {}) do
+			table.insert(segments, segment)
+		end
+	end
+	for _, segment in ipairs(mapData.junctionSegments or {}) do
+		table.insert(segments, segment)
+	end
+
+	for _, segment in ipairs(segments) do
 		local frame = Instance.new("Frame")
-		frame.Name = "Road"
+		frame.Name = segment.pixelWidth and "JunctionBoundary" or "Road"
 		frame.AnchorPoint = Vector2.new(0.5, 0.5)
-		frame.BackgroundColor3 = Color3.fromRGB(72, 78, 82)
+		frame.BackgroundColor3 = segment.color or Color3.fromRGB(72, 78, 82)
 		frame.BorderSizePixel = 0
 		frame.Visible = false
-		frame.ZIndex = 2
+		frame.ZIndex = segment.pixelWidth and 3 or 2
 		frame.Parent = ui.roadLayer
 
 		table.insert(roadItems, {
@@ -443,6 +494,7 @@ local function buildRoadUi(ui, mapData)
 			bx = segment.bx,
 			bz = segment.bz,
 			width = segment.width,
+			pixelWidth = segment.pixelWidth,
 		})
 	end
 
@@ -523,7 +575,7 @@ local function updateRoadSegment(item, playerPosition, scale, halfWidth, halfHei
 	local dx = bx - ax
 	local dy = by - ay
 	local length = math.sqrt(dx * dx + dy * dy)
-	local roadPixels = math.clamp(
+	local roadPixels = item.pixelWidth or math.clamp(
 		item.width * scale,
 		getConfigNumber("minimapRoadMinPixels", 3),
 		getConfigNumber("minimapRoadMaxPixels", 16)
@@ -861,7 +913,7 @@ function MinimapController.start(parentGui, cabTracker)
 		if #ui.meshClones > 0 then
 			updateMeshViewport(ui, playerPosition, span)
 			for _, item in ipairs(roadItems) do
-				item.frame.Visible = false
+				updateRoadSegment(item, playerPosition, scale, halfWidth, halfHeight, viewportSize.X, viewportSize.Y)
 			end
 		else
 			ui.meshViewport.Visible = false

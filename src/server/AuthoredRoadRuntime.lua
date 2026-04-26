@@ -2325,6 +2325,23 @@ function addIntersectionCollisionPatchToMesh(state, junction)
 	end
 end
 
+function getJunctionCollisionDiameter(junction)
+	local center = getJunctionMeshCenter(junction)
+	local maxDistance = math.max(junction.radius or 0, DEFAULT_AUTHORED_ROAD_WIDTH * 0.5)
+	local boundary = getJunctionBoundary(junction, center.Y)
+	for _, point in ipairs(boundary) do
+		maxDistance = math.max(maxDistance, distanceXZ(point, center))
+	end
+	for _, portal in ipairs(junction.portals or {}) do
+		for _, point in ipairs({ portal.left, portal.right, portal.coreLeft, portal.coreRight, portal.point }) do
+			if point then
+				maxDistance = math.max(maxDistance, distanceXZ(point, center))
+			end
+		end
+	end
+	return math.max(maxDistance * 2, DEFAULT_AUTHORED_ROAD_WIDTH)
+end
+
 function createRuntimeNetworkMeshPart(state, targetModel, meshName)
 	if state.faces == 0 then
 		return false, "No mesh faces were generated"
@@ -2642,6 +2659,21 @@ function createReplicatedProcessedRoadData(roadNetwork, world)
 			junctionData:SetAttribute(RoadSplineData.JUNCTION_PORTAL_ATTACH_DISTANCE_ATTR, portalAttachDistance)
 			junctionData:SetAttribute(RoadSplineData.JUNCTION_SUBDIVISIONS_ATTR, RoadSplineData.sanitizeJunctionSubdivisions(junction.subdivisions))
 			junctionData:SetAttribute("ComponentId", componentIndex)
+
+			local boundary = getJunctionBoundary(junction, junctionCenter.Y)
+			if #boundary >= 3 then
+				local boundaryFolder = Instance.new("Folder")
+				boundaryFolder.Name = RoadSplineData.JUNCTION_BOUNDARY_NAME
+				boundaryFolder.Parent = junctionData
+
+				for pointIndex, point in ipairs(boundary) do
+					local boundaryPoint = Instance.new("Vector3Value")
+					boundaryPoint.Name = string.format("B%04d", pointIndex)
+					boundaryPoint.Value = point
+					boundaryPoint.Parent = boundaryFolder
+				end
+			end
+
 			junctionData.Parent = junctionsFolder
 		end
 	end
@@ -2765,27 +2797,29 @@ function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfaces)
 		end
 
 		for _, junction in ipairs(roadNetwork.junctions or {}) do
+			local junctionPad = createCollisionCap(
+				collisionModel,
+				getJunctionMeshCenter(junction),
+				builtCount + 1,
+				getJunctionCollisionDiameter(junction),
+				false
+			)
+			if junctionPad then
+				junctionPad.Name = string.format("RoadCollisionJunctionPad_%04d", builtCount + 1)
+				junctionPad:SetAttribute("JunctionCollision", true)
+				junctionPad:SetAttribute("JunctionName", junction.name or "")
+				trackPart(driveSurfaces, junctionPad)
+				builtCount += 1
+			end
+
 			local state, stateErr = newMeshState()
 			if not state then
-				error(tostring(stateErr), 0)
+				roadDebugWarn("junction collision mesh skipped for %s; using collision pad: %s", tostring(junction.name), tostring(stateErr))
+				continue
 			end
 
 			addIntersectionCollisionPatchToMesh(state, junction)
 			if state.faces == 0 then
-				local fallback = createCollisionCap(
-					collisionModel,
-					getJunctionMeshCenter(junction),
-					builtCount + 1,
-					math.max((junction.radius or DEFAULT_AUTHORED_ROAD_WIDTH * 0.5) * 2, DEFAULT_AUTHORED_ROAD_WIDTH),
-					false
-				)
-				if fallback then
-					fallback.Name = string.format("RoadCollisionJunctionFallback_%04d", builtCount + 1)
-					fallback:SetAttribute("JunctionCollision", true)
-					fallback:SetAttribute("JunctionName", junction.name or "")
-					trackPart(driveSurfaces, fallback)
-					builtCount += 1
-				end
 				continue
 			end
 			local okMesh, meshPartOrErr = createRuntimeNetworkMeshPart(
@@ -2794,7 +2828,8 @@ function buildRuntimeCollisionMeshSections(roadNetwork, world, driveSurfaces)
 				string.format("RoadCollisionJunction_%04d", builtCount + 1)
 			)
 			if not okMesh then
-				error(tostring(meshPartOrErr), 0)
+				roadDebugWarn("junction collision mesh failed for %s; using collision pad: %s", tostring(junction.name), tostring(meshPartOrErr))
+				continue
 			end
 			meshPartOrErr:SetAttribute("JunctionCollision", true)
 			meshPartOrErr:SetAttribute("JunctionName", junction.name or "")

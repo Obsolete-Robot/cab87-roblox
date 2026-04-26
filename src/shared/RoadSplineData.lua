@@ -9,6 +9,7 @@ RoadSplineData.NETWORK_NAME = "RoadNetwork"
 RoadSplineData.WIREFRAME_NAME = "WireframeDisplay"
 RoadSplineData.RUNTIME_DATA_NAME = "AuthoredRoadSplineData"
 RoadSplineData.JUNCTIONS_NAME = "Junctions"
+RoadSplineData.JUNCTION_BOUNDARY_NAME = "Boundary"
 RoadSplineData.ROAD_WIDTH_ATTR = RoadSampling.ROAD_WIDTH_ATTR
 RoadSplineData.JUNCTION_SUBDIVISIONS_ATTR = "Subdivisions"
 RoadSplineData.JUNCTION_PORTAL_ATTACH_DISTANCE_ATTR = "PortalAttachDistance"
@@ -107,6 +108,22 @@ function RoadSplineData.getPointPositions(points)
 	return positions
 end
 
+function RoadSplineData.getVector3Values(folder)
+	local positions = {}
+	if not (folder and folder:IsA("Folder")) then
+		return positions
+	end
+
+	for _, child in ipairs(RoadSplineData.sortedChildren(folder)) do
+		local position = RoadSplineData.getPointPosition(child)
+		if position then
+			table.insert(positions, position)
+		end
+	end
+
+	return positions
+end
+
 function RoadSplineData.collectSplineRecords(root, options)
 	options = options or {}
 	local defaultWidth = options.defaultRoadWidth
@@ -187,12 +204,14 @@ function RoadSplineData.collectJunctions(root, options)
 		if center then
 			local radius = math.max(tonumber(junctionData:GetAttribute("Radius")) or defaultRadius, minRadius)
 			local subdivisions = RoadSplineData.sanitizeJunctionSubdivisions(junctionData:GetAttribute(RoadSplineData.JUNCTION_SUBDIVISIONS_ATTR))
+			local boundary = RoadSplineData.getVector3Values(junctionData:FindFirstChild(RoadSplineData.JUNCTION_BOUNDARY_NAME))
 			table.insert(junctions, {
 				instance = junctionData,
 				name = junctionData.Name,
 				center = center,
 				radius = radius,
 				subdivisions = subdivisions,
+				boundary = #boundary >= 3 and boundary or nil,
 				componentId = tonumber(junctionData:GetAttribute("ComponentId")) or 1,
 				portalAttachDistance = tonumber(junctionData:GetAttribute(RoadSplineData.JUNCTION_PORTAL_ATTACH_DISTANCE_ATTR)),
 				members = {},
