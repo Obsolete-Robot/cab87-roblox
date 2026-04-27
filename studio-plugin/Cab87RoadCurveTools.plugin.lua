@@ -1,4 +1,6 @@
 -- Cab87 Studio plugin: persistent spline road editor panel.
+-- Legacy reference tool. New authored road work should use
+-- Cab87RoadGraphBuilder.plugin.lua with intersection-visualizer graph JSON.
 -- Install to:
 --   %LOCALAPPDATA%\Roblox\Plugins\Cab87RoadCurveTools.plugin.lua
 
@@ -4314,7 +4316,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 32)
 title.BackgroundTransparency = 1
 title.TextXAlignment = Enum.TextXAlignment.Left
-title.Text = "Spline track editor"
+title.Text = "Spline track editor (Legacy)"
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
 title.TextColor3 = Color3.fromRGB(255, 220, 120)

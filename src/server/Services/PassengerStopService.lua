@@ -3,6 +3,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
+local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
+local RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
 local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
@@ -102,6 +104,34 @@ end
 local function collectAuthoredRoadCandidates(world, minSeparation)
 	local candidates = {}
 	local spacing = math.max(getConfigNumber("passengerStopSpacing", 160), 24)
+	local graphData = RoadGraphData.collectGraph(world, Config)
+	if graphData then
+		local meshData = RoadGraphMesher.buildNetworkMesh(graphData, graphData.settings)
+		for recordIndex, centerLine in ipairs(meshData.centerLines or {}) do
+			if #centerLine >= 2 then
+				local distanceSinceLastStop = spacing
+				local previousPosition = nil
+				local fallbackDir = horizontalUnit(centerLine[2] - centerLine[1]) or Vector3.new(0, 0, 1)
+				for index, position in ipairs(centerLine) do
+					if previousPosition then
+						distanceSinceLastStop += horizontalDistance(position, previousPosition)
+					end
+
+					if distanceSinceLastStop >= spacing then
+						local tangent = RoadSampling.getRoadSampleTangent(centerLine, index, #centerLine, false, fallbackDir)
+						local preferredSide = if ((#candidates + recordIndex) % 2 == 0) then 1 else -1
+						addRoadEdgeCandidate(candidates, position, tangent, centerLine.width or RoadSampling.DEFAULT_ROAD_WIDTH, minSeparation, preferredSide)
+						distanceSinceLastStop = 0
+					end
+
+					previousPosition = position
+				end
+			end
+		end
+
+		return candidates
+	end
+
 	local dataRoot = world:FindFirstChild(ROAD_SPLINE_DATA_NAME)
 	if not dataRoot then
 		return candidates

@@ -50,6 +50,8 @@ Use `g.Clear()` if you just want to remove the generated world.
 
 This repo includes a plugin file at:
 - `studio-plugin/Cab87MapTools.plugin.lua`
+- `studio-plugin/Cab87RoadGraphBuilder.plugin.lua`
+- `studio-plugin/Cab87RoadCurveTools.plugin.lua` (legacy spline editor/reference)
 
 Fast install on Windows:
 - Run `install-studio-plugin.bat` from repo root.
@@ -63,36 +65,42 @@ Then restart Studio. You will get these tools:
   - **Generate Map**
   - **Clear Map**
 - **cab87 roads** toolbar
-  - **Road Editor** (opens a persistent docked panel)
+  - **Road Graph Builder** (supported graph JSON importer/mesh builder)
+  - **Road Editor** (legacy spline editor/reference)
 
-Road Editor panel actions:
-- New Spline
-- Prev Spline
-- Next Spline
-- Curve Mode: Open/Closed (toggle)
-- Road Width: per-spline numeric input with -4/+4 controls
-- Import Plane Y: numeric input used by JSON curve imports
-- Import Curve JSON (Append)
-- Import Curve JSON (Replace)
-- Add Point (Camera Hit)
-- Add Point (From Selection)
-- Set Cab Company Node (Camera)
-- Select Cab Company Node
-- Select Nearest Point (Camera)
-- Set Selected Y = Prev
-- Set Selected Y = Next
-- Set Selected Y = Avg
-- Remove Selected Point
-- Remove Last Point
-- Snap Points To Terrain
-- Rebuild Road (Mesh preferred, primitive fallback)
-- Wireframe Mesh: On/Off
-- Clear Road
-- Auto Rebuild: On/Off (rebuilds as points move)
+Road Graph Builder panel actions:
+- Import Graph JSON exported from `tools/intersection-visualizer`.
+- Rebuild Preview Mesh from `Cab87RoadEditor/RoadGraph`.
+- Bake Runtime Geometry to create persistent road, sidewalk, crosswalk, and collision geometry for the current map.
+- Fork As New Map to clear baked output before baking a new level from the same graph.
+- Set/select cab company and player spawn markers.
+
+The legacy Road Editor still opens and can be used for reference, but new authored maps should use the graph workflow.
 
 When you click **Generate Map**, check Studio Output for seed + generator version.
 
-### Fast road-iteration workflow
+### Fast graph-road workflow
+
+1. Run the graph visualizer:
+   - `cd tools/intersection-visualizer`
+   - `npm ci`
+   - `npm run dev`
+2. Open `http://localhost:3000`, author the road graph, and export JSON.
+3. In Studio, open **Road Graph Builder**.
+4. Set **Import Y** for the Roblox plane height.
+5. Set **Map ID** to a stable level id such as `downtown_v1`.
+6. Click **Import Graph JSON**.
+   - The plugin imports to `Cab87RoadEditor/RoadGraph`.
+   - It builds a disposable preview mesh for quick inspection.
+7. Click **Bake Runtime Geometry**.
+   - If Studio allows programmatic mesh uploads, the plugin uploads or updates permanent mesh assets and stores their IDs in `Cab87RoadEditor/RoadGraphAssets`.
+   - If Studio reports that `CreateAssetAsync` is not available, the plugin builds persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead. This creates no package or mesh asset IDs, but it survives save/reopen and Play.
+   - The bake clears disposable preview mesh folders so Play mode does not render overlapping preview/runtime geometry.
+8. Press Play and test traversal.
+
+For an update to the same map, keep the same **Map ID** and click **Bake Runtime Geometry** again. Asset-backed bakes update existing mesh asset versions when Roblox exposes that API; fallback bakes replace the saved `RoadGraphBakedRuntime` model in the place. For a new level, click **Fork As New Map** or set a new **Map ID** before baking so the new map gets separate baked output.
+
+### Legacy spline workflow
 
 1. Click **New Spline**.
    - This creates a new spline and keeps existing splines intact.
@@ -109,7 +117,7 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
    - **Wireframe Mesh** can be toggled on to inspect generated mesh edges.
 5. Press Play and test traversal.
 
-### Web curve authoring workflow
+### Legacy web curve authoring workflow
 
 Use the static browser tool in `tools/road-curve-editor` when you want to trace a 2D reference and import it into Studio:
 
@@ -124,7 +132,7 @@ Use the static browser tool in `tools/road-curve-editor` when you want to trace 
 
 ### Cab company and player spawn placement
 
-For authored-road maps, use **Set Cab Company Node (Camera)** in the Road Editor to place `Cab87RoadEditor/Markers/CabCompanyNode`. At runtime, that marker becomes the cab company location and the starter cab spawns at that marker.
+For authored-road maps, use **Set Cab Company Node From Camera** in the Road Graph Builder to place `Cab87RoadEditor/Markers/CabCompanyNode`. At runtime, that marker becomes the cab company location and the starter cab spawns at that marker.
 
 Player spawning is left to normal Roblox `SpawnLocation` parts by default, so you can manually place a spawn plate wherever the player should start. Set `playerUseCabCompanySpawn = true` in `src/shared/MapConfig.lua` only if you want the server to force characters to the generated cab-company spawn marker.
 

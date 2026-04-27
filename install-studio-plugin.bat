@@ -21,7 +21,7 @@ if not exist "%TARGET_DIR%" (
 )
 
 set "COPIED=0"
-for %%F in (Cab87MapTools.plugin.lua Cab87RoadCurveTools.plugin.lua) do (
+for %%F in (Cab87MapTools.plugin.lua Cab87RoadGraphBuilder.plugin.lua Cab87RoadCurveTools.plugin.lua) do (
   set "SRC=%PLUGIN_SRC_DIR%\%%F"
   set "DST=%TARGET_DIR%\%%F"
   if exist "!SRC!" (

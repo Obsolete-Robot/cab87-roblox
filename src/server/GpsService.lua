@@ -5,6 +5,8 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local RoadGraph = require(Shared:WaitForChild("RoadGraph"))
+local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
+local RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
 local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
@@ -117,7 +119,63 @@ end
 local addRouteNode = RoadGraph.addNode
 local addRouteEdge = RoadGraph.addEdge
 
+local function edgesById(edges)
+	local lookup = {}
+	for _, edge in ipairs(edges or {}) do
+		if edge.id then
+			lookup[edge.id] = edge
+		end
+	end
+	return lookup
+end
+
 local function buildAuthoredRouteGraph(world)
+	local graphData = RoadGraphData.collectGraph(world, Config)
+	if graphData then
+		local meshData = RoadGraphMesher.buildNetworkMesh(graphData, graphData.settings)
+		local graph = newRouteGraph()
+		local authoredNodeIds = {}
+		local authoredEdgesById = edgesById(graphData.edges)
+		local routedEdges = {}
+
+		for _, node in ipairs(graphData.nodes or {}) do
+			authoredNodeIds[node.id] = addRouteNode(graph, node.point)
+		end
+
+		for _, centerLine in ipairs(meshData.centerLines or {}) do
+			local edge = authoredEdgesById[centerLine.edgeId]
+			if edge then
+				routedEdges[edge.id] = true
+			end
+			local previousNodeId = nil
+			if edge and authoredNodeIds[edge.source] then
+				previousNodeId = authoredNodeIds[edge.source]
+			end
+
+			for _, position in ipairs(centerLine) do
+				local nodeId = addRouteNode(graph, position)
+				if previousNodeId then
+					addRouteEdge(graph, previousNodeId, nodeId)
+				end
+				previousNodeId = nodeId
+			end
+
+			if edge and edge.target and authoredNodeIds[edge.target] and previousNodeId then
+				addRouteEdge(graph, previousNodeId, authoredNodeIds[edge.target])
+			end
+		end
+
+		for _, edge in ipairs(graphData.edges or {}) do
+			if not routedEdges[edge.id] and edge.target and authoredNodeIds[edge.source] and authoredNodeIds[edge.target] then
+				addRouteEdge(graph, authoredNodeIds[edge.source], authoredNodeIds[edge.target])
+			end
+		end
+
+		if #graph.nodes > 0 and #graph.edges > 0 then
+			return graph
+		end
+	end
+
 	local dataRoot = world:FindFirstChild(ROAD_SPLINE_DATA_NAME)
 	if not dataRoot then
 		return nil
@@ -554,6 +612,7 @@ function GpsService.start(options)
 	service.gpsGuide = createGpsGuide(world)
 	service.world:SetAttribute("GpsRouteGraphSource", service.routeGraph and service.routeGraph.source or "none")
 	service.world:SetAttribute("GpsRouteGraphNodes", service.routeGraph and #service.routeGraph.nodes or 0)
+	service.world:SetAttribute("GpsRouteGraphEdges", service.routeGraph and #service.routeGraph.edges or 0)
 
 	function service:setDestination(destination)
 		if typeof(destination) ~= "Vector3" then

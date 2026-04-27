@@ -11,7 +11,11 @@ local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 local MinimapController = {}
 
 local WORLD_NAME = "Cab87World"
+local ROAD_EDITOR_ROOT_NAME = "Cab87RoadEditor"
 local RUNTIME_SPLINE_DATA_NAME = RoadSplineData.RUNTIME_DATA_NAME
+local BAKED_ROAD_GRAPH_RUNTIME_NAME = "RoadGraphBakedRuntime"
+local BAKED_ROAD_GRAPH_SURFACES_NAME = "RoadGraphBakedSurfaces"
+local ROAD_GRAPH_SURFACES_NAME = "RoadGraphSurfaces"
 local CLIENT_VISUALS_NAME = "AuthoredRoadClientVisuals"
 local RUNTIME_MESH_NAME = "AuthoredRoadRuntimeMesh"
 local GENERATED_ROADS_NAME = "Roads"
@@ -153,7 +157,14 @@ local function collectMeshRoadData(world)
 		return nil
 	end
 
+	local editorRoot = Workspace:FindFirstChild(ROAD_EDITOR_ROOT_NAME)
+	local bakedRuntime = editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_RUNTIME_NAME)
 	local sources = {
+		bakedRuntime and bakedRuntime:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
+		editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
+		editorRoot and editorRoot:FindFirstChild(ROAD_GRAPH_SURFACES_NAME),
+		world:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
+		world:FindFirstChild(ROAD_GRAPH_SURFACES_NAME),
 		world:FindFirstChild(CLIENT_VISUALS_NAME),
 		world:FindFirstChild(RUNTIME_MESH_NAME),
 		world:FindFirstChild(GENERATED_ROADS_NAME),
@@ -438,8 +449,8 @@ local function addMeshClone(ui, sourcePart)
 	clone.CanQuery = false
 	clone.CastShadow = false
 	clone.Transparency = 0
-	clone.Color = Color3.fromRGB(78, 86, 88)
-	clone.Material = Enum.Material.SmoothPlastic
+	clone.Color = sourcePart.Color
+	clone.Material = sourcePart.Material
 	clone.Parent = ui.meshWorld
 	table.insert(ui.meshClones, clone)
 end

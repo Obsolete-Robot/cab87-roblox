@@ -2,6 +2,17 @@
 
 This application procedurally generates and visualizes complex road intersections based on angular mathematics and 2D mesh generation.
 
+## Cab87 Roblox Workflow
+
+Run locally:
+
+```sh
+npm ci
+npm run dev
+```
+
+Open `http://localhost:3000`, author the graph, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. In Studio, import the JSON, set a stable map ID, then use **Bake Runtime Geometry** so runtime uses baked road, sidewalk, crosswalk, and collision geometry. If Roblox Studio has not enabled programmatic mesh asset upload yet, the plugin falls back to persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead of uploading package or mesh asset IDs.
+
 ## Technical Details: Intersection and Meshing
 
 The architecture cleanly separates the mathematical logic from the view layer, providing an accurate, triangulated geometric representation of how multiple roads of varying widths interact at a central 2D point.

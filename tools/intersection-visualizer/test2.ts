@@ -25,7 +25,7 @@ for (let angle = 10; angle < 360; angle += 10) {
   const t = (dx * dir2.y - dy * dir2.x) / cross;
   const u = (dx * dir1.y - dy * dir1.x) / cross;
 
-  const res = calculateBothCornerPoints(center, dir1, W1*2, SW, dir2, W2*2, SW);
+  const res = calculateBothCornerPoints(center, dir1, W1*2, SW, dir2, W2*2, SW, 70);
   const pts = res[0].length;
   console.log(`${angle}\t| int=${interiorAngle.toFixed(1)}\t| t=${t.toFixed(1)}\t| u=${u.toFixed(1)}\t| points=${pts}`);
 }

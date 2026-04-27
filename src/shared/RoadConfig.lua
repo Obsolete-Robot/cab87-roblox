@@ -8,6 +8,10 @@ local RoadConfig = {
 	authoredRoadSampleStepStuds = 8,
 	authoredRoadOverlap = 1.0,
 	authoredRoadDebugLogging = true,
+	roadGraphDefaultChamferAngleDeg = 70,
+	roadGraphDefaultCrosswalkWidth = 14,
+	roadGraphDefaultSidewalkWidth = 12,
+	roadGraphSplineSegments = 15,
 }
 
 return RoadConfig
