@@ -1,6 +1,6 @@
 import { Point, Node, Edge } from "./types";
 import { getDir } from "./math";
-import { getEdgeControlPoints } from "./network";
+import { getEdgeControlPoints, getIncidentConnections } from "./network";
 
 /**
  * Calculates a corner intersection between two road boundaries.
@@ -44,19 +44,27 @@ export function calculateBothCornerPoints(
     const dot = dir1.x * dir2.x + dir1.y * dir2.y;
     let interiorAngle = Math.atan2(cross, dot);
     if (interiorAngle < 0) interiorAngle += 2 * Math.PI;
+    const interiorAngleDeg = interiorAngle * 180 / Math.PI;
 
-    const isSharp = interiorAngle < chamferAngleDeg * Math.PI / 180 || interiorAngle > (360 - chamferAngleDeg) * Math.PI / 180;
+    const isSharp = interiorAngleDeg < chamferAngleDeg || interiorAngleDeg > (360 - chamferAngleDeg);
+    const isNearlyStraight = interiorAngleDeg > 150 && interiorAngleDeg < 210;
     
-    if (isSharp) {
+    if (isSharp || isNearlyStraight) {
         const maxDistInner = Math.max(W1, W2) * 1.5;
         const maxDistOuter = Math.max(OW1, OW2) * 1.5;
+        
+        const straightCapInner = Math.max(W1, W2) * 0.1;
+        const straightCapOuter = Math.max(OW1, OW2) * 0.1;
 
-        // Only cap negative distances (outer corners) to prevent spikes shooting backwards
-        // Positive distances (inner corners) must be preserved so roads don't overlap with their sidewalks
-        const capT = t < 0 ? Math.max(t, -maxDistInner) : t;
-        const capU = u < 0 ? Math.max(u, -maxDistInner) : u;
-        const capOT = ot < 0 ? Math.max(ot, -maxDistOuter) : ot;
-        const capOU = ou < 0 ? Math.max(ou, -maxDistOuter) : ou;
+        const spikeCapT = Math.max(W1, W2) * 5;
+        const spikeCapOT = Math.max(OW1, OW2) * 5;
+
+        // For sharp corners, cap negative distances to prevent backwards spikes, and cap positive distances to prevent infinite spikes
+        // For nearly straight lines, cap both ways stringently to prevent infinite junction sizes from slightly offset/mismatched roads
+        const capT = isNearlyStraight ? Math.max(-straightCapInner, Math.min(t, straightCapInner)) : (t < 0 ? Math.max(t, -maxDistInner) : Math.min(t, spikeCapT));
+        const capU = isNearlyStraight ? Math.max(-straightCapInner, Math.min(u, straightCapInner)) : (u < 0 ? Math.max(u, -maxDistInner) : Math.min(u, spikeCapT));
+        const capOT = isNearlyStraight ? Math.max(-straightCapOuter, Math.min(ot, straightCapOuter)) : (ot < 0 ? Math.max(ot, -maxDistOuter) : Math.min(ot, spikeCapOT));
+        const capOU = isNearlyStraight ? Math.max(-straightCapOuter, Math.min(ou, straightCapOuter)) : (ou < 0 ? Math.max(ou, -maxDistOuter) : Math.min(ou, spikeCapOT));
         
         if (capT !== t || capU !== u || capOT !== ot || capOU !== ou) {
           return [
@@ -84,15 +92,16 @@ export function calculateBothCornerPoints(
   ];
 }
 
-export function getEdgeClearance(nodeId: string, edge: Edge, nodes: Node[], edges: Edge[], chamferAngleDeg: number): number {
+export function getEdgeClearance(nodeId: string, edge: Edge, isSourceQuery: boolean, nodes: Node[], edges: Edge[], chamferAngleDeg: number): number {
   const node = nodes.find(n => n.id === nodeId);
   if (!node) return 0;
 
-  const incidentEdges = edges.filter(e => e.source === node.id || e.target === node.id);
-  if (incidentEdges.length === 0) return 0;
+  const conns = getIncidentConnections(nodeId, edges);
+  if (conns.length === 0) return 0;
 
-  const outgoing = incidentEdges.map(e => {
-    const isSource = e.source === node.id;
+  const outgoing = conns.map(c => {
+    const isSource = c.isSource;
+    const e = c.edge;
     const controlPts = getEdgeControlPoints(e, nodes);
     const p1 = node.point;
     const p2 = isSource ? controlPts[1] : controlPts[controlPts.length - 2];
@@ -135,7 +144,7 @@ export function getEdgeClearance(nodeId: string, edge: Edge, nodes: Node[], edge
       }
   }
 
-  const outIdx = outgoing.findIndex(o => o.edge.id === edge.id);
+  const outIdx = outgoing.findIndex(o => o.edge.id === edge.id && o.isSource === isSourceQuery);
   if (outIdx === -1) return 0;
 
   const r = outgoing[outIdx];

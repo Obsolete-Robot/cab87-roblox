@@ -13,6 +13,71 @@ export function getEdgeControlPoints(edge: Edge, nodes: Node[]): Point[] {
   return pts;
 }
 
+export function getIncidentConnections(nodeId: string, edges: Edge[]): { edge: Edge, isSource: boolean }[] {
+  const conns: { edge: Edge, isSource: boolean }[] = [];
+  for (const e of edges) {
+    if (e.source === nodeId) conns.push({ edge: e, isSource: true });
+    if (e.target === nodeId) conns.push({ edge: e, isSource: false });
+  }
+  return conns;
+}
+
+export function isTrueJunction(nodeId: string, nodes: Node[], edges: Edge[]): boolean {
+  const conns = getIncidentConnections(nodeId, edges);
+  if (conns.length > 2) return true;
+  if (conns.length < 2) return false;
+  
+  const outgoing = conns.map(c => {
+    const isSrc = c.isSource;
+    const controlPts = getEdgeControlPoints(c.edge, nodes);
+    const p1 = nodes.find(n => n.id === nodeId)!.point;
+    const p2 = isSrc ? controlPts[1] : controlPts[controlPts.length - 2];
+    
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    return len === 0 ? { x: 1, y: 0 } : { x: dx/len, y: dy/len };
+  });
+  
+  const dot = outgoing[0].x * outgoing[1].x + outgoing[0].y * outgoing[1].y;
+  return dot > -0.95; 
+}
+
+export function hasCrosswalk(edgeId: string, isSource: boolean, nodes: Node[], edges: Edge[]): boolean {
+  const edge = edges.find(e => e.id === edgeId);
+  if (!edge) return false;
+  const nodeId = isSource ? edge.source : edge.target;
+  if (!nodeId) return false;
+
+  const conns = getIncidentConnections(nodeId, edges);
+  if (conns.length > 2) return true;
+  if (conns.length < 2) return false;
+  
+  const outgoing = conns.map(c => {
+    const isSrc = c.isSource;
+    const controlPts = getEdgeControlPoints(c.edge, nodes);
+    const p1 = nodes.find(n => n.id === nodeId)!.point;
+    const p2 = isSrc ? controlPts[1] : controlPts[controlPts.length - 2];
+    
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    return { edgeId: c.edge.id, isSrc, vec: len === 0 ? { x: 1, y: 0 } : { x: dx/len, y: dy/len } };
+  });
+  
+  const dot = outgoing[0].vec.x * outgoing[1].vec.x + outgoing[0].vec.y * outgoing[1].vec.y;
+  
+  if (dot < -0.95) return false; // Nearly straight -> 0 crosswalks
+  if (dot > -0.25) return true;  // Sharp corner (< 105 degrees) -> 2 crosswalks
+  
+  // Mild bend -> 1 crosswalk
+  const sortedConns = [
+    `${outgoing[0].edgeId}_${outgoing[0].isSrc}`, 
+    `${outgoing[1].edgeId}_${outgoing[1].isSrc}`
+  ].sort();
+  return `${edgeId}_${isSource}` === sortedConns[0];
+}
+
 export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: Edge[], chamferAngleDeg: number): Point[] {
   const basePts = getEdgeControlPoints(edge, nodes);
   if (basePts.length < 2) return basePts;
@@ -25,8 +90,7 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
   const d0y = u1.y - p0.y;
   const len0 = Math.hypot(d0x, d0y);
   
-  const sourceDegree = edges.filter(e => e.source === edge.source || e.target === edge.source).length;
-  let W0 = getEdgeClearance(edge.source, edge, nodes, edges, chamferAngleDeg) + (sourceDegree > 1 ? 14 : 0);
+  let W0 = getEdgeClearance(edge.source, edge, true, nodes, edges, chamferAngleDeg) + (isTrueJunction(edge.source, nodes, edges) ? 14 : 0);
   
   if (basePts.length === 2 && W0 > len0 / 2 - 5) {
       W0 = Math.max(0, len0 / 2 - 5);
@@ -51,8 +115,7 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
   const dnY = uLast.y - pN.y;
   const lenN = Math.hypot(dnX, dnY);
   
-  const targetDegree = edge.target ? edges.filter(e => e.source === edge.target || e.target === edge.target).length : 0;
-  let WN = (edge.target ? getEdgeClearance(edge.target, edge, nodes, edges, chamferAngleDeg) : 0) + (targetDegree > 1 ? 14 : 0);
+  let WN = (edge.target ? getEdgeClearance(edge.target, edge, false, nodes, edges, chamferAngleDeg) : 0) + (edge.target && isTrueJunction(edge.target, nodes, edges) ? 14 : 0);
 
   if (basePts.length === 2 && WN > lenN / 2 - 5) {
       WN = Math.max(0, lenN / 2 - 5);

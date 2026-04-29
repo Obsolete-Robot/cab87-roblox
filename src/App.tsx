@@ -29,6 +29,7 @@ export default function App() {
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [isConnectMode, setIsConnectMode] = useState(false);
+  const [isMergeMode, setIsMergeMode] = useState(false);
   const [showMesh, setShowMesh] = useState(false);
   const [showControlPoints, setShowControlPoints] = useState(true);
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
@@ -69,6 +70,7 @@ export default function App() {
           setSelectedPointIndex(null);
           setIsConnectMode(false);
           setDragging(null);
+          setIsMergeMode(false);
         } else {
           alert('Invalid file format. Must contain nodes and edges arrays.');
         }
@@ -94,9 +96,15 @@ export default function App() {
         setSelectedPointIndex(null);
         setDragging(null);
         setIsConnectMode(false);
+        setIsMergeMode(false);
       }
       if (e.key.toLowerCase() === 'c') {
         setIsConnectMode(prev => !prev);
+        setIsMergeMode(false);
+      }
+      if (e.key.toLowerCase() === 'm') {
+        setIsMergeMode(prev => !prev);
+        setIsConnectMode(false);
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedNode) {
@@ -165,7 +173,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNode, selectedEdge, selectedPointIndex, nodes, edges, size]);
+  }, [selectedNode, selectedEdge, selectedPointIndex, nodes, edges, size, isMergeMode, isConnectMode]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -224,7 +232,7 @@ export default function App() {
     ctx.scale(view.zoom, view.zoom);
     draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle);
     ctx.restore();
-  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, showMesh, showControlPoints, view, chamferAngle]);
+  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle]);
 
   const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number) => {
     ctx.clearRect(0, 0, size.w, size.h);
@@ -354,8 +362,8 @@ export default function App() {
         if (selectedNode === n.id) {
           ctx.beginPath();
           ctx.arc(n.point.x, n.point.y, 16, 0, Math.PI * 2);
-          ctx.strokeStyle = isConnectMode ? 'rgba(52, 211, 153, 0.8)' : 'rgba(255, 255, 255, 0.4)';
-          ctx.lineWidth = isConnectMode ? 3 : 2;
+          ctx.strokeStyle = isConnectMode ? 'rgba(52, 211, 153, 0.8)' : isMergeMode ? 'rgba(239, 68, 68, 0.8)' : 'rgba(255, 255, 255, 0.4)';
+          ctx.lineWidth = (isConnectMode || isMergeMode) ? 3 : 2;
           ctx.stroke();
         }
     });
@@ -593,27 +601,77 @@ export default function App() {
                 return;
             }
 
-            if (selectedNode && selectedNode !== n.id && isConnectMode) {
-                // Connect selectedNode to this node
-                const sn = nodes.find(nn => nn.id === selectedNode)!;
-                const id = Math.random().toString(36).substring(2, 9);
-                const newEdge: Edge = {
-                    id,
-                    source: selectedNode,
-                    target: n.id,
-                    points: [
-                      { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3 },
-                      { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3 }
-                    ],
-                    width: 60,
-                    sidewalk: 12,
-                    color: COLORS[edges.length % COLORS.length]
-                };
-                setEdges(prev => [...prev, newEdge]);
-                setSelectedNode(n.id);
-                setSelectedEdge(id);
-                setSelectedPointIndex(null);
-                setIsConnectMode(false);
+            if (selectedNode && selectedNode !== n.id && (isConnectMode || isMergeMode)) {
+                if (isConnectMode) {
+                    // Connect selectedNode to this node
+                    const sn = nodes.find(nn => nn.id === selectedNode)!;
+                    const id = Math.random().toString(36).substring(2, 9);
+                    const newEdge: Edge = {
+                        id,
+                        source: selectedNode,
+                        target: n.id,
+                        points: [
+                          { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3 },
+                          { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3 }
+                        ],
+                        width: 60,
+                        sidewalk: 12,
+                        color: COLORS[edges.length % COLORS.length]
+                    };
+                    setEdges(prev => [...prev, newEdge]);
+                    setSelectedNode(n.id);
+                    setSelectedEdge(id);
+                    setSelectedPointIndex(null);
+                    setIsConnectMode(false);
+                } else if (isMergeMode) {
+                    // Merge selectedNode and n
+                    const sn = nodes.find(nn => nn.id === selectedNode)!;
+                    const mid = { x: (sn.point.x + n.point.x) / 2, y: (sn.point.y + n.point.y) / 2 };
+                    const deltaSn = { x: mid.x - sn.point.x, y: mid.y - sn.point.y };
+                    const deltaN = { x: mid.x - n.point.x, y: mid.y - n.point.y };
+
+                    setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: mid } : node).filter(node => node.id !== selectedNode));
+                    
+                    setEdges(prev => prev.map(edge => {
+                        let newEdge = { ...edge };
+                        const newPts = [...edge.points];
+                        let changed = false;
+                        
+                        if (edge.source === selectedNode) {
+                            newEdge.source = n.id;
+                            if (newPts.length > 0) {
+                                newPts[0] = { ...newPts[0], x: newPts[0].x + deltaSn.x, y: newPts[0].y + deltaSn.y };
+                                changed = true;
+                            }
+                        } else if (edge.source === n.id) {
+                            if (newPts.length > 0) {
+                                newPts[0] = { ...newPts[0], x: newPts[0].x + deltaN.x, y: newPts[0].y + deltaN.y };
+                                changed = true;
+                            }
+                        }
+                        
+                        if (edge.target === selectedNode) {
+                            newEdge.target = n.id;
+                            if (newPts.length > 0) {
+                                newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: newPts[newPts.length - 1].x + deltaSn.x, y: newPts[newPts.length - 1].y + deltaSn.y };
+                                changed = true;
+                            }
+                        } else if (edge.target === n.id) {
+                            if (newPts.length > 0) {
+                                newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: newPts[newPts.length - 1].x + deltaN.x, y: newPts[newPts.length - 1].y + deltaN.y };
+                                changed = true;
+                            }
+                        }
+
+                        if (changed) {
+                            newEdge.points = newPts;
+                        }
+                        return newEdge;
+                    }));
+
+                    setSelectedNode(n.id);
+                    setIsMergeMode(false);
+                }
             } else {
                 setDragging({ type: 'node', id: n.id });
                 setSelectedNode(n.id);
