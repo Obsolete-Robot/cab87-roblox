@@ -174,7 +174,7 @@ local VehicleConfig = {
 		{
 			id = "cab-company",
 			kind = "cab_company",
-			name = "Cab Company",
+			name = "Cab Depot",
 			position = MapConfig.cabCompanyCenter + Vector3.new(
 				MapConfig.cabCompanyFreeRefuelOffset.X,
 				0,

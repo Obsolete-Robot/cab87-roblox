@@ -541,10 +541,25 @@ function raycastFromCamera(maxDistance)
 	end
 	local origin = camera.CFrame.Position
 	local direction = camera.CFrame.LookVector * (maxDistance or 4000)
+	local root = getOrCreateRoot()
+	local exclude = {}
+	for _, name in ipairs({
+		MARKERS_NAME,
+		SPLINES_NAME,
+		POINTS_NAME,
+		JUNCTIONS_NAME,
+		WIRE_NAME,
+		NETWORK_BUILD_NAME,
+	}) do
+		local child = root:FindFirstChild(name)
+		if child then
+			table.insert(exclude, child)
+		end
+	end
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Blacklist
-	params.FilterDescendantsInstances = { getOrCreateRoot() }
+	params.FilterDescendantsInstances = exclude
 	params.IgnoreWater = false
 
 	local hit = Workspace:Raycast(origin, direction, params)

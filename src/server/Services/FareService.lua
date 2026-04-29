@@ -50,6 +50,8 @@ function FareService.new(options)
 		config = options.config or {},
 		car = options.car,
 		shiftService = options.shiftService,
+		economyService = options.economyService,
+		freeplayPayoutsEnabled = options.freeplayPayoutsEnabled == true,
 		ownerUserId = ownerUserId,
 		activeFare = nil,
 		lastDamageEvent = nil,
@@ -301,6 +303,12 @@ function FareService:completeFare()
 			timePenalties = math.max(-result.timeComponent, 0),
 			damagePenalties = math.max(result.damagePenalty, 0),
 		})
+	elseif self.freeplayPayoutsEnabled
+		and player
+		and self.economyService
+		and self.economyService.creditBankMoney
+	then
+		self.economyService:creditBankMoney(player, payout)
 	end
 
 	local completedDamage = self.activeFare.damage or self:_emptyDamageSnapshot()

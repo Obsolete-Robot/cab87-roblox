@@ -18,7 +18,7 @@ local REASON_LABELS = {
 	alreadyOwned = "Already owned",
 	missingPrice = "Missing price",
 	insufficientFunds = "Not enough bank money",
-	outOfCabCompanyZone = "Move into the garage zone",
+	outOfCabCompanyZone = "Move to the cab depot marker",
 	invalidPayload = "Invalid request",
 }
 

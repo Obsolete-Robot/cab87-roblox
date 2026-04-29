@@ -5,6 +5,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
 local RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
+local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
 local CabCompanyWorldBuilder = require(script.Parent:WaitForChild("CabCompanyWorldBuilder"))
 
@@ -66,6 +67,22 @@ local function isPlayerSpawnMarker(part)
 	return part:GetAttribute(MARKER_TYPE_ATTR) == "PlayerSpawn"
 end
 
+local function isCabCompanyRefuelMarker(part)
+	if not (part and part:IsA("BasePart")) then
+		return false
+	end
+	local markerType = part:GetAttribute(MARKER_TYPE_ATTR)
+	return markerType == "CabRefuel" or markerType == "CabRefuelPoint"
+end
+
+local function isCabCompanyServiceMarker(part)
+	if not (part and part:IsA("BasePart")) then
+		return false
+	end
+	local markerType = part:GetAttribute(MARKER_TYPE_ATTR)
+	return markerType == "CabService" or markerType == "CabServicePoint"
+end
+
 local function findAuthoredMarker(root, markerName, predicate)
 	local markersFolder = getMarkerFolder(root)
 	if not markersFolder then
@@ -91,6 +108,14 @@ end
 
 local function findAuthoredPlayerSpawnMarker(root)
 	return findAuthoredMarker(root, Config.cabCompanyPlayerSpawnMarkerName or "PlayerSpawnPoint", isPlayerSpawnMarker)
+end
+
+local function findAuthoredCabCompanyRefuelMarker(root)
+	return findAuthoredMarker(root, Config.cabCompanyRefuelMarkerName or "CabRefuelPoint", isCabCompanyRefuelMarker)
+end
+
+local function findAuthoredCabCompanyServiceMarker(root)
+	return findAuthoredMarker(root, Config.cabCompanyServiceMarkerName or "CabServicePoint", isCabCompanyServiceMarker)
 end
 
 local function getGraphSpawnPose(graph)
@@ -176,6 +201,29 @@ local function collectBaseParts(root, target)
 	end
 end
 
+local function projectCabSpawnToDriveSurface(position, driveSurfaces)
+	if typeof(position) ~= "Vector3" or #driveSurfaces == 0 then
+		return position
+	end
+
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Include
+	raycastParams.FilterDescendantsInstances = driveSurfaces
+
+	local probeHeight = math.max((Config.carGroundProbeHeight or 90) + (Config.carRideHeight or 2.3), 40)
+	local probeDepth = math.max((Config.carGroundProbeDepth or 220) + probeHeight, 120)
+	local result = Workspace:Raycast(
+		position + Vector3.new(0, probeHeight, 0),
+		Vector3.new(0, -probeDepth, 0),
+		raycastParams
+	)
+	if result then
+		return Vector3.new(position.X, result.Position.Y + (Config.carRideHeight or 2.3), position.Z)
+	end
+
+	return position
+end
+
 local function useBakedGraphMeshes(root)
 	local bakedContainer = root:FindFirstChild(BAKED_RUNTIME_NAME) or root
 	local sourceMeshFolder = bakedContainer:FindFirstChild(BAKED_SURFACES_NAME)
@@ -219,19 +267,26 @@ local function useBakedGraphMeshes(root)
 	}
 end
 
-local function buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles)
+local function buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles, source)
 	local marker = findAuthoredCabCompanyMarker(root)
 	if not marker then
 		return nil
 	end
 
 	local playerSpawnMarker = findAuthoredPlayerSpawnMarker(root)
+	local refuelMarker = findAuthoredCabCompanyRefuelMarker(root)
+	local serviceMarker = findAuthoredCabCompanyServiceMarker(root)
+	local cabSpawnPosition = projectCabSpawnToDriveSurface(marker.Position, driveSurfaces)
 	local result = CabCompanyWorldBuilder.create(world, Config, {
-		cabSpawnPosition = marker.Position,
+		cabSpawnPosition = cabSpawnPosition,
 		cabSpawnYaw = CabCompanyWorldBuilder.yawFromCFrame(marker.CFrame),
 		playerSpawnPosition = playerSpawnMarker and playerSpawnMarker.Position or nil,
 		playerSpawnYaw = playerSpawnMarker and CabCompanyWorldBuilder.yawFromCFrame(playerSpawnMarker.CFrame) or nil,
-		source = "AuthoredRoadGraph",
+		refuelPosition = refuelMarker and refuelMarker.Position or nil,
+		refuelYaw = refuelMarker and CabCompanyWorldBuilder.yawFromCFrame(refuelMarker.CFrame) or nil,
+		servicePosition = serviceMarker and serviceMarker.Position or nil,
+		serviceYaw = serviceMarker and CabCompanyWorldBuilder.yawFromCFrame(serviceMarker.CFrame) or nil,
+		source = source or "AuthoredRoadGraph",
 		extraDriveSurfaces = driveSurfaces,
 		extraCrashObstacles = crashObstacles,
 	})
@@ -259,6 +314,184 @@ local function buildGraphMeshes(root, world, graph)
 	error("Baked road graph geometry was not found. Click Bake Runtime Geometry in the Road Graph Builder plugin before Play.", 0)
 end
 
+local function hasLegacyCurveRoadData(root)
+	if not root then
+		return false
+	end
+
+	local network = root:FindFirstChild(RoadSplineData.NETWORK_NAME)
+	if network and network:IsA("Model") then
+		local parts = {}
+		collectBaseParts(network, parts)
+		if #parts > 0 then
+			return true
+		end
+	end
+
+	return #RoadSplineData.collectSplineRecords(root, { minPoints = 2 }) > 0
+end
+
+local function hasLegacyCurveMesh(root)
+	if not root then
+		return false
+	end
+
+	local network = root:FindFirstChild(RoadSplineData.NETWORK_NAME)
+	if not (network and network:IsA("Model")) then
+		return false
+	end
+
+	local parts = {}
+	collectBaseParts(network, parts)
+	return #parts > 0
+end
+
+local function copyLegacyCurveData(root, world)
+	local dataRoot = Instance.new("Folder")
+	dataRoot.Name = RoadSplineData.RUNTIME_DATA_NAME
+	dataRoot.Parent = world
+
+	for _, name in ipairs({
+		RoadSplineData.SPLINES_NAME,
+		RoadSplineData.JUNCTIONS_NAME,
+		RoadSplineData.POINTS_NAME,
+	}) do
+		local source = root:FindFirstChild(name)
+		if source then
+			local clone = source:Clone()
+			clone.Parent = dataRoot
+		end
+	end
+
+	for _, descendant in ipairs(dataRoot:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanTouch = false
+			descendant.CanQuery = false
+			descendant.Transparency = 1
+		elseif descendant:IsA("SurfaceGui") or descendant:IsA("BillboardGui") then
+			descendant.Enabled = false
+		end
+	end
+
+	return dataRoot
+end
+
+local function useLegacyCurveMeshes(root, world)
+	local sourceNetwork = root:FindFirstChild(RoadSplineData.NETWORK_NAME)
+	if not (sourceNetwork and sourceNetwork:IsA("Model")) then
+		return nil
+	end
+
+	local runtimeNetwork = sourceNetwork:Clone()
+	runtimeNetwork.Name = RoadSplineData.NETWORK_NAME
+	runtimeNetwork.Parent = world
+
+	local roadParts = {}
+	collectBaseParts(runtimeNetwork, roadParts)
+	if #roadParts == 0 then
+		runtimeNetwork:Destroy()
+		return nil
+	end
+
+	for _, part in ipairs(roadParts) do
+		part.Anchored = true
+		part.CanCollide = true
+		part.CanQuery = true
+		part.CanTouch = false
+		part:SetAttribute("DriveSurface", true)
+	end
+
+	return {
+		meshFolder = runtimeNetwork,
+		visibleParts = roadParts,
+		collisionParts = roadParts,
+		driveSurfaces = roadParts,
+		errors = {},
+		source = "legacy-curve",
+	}
+end
+
+local function getLegacyCurveSpawnPose(root)
+	local marker = findAuthoredCabCompanyMarker(root)
+	if marker then
+		return {
+			position = marker.Position,
+			yaw = CabCompanyWorldBuilder.yawFromCFrame(marker.CFrame),
+		}
+	end
+
+	local records = RoadSplineData.collectSplineRecords(root, { minPoints = 2 })
+	local firstRecord = records[1]
+	local firstPosition = firstRecord and firstRecord.positions and firstRecord.positions[1]
+	if firstPosition then
+		local secondPosition = firstRecord.positions[2]
+		return {
+			position = firstPosition + Vector3.new(0, Config.carRideHeight or 2.3, 0),
+			yaw = secondPosition and yawFromVector(secondPosition - firstPosition) or 0,
+		}
+	end
+
+	return {
+		position = Config.carSpawn,
+		yaw = 0,
+	}
+end
+
+local function createLegacyCurveWorld(root)
+	local oldWorld = Workspace:FindFirstChild(RUNTIME_WORLD_NAME)
+	if oldWorld then
+		oldWorld:Destroy()
+	end
+
+	local world = Instance.new("Model")
+	world.Name = RUNTIME_WORLD_NAME
+	world:SetAttribute("GeneratorVersion", "curve-editor-v1")
+	world:SetAttribute("Source", RoadSplineData.EDITOR_ROOT_NAME)
+	world:SetAttribute("NeedsClientRoadMesh", false)
+	world.Parent = Workspace
+
+	local runtimeData = copyLegacyCurveData(root, world)
+	local meshBuild = useLegacyCurveMeshes(root, world)
+	if not meshBuild then
+		world:Destroy()
+		error("Cab87RoadEditor has curve data but no RoadNetwork mesh. Click Rebuild Road (Mesh) in the curve plugin before Play.", 0)
+	end
+
+	local driveSurfaces = {}
+	local crashObstacles = {}
+	appendAll(driveSurfaces, meshBuild.driveSurfaces)
+
+	local spawnPose = getLegacyCurveSpawnPose(root)
+	local cabCompanySpawnPose = buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles, "AuthoredCurveRoad")
+	if cabCompanySpawnPose then
+		spawnPose = cabCompanySpawnPose
+	end
+
+	local splineRecords = RoadSplineData.collectSplineRecords(runtimeData, { minPoints = 2 })
+	world:SetAttribute("AuthoredRoadFormat", "CurveSpline")
+	world:SetAttribute("AuthoredRoadSplineCount", #splineRecords)
+	world:SetAttribute("AuthoredRoadMeshSource", meshBuild.source or "legacy-curve")
+	world:SetAttribute("AuthoredRoadServerCollisionSource", RoadSplineData.NETWORK_NAME)
+	world:SetAttribute("AuthoredRoadServerMeshError", "")
+
+	roadDebugLog(
+		"legacy curve world built: splines=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
+		#splineRecords,
+		#driveSurfaces,
+		spawnPose.position.X,
+		spawnPose.position.Y,
+		spawnPose.position.Z,
+		yawToForward(spawnPose.yaw).X,
+		yawToForward(spawnPose.yaw).Y,
+		yawToForward(spawnPose.yaw).Z
+	)
+
+	hideEditorRootForPlay(root)
+	return world, driveSurfaces, crashObstacles, spawnPose
+end
+
 function AuthoredRoadRuntime.getRoot()
 	local root = Workspace:FindFirstChild(RoadGraphData.EDITOR_ROOT_NAME)
 	if root and root:IsA("Model") then
@@ -274,13 +507,17 @@ function AuthoredRoadRuntime.hasRoadData(root)
 	if Config.useAuthoredRoadEditorWorld ~= true or not root then
 		return false
 	end
-	return RoadGraphData.hasGraph(root)
+	return RoadGraphData.hasGraph(root) or hasLegacyCurveRoadData(root)
 end
 
 function AuthoredRoadRuntime.createWorld(root)
+	if hasLegacyCurveMesh(root) then
+		return createLegacyCurveWorld(root)
+	end
+
 	local graph = RoadGraphData.collectGraph(root, Config)
 	if not graph then
-		error("Cab87RoadEditor does not contain valid RoadGraph data", 0)
+		return createLegacyCurveWorld(root)
 	end
 
 	local oldWorld = Workspace:FindFirstChild(RUNTIME_WORLD_NAME)

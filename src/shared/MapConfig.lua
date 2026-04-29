@@ -14,10 +14,12 @@ local MapConfig = {
 	secondaryRoadEveryBlocks = 3,
 	secondaryRoadChance = 0.35,
 
-	-- Cab company home base (milestone 2 foundation).
+	-- Authored road markers for cab spawn, free refuel, service/shop, and player spawn.
 	cabCompanyCenter = Vector3.new(0, 0.52, -960),
 	cabCompanyMarkerFolderName = "Markers",
 	cabCompanyMarkerName = "CabCompanyNode",
+	cabCompanyRefuelMarkerName = "CabRefuelPoint",
+	cabCompanyServiceMarkerName = "CabServicePoint",
 	cabCompanyPlayerSpawnMarkerName = "PlayerSpawnPoint",
 	cabCompanyFreeRefuelOffset = Vector3.new(-50, 0, 40),
 	cabCompanyCabSpawnOffset = Vector3.new(0, 0, 75),
@@ -25,10 +27,7 @@ local MapConfig = {
 	cabCompanyPlayerSpawnOffset = Vector3.new(-26, 1, 36),
 	cabCompanyPlayerSpawnYaw = 0,
 	playerUseCabCompanySpawn = false,
-	cabCompanyLotSize = Vector3.new(220, 1, 220),
-	cabCompanyBuildingSize = Vector3.new(110, 50, 70),
-	cabCompanyGarageSize = Vector3.new(140, 24, 60),
-	cabCompanyRefuelIslandSize = Vector3.new(48, 8, 26),
+	cabCompanyMarkerClearRadius = 80,
 	cabCompanyRequestCooldownSeconds = 0.75,
 	cabCompanyZonePadding = 8,
 	cabCompanyFallbackRequestRadius = 95,

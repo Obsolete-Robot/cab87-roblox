@@ -13,6 +13,8 @@ local ROOT_NAME = "Cab87RoadEditor"
 local MARKERS_NAME = "Markers"
 local MARKER_TYPE_ATTR = "Cab87MarkerType"
 local CAB_COMPANY_NODE_NAME = "CabCompanyNode"
+local CAB_REFUEL_NODE_NAME = "CabRefuelPoint"
+local CAB_SERVICE_NODE_NAME = "CabServicePoint"
 local PLAYER_SPAWN_NAME = "PlayerSpawnPoint"
 local ROAD_GRAPH_SURFACES_NAME = "RoadGraphSurfaces"
 local ROAD_GRAPH_COLLISION_NAME = "RoadGraphCollision"
@@ -26,6 +28,13 @@ local IMPORT_FILE_FILTER = { "json" }
 local IMPORT_PLANE_Y_SETTING = "cab87_road_graph_import_plane_y"
 local MAP_ID_SETTING = "cab87_road_graph_map_id"
 local DEFAULT_MAP_ID = "cab87_map"
+
+local MARKER_DESCRIPTIONS = {
+	CabCompany = "Cab spawn marker",
+	CabRefuel = "Free refuel marker",
+	CabService = "Cab recover and garage/shop marker",
+	PlayerSpawn = "Player spawn marker",
+}
 
 local BAKE_SPECS = {
 	{
@@ -99,6 +108,34 @@ local toggleButton = toolbar:CreateButton(
 	"Import visualizer graph JSON and build road graph meshes",
 	""
 )
+local addCabSpawnToolbarButton = toolbar:CreateButton(
+	"Add Cab Spawn",
+	"Place the cab spawn marker from the camera",
+	""
+)
+local addCabRefuelToolbarButton = toolbar:CreateButton(
+	"Add Refuel",
+	"Place the free-refuel marker from the camera",
+	""
+)
+local addCabServiceToolbarButton = toolbar:CreateButton(
+	"Add Service",
+	"Place the cab recover and garage/shop marker from the camera",
+	""
+)
+local addPlayerSpawnToolbarButton = toolbar:CreateButton(
+	"Add Player Spawn",
+	"Place the player spawn marker from the camera",
+	""
+)
+local selectCabSpawnToolbarButton = toolbar:CreateButton(
+	"Select Cab Spawn",
+	"Select the cab spawn marker",
+	""
+)
+
+toggleButton.ClickableWhenViewportHidden = true
+selectCabSpawnToolbarButton.ClickableWhenViewportHidden = true
 
 local widgetInfo = DockWidgetPluginGuiInfo.new(
 	Enum.InitialDockState.Right,
@@ -223,9 +260,13 @@ local importButton = makeButton("Import Graph JSON")
 local rebuildButton = makeButton("Rebuild Preview Mesh")
 local bakeAssetsButton = makeButton("Bake Runtime Geometry")
 local forkMapButton = makeButton("Fork As New Map")
-local setCabCompanyButton = makeButton("Set Cab Company Node From Camera")
+local setCabSpawnButton = makeButton("Set Cab Spawn From Camera")
+local setCabRefuelButton = makeButton("Set Refuel From Camera")
+local setCabServiceButton = makeButton("Set Service From Camera")
 local setPlayerSpawnButton = makeButton("Set Player Spawn From Camera")
-local selectCabCompanyButton = makeButton("Select Cab Company Node")
+local selectCabSpawnButton = makeButton("Select Cab Spawn")
+local selectCabRefuelButton = makeButton("Select Refuel")
+local selectCabServiceButton = makeButton("Select Service")
 local selectPlayerSpawnButton = makeButton("Select Player Spawn")
 
 local function setStatus(message)
@@ -870,9 +911,25 @@ local function raycastFromCamera(maxDistance)
 
 	local origin = camera.CFrame.Position
 	local direction = camera.CFrame.LookVector * (maxDistance or 4000)
+	local root = getOrCreateRoot()
+	local exclude = {}
+	for _, name in ipairs({
+		MARKERS_NAME,
+		"Splines",
+		"RoadPoints",
+		"Junctions",
+		"WireframeDisplay",
+		"RoadGraph",
+		ASSETS_NAME,
+	}) do
+		local child = root:FindFirstChild(name)
+		if child then
+			table.insert(exclude, child)
+		end
+	end
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = { getOrCreateRoot() }
+	params.FilterDescendantsInstances = exclude
 	local result = Workspace:Raycast(origin, direction, params)
 	local yaw = math.atan2(camera.CFrame.LookVector.X, camera.CFrame.LookVector.Z)
 	if result then
@@ -904,6 +961,7 @@ local function setMarker(name, markerType, position, yaw, color)
 	marker.Transparency = 0.15
 	marker.CFrame = CFrame.new(position) * CFrame.Angles(0, yaw or 0, 0)
 	marker:SetAttribute(MARKER_TYPE_ATTR, markerType)
+	marker:SetAttribute("Cab87MarkerDescription", MARKER_DESCRIPTIONS[markerType] or markerType)
 	return marker
 end
 
@@ -969,14 +1027,41 @@ forkMapButton.MouseButton1Click:Connect(function()
 	forkAsNewMap()
 	ChangeHistoryService:SetWaypoint("cab87 road graph after fork")
 end)
-setCabCompanyButton.MouseButton1Click:Connect(function()
+setCabSpawnButton.MouseButton1Click:Connect(function()
 	setMarkerFromCamera(CAB_COMPANY_NODE_NAME, "CabCompany", Color3.fromRGB(90, 255, 150), 2.3)
+end)
+addCabSpawnToolbarButton.Click:Connect(function()
+	setMarkerFromCamera(CAB_COMPANY_NODE_NAME, "CabCompany", Color3.fromRGB(90, 255, 150), 2.3)
+end)
+setCabRefuelButton.MouseButton1Click:Connect(function()
+	setMarkerFromCamera(CAB_REFUEL_NODE_NAME, "CabRefuel", Color3.fromRGB(95, 255, 160), 0.35)
+end)
+addCabRefuelToolbarButton.Click:Connect(function()
+	setMarkerFromCamera(CAB_REFUEL_NODE_NAME, "CabRefuel", Color3.fromRGB(95, 255, 160), 0.35)
+end)
+setCabServiceButton.MouseButton1Click:Connect(function()
+	setMarkerFromCamera(CAB_SERVICE_NODE_NAME, "CabService", Color3.fromRGB(116, 209, 255), 0.35)
+end)
+addCabServiceToolbarButton.Click:Connect(function()
+	setMarkerFromCamera(CAB_SERVICE_NODE_NAME, "CabService", Color3.fromRGB(116, 209, 255), 0.35)
+end)
+addPlayerSpawnToolbarButton.Click:Connect(function()
+	setMarkerFromCamera(PLAYER_SPAWN_NAME, "PlayerSpawn", Color3.fromRGB(115, 214, 255), 0)
 end)
 setPlayerSpawnButton.MouseButton1Click:Connect(function()
 	setMarkerFromCamera(PLAYER_SPAWN_NAME, "PlayerSpawn", Color3.fromRGB(115, 214, 255), 0)
 end)
-selectCabCompanyButton.MouseButton1Click:Connect(function()
+selectCabSpawnButton.MouseButton1Click:Connect(function()
 	selectMarker(CAB_COMPANY_NODE_NAME)
+end)
+selectCabSpawnToolbarButton.Click:Connect(function()
+	selectMarker(CAB_COMPANY_NODE_NAME)
+end)
+selectCabRefuelButton.MouseButton1Click:Connect(function()
+	selectMarker(CAB_REFUEL_NODE_NAME)
+end)
+selectCabServiceButton.MouseButton1Click:Connect(function()
+	selectMarker(CAB_SERVICE_NODE_NAME)
 end)
 selectPlayerSpawnButton.MouseButton1Click:Connect(function()
 	selectMarker(PLAYER_SPAWN_NAME)

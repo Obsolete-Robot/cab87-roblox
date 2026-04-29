@@ -258,6 +258,10 @@ local function alignCabAssetVisual(visual, spawnPosition, carConfig)
 end
 
 local function loadCabAssetVisual(car, spawnPosition, carConfig)
+	if carConfig.carForceProceduralVisual == true then
+		return nil
+	end
+
 	local assetId = getCabModelAssetId(carConfig)
 	if not assetId then
 		return nil
