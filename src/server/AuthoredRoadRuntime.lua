@@ -5,6 +5,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
 local RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
+local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
 local CabCompanyWorldBuilder = require(script.Parent:WaitForChild("CabCompanyWorldBuilder"))
@@ -16,6 +17,8 @@ local RUNTIME_WORLD_NAME = "Cab87World"
 local BAKED_RUNTIME_NAME = "RoadGraphBakedRuntime"
 local BAKED_SURFACES_NAME = "RoadGraphBakedSurfaces"
 local BAKED_COLLISION_NAME = "RoadGraphBakedCollision"
+local LEGACY_COLLISION_NAME = "RoadNetworkCollision"
+local LEGACY_RUNTIME_COLLISION_GENERATOR = "Cab87LegacyRoadRuntimeCollision"
 local MARKER_TYPE_ATTR = "Cab87MarkerType"
 
 local function roadDebugLog(message, ...)
@@ -152,14 +155,16 @@ local function hasAncestor(instance, ancestor)
 	return false
 end
 
-local function hideEditorRootForPlay(root)
+local function hideEditorRootForPlay(root, options)
 	if not root then
 		return
 	end
 
-	local bakedContainer = root:FindFirstChild(BAKED_RUNTIME_NAME) or root
-	local bakedSurfaces = bakedContainer:FindFirstChild(BAKED_SURFACES_NAME)
-	local bakedCollision = bakedContainer:FindFirstChild(BAKED_COLLISION_NAME)
+	options = options or {}
+	local preserveBakedGraph = options.preserveBakedGraph == true
+	local bakedContainer = if preserveBakedGraph then root:FindFirstChild(BAKED_RUNTIME_NAME) or root else nil
+	local bakedSurfaces = bakedContainer and bakedContainer:FindFirstChild(BAKED_SURFACES_NAME)
+	local bakedCollision = bakedContainer and bakedContainer:FindFirstChild(BAKED_COLLISION_NAME)
 	for _, descendant in ipairs(root:GetDescendants()) do
 		if descendant:IsA("BasePart") then
 			if bakedSurfaces and hasAncestor(descendant, bakedSurfaces) then
@@ -199,6 +204,131 @@ local function collectBaseParts(root, target)
 			table.insert(target, descendant)
 		end
 	end
+end
+
+local function getLegacyCollisionWidth()
+	return RoadSampling.getConfiguredRoadWidth(Config)
+end
+
+local function getLegacyCollisionThickness()
+	return math.max(tonumber(Config.authoredRoadCollisionThickness) or 0.2, 0.1)
+end
+
+local function getLegacyCollisionSurfaceOffset()
+	return tonumber(Config.authoredRoadCollisionSurfaceOffset) or 0.6
+end
+
+local function getLegacyCollisionOverlap()
+	return math.max(tonumber(Config.authoredRoadOverlap) or 1, 0)
+end
+
+local function configureLegacyCollisionPart(part)
+	part.Anchored = true
+	part.CanCollide = true
+	part.CanTouch = false
+	part.CanQuery = true
+	part.Transparency = 1
+	part.CastShadow = false
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part:SetAttribute("DriveSurface", true)
+	part:SetAttribute("GeneratedBy", LEGACY_RUNTIME_COLLISION_GENERATOR)
+	return part
+end
+
+local function createLegacySegmentCollision(parent, a, b, roadWidth, index)
+	local horizontal = Vector3.new(b.X - a.X, 0, b.Z - a.Z)
+	local length = horizontal.Magnitude
+	if length <= 0.5 then
+		return nil
+	end
+
+	local forward = horizontal.Unit
+	local right = Vector3.new(forward.Z, 0, -forward.X)
+	local thickness = getLegacyCollisionThickness()
+	local surfaceY = ((a.Y + b.Y) * 0.5) + getLegacyCollisionSurfaceOffset()
+	local center = Vector3.new((a.X + b.X) * 0.5, surfaceY - thickness * 0.5, (a.Z + b.Z) * 0.5)
+
+	local part = Instance.new("Part")
+	part.Name = string.format("RoadSegmentCollision_%04d", index)
+	part.Size = Vector3.new(
+		RoadSampling.sanitizeRoadWidth(roadWidth, getLegacyCollisionWidth()),
+		thickness,
+		length + getLegacyCollisionOverlap()
+	)
+	part.CFrame = CFrame.fromMatrix(center, right, Vector3.yAxis, forward)
+	configureLegacyCollisionPart(part)
+	part.Parent = parent
+	return part
+end
+
+local function createLegacyJunctionCollision(parent, junction, roadWidth, index)
+	local radius = math.max(tonumber(junction.radius) or 0, RoadSampling.sanitizeRoadWidth(roadWidth, getLegacyCollisionWidth()) * 0.5)
+	if radius <= 0.5 then
+		return nil
+	end
+
+	local thickness = getLegacyCollisionThickness()
+	local center = junction.center + Vector3.new(0, getLegacyCollisionSurfaceOffset() - thickness * 0.5, 0)
+	local part = Instance.new("Part")
+	part.Name = string.format("RoadJunctionCollision_%04d", index)
+	part.Size = Vector3.new(radius * 2, thickness, radius * 2)
+	part.CFrame = CFrame.new(center)
+	configureLegacyCollisionPart(part)
+	part.Parent = parent
+	return part
+end
+
+local function createLegacyCurveCollision(world, dataRoot)
+	local collisionFolder = Instance.new("Folder")
+	collisionFolder.Name = LEGACY_COLLISION_NAME
+	collisionFolder.Parent = world
+
+	local collisionParts = {}
+	local defaultRoadWidth = getLegacyCollisionWidth()
+	local segmentIndex = 0
+	local chains = RoadSplineData.collectSampledChains(dataRoot, {
+		defaultRoadWidth = defaultRoadWidth,
+		sampleStep = tonumber(Config.authoredRoadSampleStepStuds) or 8,
+	})
+
+	for _, chain in ipairs(chains) do
+		local samples = chain.samples or {}
+		for index = 1, #samples - 1 do
+			segmentIndex += 1
+			local part = createLegacySegmentCollision(collisionFolder, samples[index], samples[index + 1], chain.width, segmentIndex)
+			if part then
+				table.insert(collisionParts, part)
+			end
+		end
+
+		if chain.closed and #samples >= 3 and not RoadSampling.sampleLoopIsClosed(samples) then
+			segmentIndex += 1
+			local part = createLegacySegmentCollision(collisionFolder, samples[#samples], samples[1], chain.width, segmentIndex)
+			if part then
+				table.insert(collisionParts, part)
+			end
+		end
+	end
+
+	for index, junction in ipairs(RoadSplineData.collectJunctions(dataRoot, {
+		defaultRadius = defaultRoadWidth * 0.5,
+		minRadius = 0,
+	})) do
+		local part = createLegacyJunctionCollision(collisionFolder, junction, defaultRoadWidth, index)
+		if part then
+			table.insert(collisionParts, part)
+		end
+	end
+
+	if #collisionParts == 0 then
+		collisionFolder:Destroy()
+		return nil, {}
+	end
+
+	collisionFolder:SetAttribute("GeneratedBy", LEGACY_RUNTIME_COLLISION_GENERATOR)
+	collisionFolder:SetAttribute("CollisionPartCount", #collisionParts)
+	return collisionFolder, collisionParts
 end
 
 local function projectCabSpawnToDriveSurface(position, driveSurfaces)
@@ -378,7 +508,7 @@ local function copyLegacyCurveData(root, world)
 	return dataRoot
 end
 
-local function useLegacyCurveMeshes(root, world)
+local function useLegacyCurveMeshes(root, world, dataRoot)
 	local sourceNetwork = root:FindFirstChild(RoadSplineData.NETWORK_NAME)
 	if not (sourceNetwork and sourceNetwork:IsA("Model")) then
 		return nil
@@ -397,19 +527,30 @@ local function useLegacyCurveMeshes(root, world)
 
 	for _, part in ipairs(roadParts) do
 		part.Anchored = true
-		part.CanCollide = true
-		part.CanQuery = true
+		part.CanCollide = false
+		part.CanQuery = false
 		part.CanTouch = false
-		part:SetAttribute("DriveSurface", true)
+	end
+
+	local collisionFolder, collisionParts = createLegacyCurveCollision(world, dataRoot)
+	if #collisionParts == 0 then
+		roadDebugWarn("legacy curve collision generation produced no parts; falling back to RoadNetwork MeshPart collision")
+		for _, part in ipairs(roadParts) do
+			part.CanCollide = true
+			part.CanQuery = true
+			part:SetAttribute("DriveSurface", true)
+		end
+		collisionParts = roadParts
 	end
 
 	return {
 		meshFolder = runtimeNetwork,
+		collisionFolder = collisionFolder,
 		visibleParts = roadParts,
-		collisionParts = roadParts,
-		driveSurfaces = roadParts,
+		collisionParts = collisionParts,
+		driveSurfaces = collisionParts,
 		errors = {},
-		source = "legacy-curve",
+		source = if collisionFolder then "legacy-curve-runtime-collision" else "legacy-curve-mesh-collision",
 	}
 end
 
@@ -453,7 +594,7 @@ local function createLegacyCurveWorld(root)
 	world.Parent = Workspace
 
 	local runtimeData = copyLegacyCurveData(root, world)
-	local meshBuild = useLegacyCurveMeshes(root, world)
+	local meshBuild = useLegacyCurveMeshes(root, world, runtimeData)
 	if not meshBuild then
 		world:Destroy()
 		error("Cab87RoadEditor has curve data but no RoadNetwork mesh. Click Rebuild Road (Mesh) in the curve plugin before Play.", 0)
@@ -473,7 +614,8 @@ local function createLegacyCurveWorld(root)
 	world:SetAttribute("AuthoredRoadFormat", "CurveSpline")
 	world:SetAttribute("AuthoredRoadSplineCount", #splineRecords)
 	world:SetAttribute("AuthoredRoadMeshSource", meshBuild.source or "legacy-curve")
-	world:SetAttribute("AuthoredRoadServerCollisionSource", RoadSplineData.NETWORK_NAME)
+	world:SetAttribute("AuthoredRoadServerCollisionSource", meshBuild.collisionFolder and LEGACY_COLLISION_NAME or RoadSplineData.NETWORK_NAME)
+	world:SetAttribute("AuthoredRoadCollisionPartCount", #(meshBuild.collisionParts or {}))
 	world:SetAttribute("AuthoredRoadServerMeshError", "")
 
 	roadDebugLog(
@@ -488,7 +630,7 @@ local function createLegacyCurveWorld(root)
 		yawToForward(spawnPose.yaw).Z
 	)
 
-	hideEditorRootForPlay(root)
+	hideEditorRootForPlay(root, { preserveBakedGraph = false })
 	return world, driveSurfaces, crashObstacles, spawnPose
 end
 
@@ -583,7 +725,7 @@ function AuthoredRoadRuntime.createWorld(root)
 		roadDebugWarn("some road graph surfaces were skipped: %s", table.concat(meshBuild.errors, " | "))
 	end
 
-	hideEditorRootForPlay(root)
+	hideEditorRootForPlay(root, { preserveBakedGraph = true })
 	return world, driveSurfaces, crashObstacles, spawnPose
 end
 
