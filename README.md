@@ -163,7 +163,7 @@ For authored-road maps, use the Cab87 Road Graph Builder toolbar or panel button
 
 - `CabCompanyNode` is the cab spawn marker. It is required when using the authored cab depot marker flow.
 - `CabRefuelPoint` is the free cab-depot refuel marker. If omitted, free refuel falls back to `CabCompanyNode`.
-- `CabServicePoint` is the recover/shop service marker. If omitted, recover/shop prompts fall back to `CabCompanyNode`.
+- `CabServicePoint` is the recover/shop service marker. If omitted, runtime generation creates one from `cabCompanyServiceOffset`.
 - `PlayerSpawnPoint` is optional. Set `playerUseCabCompanySpawn = true` in `src/shared/MapConfig.lua` only if you want the server to force characters to this marker.
 
 The runtime cab depot is marker-only. It no longer generates the old lot, building, garage, beacon, refuel island, or service-zone geometry.

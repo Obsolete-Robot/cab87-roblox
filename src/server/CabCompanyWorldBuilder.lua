@@ -1,6 +1,7 @@
 local CabCompanyWorldBuilder = {}
 
 local DEFAULT_CAB_SPAWN_OFFSET = Vector3.new(0, 0, 75)
+local DEFAULT_SERVICE_OFFSET = Vector3.new(50, 0, 40)
 
 local function getVector3(config, key, fallback)
 	local value = config and config[key]
@@ -147,11 +148,15 @@ function CabCompanyWorldBuilder.create(world, config, options)
 
 	local serviceYaw = options.serviceYaw or spawnYaw
 	local servicePosition = options.servicePosition
-	local serviceGround = nil
-	local serviceMarkerPosition = nil
+	local serviceGround
+	local serviceMarkerPosition
 	if typeof(servicePosition) == "Vector3" then
 		serviceGround = Vector3.new(servicePosition.X, groundY, servicePosition.Z)
 		serviceMarkerPosition = Vector3.new(servicePosition.X, groundY + 0.35, servicePosition.Z)
+	else
+		local serviceOffset = getVector3(config, "cabCompanyServiceOffset", DEFAULT_SERVICE_OFFSET)
+		serviceMarkerPosition = localPoint(serviceOffset) + Vector3.new(0, 0.35, 0)
+		serviceGround = Vector3.new(serviceMarkerPosition.X, groundY, serviceMarkerPosition.Z)
 	end
 
 	local existingRoot = world:FindFirstChild("CabCompany")
@@ -205,18 +210,16 @@ function CabCompanyWorldBuilder.create(world, config, options)
 		})
 	end
 
-	if serviceMarkerPosition then
-		makeMarker(markersFolder, {
-			Name = "CabServicePoint",
-			Size = Vector3.new(12, 0.35, 12),
-			CFrame = makeYawCFrame(serviceMarkerPosition, serviceYaw),
-			Color = Color3.fromRGB(116, 209, 255),
-			Material = Enum.Material.Neon,
-		}, {
-			Cab87MarkerType = "CabService",
-			Cab87MarkerDescription = "Cab recover and garage/shop marker",
-		})
-	end
+	makeMarker(markersFolder, {
+		Name = "CabServicePoint",
+		Size = Vector3.new(12, 0.35, 12),
+		CFrame = makeYawCFrame(serviceMarkerPosition, serviceYaw),
+		Color = Color3.fromRGB(116, 209, 255),
+		Material = Enum.Material.Neon,
+	}, {
+		Cab87MarkerType = "CabService",
+		Cab87MarkerDescription = "Cab recover and garage/shop marker",
+	})
 
 	local playerSpawnOffset = getVector3(config, "cabCompanyPlayerSpawnOffset", Vector3.new(-26, 1, 36))
 	local playerSpawnYaw = options.playerSpawnYaw or getNumber(config, "cabCompanyPlayerSpawnYaw", spawnYaw)

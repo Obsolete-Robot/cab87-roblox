@@ -23,6 +23,7 @@ local MapConfig = {
 	cabCompanyPlayerSpawnMarkerName = "PlayerSpawnPoint",
 	cabCompanyFreeRefuelOffset = Vector3.new(-50, 0, 40),
 	cabCompanyCabSpawnOffset = Vector3.new(0, 0, 75),
+	cabCompanyServiceOffset = Vector3.new(50, 0, 40),
 	cabCompanySpawnYaw = 0,
 	cabCompanyPlayerSpawnOffset = Vector3.new(-26, 1, 36),
 	cabCompanyPlayerSpawnYaw = 0,
