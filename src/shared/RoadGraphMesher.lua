@@ -148,18 +148,27 @@ local function getEdgeControlPoints(edge, nodeLookup)
 	return points
 end
 
-local function incidentEdges(nodeId, edges)
-	local incident = {}
+local function getIncidentConnections(nodeId, edges)
+	local connections = {}
 	for _, edge in ipairs(edges or {}) do
-		if edge.source == nodeId or edge.target == nodeId then
-			table.insert(incident, edge)
+		if edge.source == nodeId then
+			table.insert(connections, {
+				edge = edge,
+				isSource = true,
+			})
+		end
+		if edge.target == nodeId then
+			table.insert(connections, {
+				edge = edge,
+				isSource = false,
+			})
 		end
 	end
-	return incident
+	return connections
 end
 
-local function edgeDegree(nodeId, edges)
-	return #incidentEdges(nodeId, edges)
+local function connectionKey(edge, isSource)
+	return tostring(edge.id) .. "_" .. tostring(isSource)
 end
 
 local function lineIntersectionWithParameters(a, dirA, b, dirB)
@@ -190,7 +199,7 @@ local function calculateBothCornerPoints(center, dir1, width1, sw1, dir2, width2
 	local outerB = center + left2 * outerW2
 
 	local cross = crossXZ(dir1, dir2)
-	if math.abs(cross) > 0.05 then
+	if math.abs(cross) > 0.001 then
 		local dx = b.X - a.X
 		local dz = b.Z - a.Z
 		local t = (dx * dir2.Z - dz * dir2.X) / cross
@@ -206,17 +215,36 @@ local function calculateBothCornerPoints(center, dir1, width1, sw1, dir2, width2
 		if interiorAngle < 0 then
 			interiorAngle += math.pi * 2
 		end
+		local interiorAngleDeg = math.deg(interiorAngle)
 
-		local chamferRadians = math.rad(chamferAngleDeg or 70)
-		local isSharp = interiorAngle < chamferRadians or interiorAngle > (math.pi * 2 - chamferRadians)
-		if math.abs(t) < 1000 and math.abs(outerT) < 1000 then
-			if isSharp then
-				local maxDistInner = math.max(w1, w2) * 1.5
-				local maxDistOuter = math.max(outerW1, outerW2) * 1.5
-				local capT = math.sign(t) * math.min(math.abs(t), maxDistInner)
-				local capU = math.sign(u) * math.min(math.abs(u), maxDistInner)
-				local capOuterT = math.sign(outerT) * math.min(math.abs(outerT), maxDistOuter)
-				local capOuterU = math.sign(outerU) * math.min(math.abs(outerU), maxDistOuter)
+		local chamferAngle = chamferAngleDeg or 70
+		local isSharp = interiorAngleDeg < chamferAngle or interiorAngleDeg > (360 - chamferAngle)
+		local isNearlyStraight = interiorAngleDeg > 150 and interiorAngleDeg < 210
+		if isSharp or isNearlyStraight then
+			local maxDistInner = math.max(w1, w2) * 1.5
+			local maxDistOuter = math.max(outerW1, outerW2) * 1.5
+
+			local straightCapInner = math.max(w1, w2) * 0.1
+			local straightCapOuter = math.max(outerW1, outerW2) * 0.1
+
+			local spikeCapT = math.max(w1, w2) * 5
+			local spikeCapOuterT = math.max(outerW1, outerW2) * 5
+
+			local function capDistance(value, straightCap, negativeCap, positiveCap)
+				if isNearlyStraight then
+					return math.clamp(value, -straightCap, straightCap)
+				elseif value < 0 then
+					return math.max(value, -negativeCap)
+				end
+				return math.min(value, positiveCap)
+			end
+
+			local capT = capDistance(t, straightCapInner, maxDistInner, spikeCapT)
+			local capU = capDistance(u, straightCapInner, maxDistInner, spikeCapT)
+			local capOuterT = capDistance(outerT, straightCapOuter, maxDistOuter, spikeCapOuterT)
+			local capOuterU = capDistance(outerU, straightCapOuter, maxDistOuter, spikeCapOuterT)
+
+			if capT ~= t or capU ~= u or capOuterT ~= outerT or capOuterU ~= outerU then
 				return {
 					pointAt(a, dir1, capT),
 					pointAt(b, dir2, capU),
@@ -225,13 +253,13 @@ local function calculateBothCornerPoints(center, dir1, width1, sw1, dir2, width2
 					pointAt(outerB, dir2, capOuterU),
 				}
 			end
-
-			return {
-				pointAt(a, dir1, t),
-			}, {
-				pointAt(outerA, dir1, outerT),
-			}
 		end
+
+		return {
+			pointAt(a, dir1, t),
+		}, {
+			pointAt(outerA, dir1, outerT),
+		}
 	end
 
 	return { a, b }, { outerA, outerB }
@@ -239,9 +267,10 @@ end
 
 local function getOutgoing(node, edges, nodeLookup)
 	local outgoing = {}
-	for _, edge in ipairs(incidentEdges(node.id, edges)) do
+	for _, connection in ipairs(getIncidentConnections(node.id, edges)) do
+		local edge = connection.edge
 		local controlPoints = getEdgeControlPoints(edge, nodeLookup)
-		local isSource = edge.source == node.id
+		local isSource = connection.isSource
 		local p2 = if isSource then controlPoints[2] else controlPoints[#controlPoints - 1]
 		if p2 then
 			local dir = getDir(node.point, p2)
@@ -259,7 +288,68 @@ local function getOutgoing(node, edges, nodeLookup)
 	return outgoing
 end
 
-local function getEdgeClearance(nodeId, edge, nodes, edges, nodeLookup, settings)
+local function isTrueJunction(nodeId, edges, nodeLookup)
+	local node = nodeLookup[nodeId]
+	if not node then
+		return false
+	end
+
+	local outgoing = getOutgoing(node, edges, nodeLookup)
+	if #outgoing > 2 then
+		return true
+	elseif #outgoing < 2 then
+		return false
+	end
+
+	local dot = outgoing[1].dir:Dot(outgoing[2].dir)
+	return dot > -0.95
+end
+
+local function hasCrosswalk(edgeId, isSource, edges, nodeLookup)
+	local edge = nil
+	for _, candidate in ipairs(edges or {}) do
+		if candidate.id == edgeId then
+			edge = candidate
+			break
+		end
+	end
+	if not edge then
+		return false
+	end
+
+	local nodeId = if isSource then edge.source else edge.target
+	if not nodeId then
+		return false
+	end
+
+	local node = nodeLookup[nodeId]
+	if not node then
+		return false
+	end
+
+	local outgoing = getOutgoing(node, edges, nodeLookup)
+	if #outgoing > 2 then
+		return true
+	elseif #outgoing < 2 then
+		return false
+	end
+
+	local dot = outgoing[1].dir:Dot(outgoing[2].dir)
+	if dot < -0.95 then
+		return false
+	elseif dot > -0.25 then
+		return true
+	end
+
+	local keys = {
+		connectionKey(outgoing[1].edge, outgoing[1].isSource),
+		connectionKey(outgoing[2].edge, outgoing[2].isSource),
+	}
+	table.sort(keys)
+	return connectionKey(edge, isSource) == keys[1]
+end
+
+local function getEdgeClearance(nodeId, edge, isSourceQuery, nodes, edges, nodeLookup, settings)
 	local node = nodeLookup[nodeId]
 	if not node then
 		return 0
@@ -308,7 +398,7 @@ local function getEdgeClearance(nodeId, edge, nodes, edges, nodeLookup, settings
 
 	local outIndex = nil
 	for index, outgoingEdge in ipairs(outgoing) do
-		if outgoingEdge.edge == edge then
+		if outgoingEdge.edge == edge and outgoingEdge.isSource == isSourceQuery then
 			outIndex = index
 			break
 		end
@@ -345,9 +435,14 @@ local function getExtendedEdgeControlPoints(edge, nodes, edges, nodeLookup, sett
 	local p0 = basePoints[1]
 	local u1 = basePoints[2]
 	local dir0 = getDir(p0, u1)
-	local sourceDegree = edgeDegree(edge.source, edges)
-	local sourceClearance = getEdgeClearance(edge.source, edge, nodes, edges, nodeLookup, settings)
-		+ (if sourceDegree > 1 then settings.crosswalkWidth else 0)
+	local sourceLength = horizontalDistance(p0, u1)
+	local sourceClearance = getEdgeClearance(edge.source, edge, true, nodes, edges, nodeLookup, settings)
+		+ (if isTrueJunction(edge.source, edges, nodeLookup) then settings.crosswalkWidth else 0)
+	if #basePoints == 2 and sourceClearance > sourceLength * 0.5 - 5 then
+		sourceClearance = math.max(0, sourceLength * 0.5 - 5)
+	elseif #basePoints > 2 and sourceClearance > sourceLength - 5 then
+		sourceClearance = math.max(0, sourceLength - 5)
+	end
 	local sourceCut = p0 + dir0 * sourceClearance
 
 	table.insert(result, p0)
@@ -355,17 +450,22 @@ local function getExtendedEdgeControlPoints(edge, nodes, edges, nodeLookup, sett
 	table.insert(result, p0:Lerp(sourceCut, 2 / 3))
 	table.insert(result, sourceCut)
 
-	if #basePoints > 2 then
-		local pN = basePoints[#basePoints]
-		local beforeLast = basePoints[#basePoints - 1]
-		local dirN = getDir(pN, beforeLast)
-		local targetDegree = if edge.target then edgeDegree(edge.target, edges) else 0
-		local targetClearance = if edge.target
-			then getEdgeClearance(edge.target, edge, nodes, edges, nodeLookup, settings)
-				+ (if targetDegree > 1 then settings.crosswalkWidth else 0)
-			else 0
-		local targetCut = pN + dirN * targetClearance
+	local pN = basePoints[#basePoints]
+	local beforeLast = basePoints[#basePoints - 1]
+	local dirN = getDir(pN, beforeLast)
+	local targetLength = horizontalDistance(pN, beforeLast)
+	local targetClearance = if edge.target
+		then getEdgeClearance(edge.target, edge, false, nodes, edges, nodeLookup, settings)
+			+ (if isTrueJunction(edge.target, edges, nodeLookup) then settings.crosswalkWidth else 0)
+		else 0
+	if #basePoints == 2 and targetClearance > targetLength * 0.5 - 5 then
+		targetClearance = math.max(0, targetLength * 0.5 - 5)
+	elseif #basePoints > 2 and targetClearance > targetLength - 5 then
+		targetClearance = math.max(0, targetLength - 5)
+	end
+	local targetCut = pN + dirN * targetClearance
 
+	if #basePoints > 2 then
 		for i = 2, #basePoints - 1 do
 			table.insert(result, basePoints[i])
 		end
@@ -375,9 +475,12 @@ local function getExtendedEdgeControlPoints(edge, nodes, edges, nodeLookup, sett
 		table.insert(result, targetCut:Lerp(pN, 2 / 3))
 		table.insert(result, pN)
 	else
-		table.insert(result, sourceCut:Lerp(u1, 1 / 3))
-		table.insert(result, sourceCut:Lerp(u1, 2 / 3))
-		table.insert(result, u1)
+		table.insert(result, sourceCut:Lerp(targetCut, 1 / 3))
+		table.insert(result, sourceCut:Lerp(targetCut, 2 / 3))
+		table.insert(result, targetCut)
+		table.insert(result, targetCut:Lerp(pN, 1 / 3))
+		table.insert(result, targetCut:Lerp(pN, 2 / 3))
+		table.insert(result, pN)
 	end
 
 	return result
@@ -387,12 +490,12 @@ local function sampleEdgeSpline(edge, nodes, edges, nodeLookup, settings)
 	return sampleSpline(getExtendedEdgeControlPoints(edge, nodes, edges, nodeLookup, settings), settings.splineSegments)
 end
 
-local function getEdgeBases(node, edge, nodeCorners)
+local function getEdgeBases(node, edge, isSource, nodeCorners)
 	local corners = nodeCorners[node.id]
 	if not corners then
 		return nil
 	end
-	local bases = corners[edge.id]
+	local bases = corners[connectionKey(edge, isSource)] or corners[edge.id]
 	if not bases or #bases < 2 then
 		return nil
 	end
@@ -542,14 +645,16 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 					table.insert(hubOuterPolygon, outerSquaredRight)
 				end
 
-				squaredBases[outgoingEdge.edge.id] = { squaredLeft, squaredRight }
-				squaredOuterBases[outgoingEdge.edge.id] = { outerSquaredLeft, outerSquaredRight }
+				local key = connectionKey(outgoingEdge.edge, outgoingEdge.isSource)
+				squaredBases[key] = { squaredLeft, squaredRight }
+				squaredOuterBases[key] = { outerSquaredLeft, outerSquaredRight }
 			else
-				squaredBases[outgoingEdge.edge.id] = { baseLeft, baseRight }
-				squaredOuterBases[outgoingEdge.edge.id] = { outerBaseLeft, outerBaseRight }
+				local key = connectionKey(outgoingEdge.edge, outgoingEdge.isSource)
+				squaredBases[key] = { baseLeft, baseRight }
+				squaredOuterBases[key] = { outerBaseLeft, outerBaseRight }
 			end
 
-			clearances[outgoingEdge.edge.id] = maxDist
+			clearances[connectionKey(outgoingEdge.edge, outgoingEdge.isSource)] = maxDist
 		end
 
 		table.insert(mesh.hubs, {
@@ -602,15 +707,15 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		end
 
 		local halfWidth = edge.width * 0.5
-		local sourceClearance = (nodeClearances[sourceNode.id] and nodeClearances[sourceNode.id][edge.id]) or 0
-		local targetClearance = if targetNode then ((nodeClearances[targetNode.id] and nodeClearances[targetNode.id][edge.id]) or 0) else 0
-		local baseLeft, baseRight = getEdgeBases(sourceNode, edge, nodeCorners)
-		local outerBaseLeft, outerBaseRight = getEdgeBases(sourceNode, edge, nodeOuterCorners)
+		local sourceClearance = (nodeClearances[sourceNode.id] and nodeClearances[sourceNode.id][connectionKey(edge, true)]) or 0
+		local targetClearance = if targetNode then ((nodeClearances[targetNode.id] and nodeClearances[targetNode.id][connectionKey(edge, false)]) or 0) else 0
+		local baseLeft, baseRight = getEdgeBases(sourceNode, edge, true, nodeCorners)
+		local outerBaseLeft, outerBaseRight = getEdgeBases(sourceNode, edge, true, nodeOuterCorners)
 		local targetBaseLeft, targetBaseRight
 		local outerTargetBaseLeft, outerTargetBaseRight
 		if targetNode then
-			targetBaseLeft, targetBaseRight = getEdgeBases(targetNode, edge, nodeCorners)
-			outerTargetBaseLeft, outerTargetBaseRight = getEdgeBases(targetNode, edge, nodeOuterCorners)
+			targetBaseLeft, targetBaseRight = getEdgeBases(targetNode, edge, false, nodeCorners)
+			outerTargetBaseLeft, outerTargetBaseRight = getEdgeBases(targetNode, edge, false, nodeOuterCorners)
 		end
 
 		local leftPoints = {}
@@ -663,19 +768,19 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		end
 
 		if baseLeft and baseRight and outerBaseLeft and outerBaseRight then
-			local sourceDegree = edgeDegree(sourceNode.id, edges)
-			local targetDegree = if targetNode then edgeDegree(targetNode.id, edges) else 0
 			local crosswalkWidth = settings.crosswalkWidth
 
-			if sourceDegree > 1 then
+			if isTrueJunction(sourceNode.id, edges, nodeLookup) then
 				local startDir = getDir(spline[1], spline[math.min(2, #spline)])
 				local newLeft = baseLeft + startDir * crosswalkWidth
 				local newRight = baseRight + startDir * crosswalkWidth
 				local newOuterLeft = outerBaseLeft + startDir * crosswalkWidth
 				local newOuterRight = outerBaseRight + startDir * crosswalkWidth
 				local polygon = { baseLeft, baseRight, newRight, newLeft }
-				table.insert(mesh.crosswalks, { edgeId = edge.id, nodeId = sourceNode.id, polygon = polygon })
-				addQuadTriangles(mesh.crosswalkTriangles, baseLeft, baseRight, newRight, newLeft)
+				if hasCrosswalk(edge.id, true, edges, nodeLookup) then
+					table.insert(mesh.crosswalks, { edgeId = edge.id, nodeId = sourceNode.id, polygon = polygon })
+					addQuadTriangles(mesh.crosswalkTriangles, baseLeft, baseRight, newRight, newLeft)
+				end
 				table.insert(mesh.sidewalkPolygons, { outerBaseLeft, baseLeft, newLeft, newOuterLeft })
 				table.insert(mesh.sidewalkPolygons, { baseRight, outerBaseRight, newOuterRight, newRight })
 				addQuadTriangles(mesh.sidewalkTriangles, outerBaseLeft, baseLeft, newLeft, newOuterLeft)
@@ -699,15 +804,17 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 			end
 
 			if targetBaseLeft and targetBaseRight and outerTargetBaseLeft and outerTargetBaseRight then
-				if targetDegree > 1 then
+				if isTrueJunction(targetNode.id, edges, nodeLookup) then
 					local endDir = getDir(spline[#spline], spline[math.max(1, #spline - 1)])
 					local newLeft = targetBaseLeft + endDir * crosswalkWidth
 					local newRight = targetBaseRight + endDir * crosswalkWidth
 					local newOuterLeft = outerTargetBaseLeft + endDir * crosswalkWidth
 					local newOuterRight = outerTargetBaseRight + endDir * crosswalkWidth
 					local crosswalkPolygon = { targetBaseLeft, targetBaseRight, newRight, newLeft }
-					table.insert(mesh.crosswalks, { edgeId = edge.id, nodeId = targetNode.id, polygon = crosswalkPolygon })
-					addQuadTriangles(mesh.crosswalkTriangles, targetBaseLeft, targetBaseRight, newRight, newLeft)
+					if hasCrosswalk(edge.id, false, edges, nodeLookup) then
+						table.insert(mesh.crosswalks, { edgeId = edge.id, nodeId = targetNode.id, polygon = crosswalkPolygon })
+						addQuadTriangles(mesh.crosswalkTriangles, targetBaseLeft, targetBaseRight, newRight, newLeft)
+					end
 					table.insert(mesh.sidewalkPolygons, { outerTargetBaseLeft, targetBaseLeft, newLeft, newOuterLeft })
 					table.insert(mesh.sidewalkPolygons, { targetBaseRight, outerTargetBaseRight, newOuterRight, newRight })
 					addQuadTriangles(mesh.sidewalkTriangles, outerTargetBaseLeft, targetBaseLeft, newLeft, newOuterLeft)

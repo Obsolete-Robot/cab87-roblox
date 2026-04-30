@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Dialogue Timing Tool</title>
+		<link rel="stylesheet" href="styles.css">
+	</head>
+	<body>
+		<header class="app-header">
+			<div>
+				<p class="eyebrow">cab87 tools</p>
+				<h1>Dialogue Timing</h1>
+			</div>
+			<div class="header-actions">
+				<label class="control-group compact">
+					<span>FPS</span>
+					<select id="fpsInput">
+						<option value="24">24</option>
+						<option value="25">25</option>
+						<option value="29.97">29.97</option>
+						<option value="30" selected>30</option>
+						<option value="60">60</option>
+					</select>
+				</label>
+				<button id="sidebarToggleButton" type="button" class="secondary sidebar-toggle" aria-controls="transcriptionPanel" aria-expanded="true">
+					Hide Sidebar
+				</button>
+				<button id="clearButton" type="button" class="secondary">Clear</button>
+			</div>
+		</header>
+
+		<main class="app-shell">
+			<section id="transcriptionPanel" class="left-panel" aria-label="Transcription setup">
+				<label id="dropZone" class="drop-zone" for="audioInput">
+					<input id="audioInput" type="file" accept="audio/*,video/mp4,video/webm,video/quicktime">
+					<span class="drop-title">Choose audio</span>
+					<span id="fileMeta" class="drop-meta">mp3, m4a, wav, webm, mp4</span>
+				</label>
+
+				<audio id="audioPlayer" class="audio-player" controls></audio>
+
+				<div class="settings-grid">
+					<label class="control-group">
+						<span>Engine</span>
+						<select id="engineInput">
+							<option value="openai-whisper" selected>OpenAI Whisper word timing</option>
+						</select>
+					</label>
+					<label class="control-group">
+						<span>Language</span>
+						<input id="languageInput" type="text" placeholder="optional ISO code">
+					</label>
+				</div>
+
+				<label class="control-group">
+					<span>Prompt</span>
+					<textarea id="promptInput" rows="4" placeholder="Names, slang, or setting context"></textarea>
+				</label>
+
+				<div class="action-row">
+					<button id="transcribeButton" type="button" class="primary" disabled>Transcribe</button>
+					<button id="importButton" type="button" class="secondary">Import JSON</button>
+					<input id="jsonInput" type="file" accept="application/json,.json">
+				</div>
+
+				<p id="statusText" class="status-text">Waiting for an audio clip.</p>
+
+				<div class="export-panel">
+					<h2>Exports</h2>
+					<div class="export-grid">
+						<button type="button" data-export="json" disabled>Kinetic JSON</button>
+						<button type="button" data-export="csv" disabled>CSV</button>
+						<button type="button" data-export="vtt" disabled>VTT</button>
+						<button type="button" data-export="srt" disabled>SRT</button>
+					</div>
+				</div>
+			</section>
+
+			<section class="workspace" aria-label="Timing workspace">
+				<div class="waveform-panel">
+					<canvas id="waveformCanvas" width="1200" height="260"></canvas>
+					<div id="playhead" class="playhead" aria-hidden="true"></div>
+				</div>
+
+				<div class="readout-grid">
+					<div>
+						<span class="readout-label">Current</span>
+						<strong id="currentTimeReadout">00:00.000</strong>
+					</div>
+					<div>
+						<span class="readout-label">Words</span>
+						<strong id="wordCountReadout">0</strong>
+					</div>
+					<div>
+						<span class="readout-label">Duration</span>
+						<strong id="durationReadout">00:00.000</strong>
+					</div>
+				</div>
+
+				<div class="preview-panel">
+					<div class="preview-header">
+						<h2>Preview</h2>
+						<button id="playPauseButton" type="button" class="primary playback-button" disabled>Play</button>
+					</div>
+					<div id="wordPreview" class="word-preview"></div>
+				</div>
+
+				<div class="table-panel">
+					<div class="table-toolbar">
+						<h2>Word Timing</h2>
+						<div class="timing-actions">
+							<div class="nudge-actions" aria-label="Move selected word timing">
+								<button type="button" data-nudge="-0.05" disabled>-50 ms</button>
+								<button type="button" data-nudge="-0.01" disabled>-10 ms</button>
+								<button type="button" data-nudge="0.01" disabled>+10 ms</button>
+								<button type="button" data-nudge="0.05" disabled>+50 ms</button>
+							</div>
+							<div class="borrow-actions" aria-label="Add time to selected word from adjacent text">
+								<button type="button" data-borrow="prev" data-borrow-ms="50" disabled>Prev +50</button>
+								<button type="button" data-borrow="prev" data-borrow-ms="100" disabled>Prev +100</button>
+								<button type="button" data-borrow="next" data-borrow-ms="50" disabled>Next +50</button>
+								<button type="button" data-borrow="next" data-borrow-ms="100" disabled>Next +100</button>
+							</div>
+						</div>
+					</div>
+					<div class="table-wrap">
+						<table>
+							<thead>
+								<tr>
+									<th>#</th>
+									<th>Word</th>
+									<th>In</th>
+									<th>Out</th>
+									<th>Timecode</th>
+									<th>Actions</th>
+								</tr>
+							</thead>
+							<tbody id="wordTableBody">
+								<tr>
+									<td colspan="6" class="empty-cell">No transcript loaded.</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<script src="app.js"></script>
+	</body>
+</html>
