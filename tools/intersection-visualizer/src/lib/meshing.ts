@@ -11,7 +11,7 @@ export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource:
   return [bases[0], bases[1]];
 }
 
-export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number): MeshData {
+export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20): MeshData {
   const mesh: MeshData = {
     vertices: [],
     triangles: [],
@@ -23,7 +23,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
   };
 
   const edgeSplines = new Map<string, Point[]>();
-  edges.forEach(e => edgeSplines.set(e.id, sampleEdgeSpline(e, nodes, edges, chamferAngleDeg)));
+  edges.forEach(e => edgeSplines.set(e.id, sampleEdgeSpline(e, nodes, edges, chamferAngleDeg, meshResolution)));
 
   const nodeClearances = new Map<string, Map<string, number>>();
   const nodeCorners = new Map<string, Map<string, Point[]>>();
@@ -52,34 +52,38 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     for (let i = 0; i < N; i++) {
         const r1 = outgoing[i];
         const r2 = outgoing[(i + 1) % N];
-        const sw = Math.max(r1.edge.sidewalk ?? 12, r2.edge.sidewalk ?? 12);
+        const sw1 = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
+        const sw2 = r2.isSource ? (r2.edge.sidewalkLeft ?? r2.edge.sidewalk ?? 12) : (r2.edge.sidewalkRight ?? r2.edge.sidewalk ?? 12);
         
         if (N === 1) {
+            const sw_left = r1.isSource ? (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12);
+            const sw_right = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
             const left = { x: r1.dir.y, y: -r1.dir.x };
             const right = { x: -r1.dir.y, y: r1.dir.x };
             const W = r1.edge.width / 2;
-            const OW = W + sw;
+            const OW_L = W + sw_left;
+            const OW_R = W + sw_right;
             corners.push({
               points: [
                 { x: node.point.x + left.x * W, y: node.point.y + left.y * W },
                 { x: node.point.x + right.x * W, y: node.point.y + right.y * W }
               ],
-              sidewalkWidth: sw
+              sidewalkWidth: Math.max(sw_left, sw_right)
             });
             outerCorners.push([
-                { x: node.point.x + left.x * OW, y: node.point.y + left.y * OW },
-                { x: node.point.x + right.x * OW, y: node.point.y + right.y * OW }
+                { x: node.point.x + left.x * OW_L, y: node.point.y + left.y * OW_L },
+                { x: node.point.x + right.x * OW_R, y: node.point.y + right.y * OW_R }
             ]);
         } else {
             const [innerPts, outerPts] = calculateBothCornerPoints(
               node.point, 
-              r1.dir, r1.edge.width, sw, 
-              r2.dir, r2.edge.width, sw,
+              r1.dir, r1.edge.width, sw1, r1.edge.transitionSmoothness ?? 0,
+              r2.dir, r2.edge.width, sw2, r2.edge.transitionSmoothness ?? 0,
               chamferAngleDeg
             );
             corners.push({
               points: innerPts,
-              sidewalkWidth: sw
+              sidewalkWidth: Math.max(sw1, sw2)
             });
             outerCorners.push(outerPts);
         }
@@ -111,7 +115,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       const odistL = (obL.x - node.point.x) * dir0.x + (obL.y - node.point.y) * dir0.y;
       const odistR = (obR.x - node.point.x) * dir0.x + (obR.y - node.point.y) * dir0.y;
       
-      const maxDist = Math.max(distL, distR, odistL, odistR);
+      let maxDist = Math.max(distL, distR, odistL, odistR);
 
       if (N > 1) {
         const sL = { x: bL.x + dir0.x * (maxDist - distL), y: bL.y + dir0.y * (maxDist - distL) };
@@ -231,12 +235,15 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       }
       const left = { x: dir.y, y: -dir.x };
       const right = { x: -dir.y, y: dir.x };
-      const OW = W + (edge.sidewalk ?? 12);
+      const sw_left = edge.sidewalkLeft ?? edge.sidewalk ?? 12;
+      const sw_right = edge.sidewalkRight ?? edge.sidewalk ?? 12;
+      const OW_L = W + sw_left;
+      const OW_R = W + sw_right;
       
       leftPoints.push({ x: p2.x + left.x * W, y: p2.y + left.y * W });
       rightPoints.push({ x: p2.x + right.x * W, y: p2.y + right.y * W });
-      outerLeftPoints.push({ x: p2.x + left.x * OW, y: p2.y + left.y * OW });
-      outerRightPoints.push({ x: p2.x + right.x * OW, y: p2.y + right.y * OW });
+      outerLeftPoints.push({ x: p2.x + left.x * OW_L, y: p2.y + left.y * OW_L });
+      outerRightPoints.push({ x: p2.x + right.x * OW_R, y: p2.y + right.y * OW_R });
     }
 
     const cwWidth = 14;
@@ -310,11 +317,14 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            if (leftPoints.length === 0) {
                const dir = getDir(sourceNode.point, spline[spline.length - 1]);
                const p2 = spline[spline.length - 1];
-               const OW = W + (edge.sidewalk ?? 12);
+               const sw_left = edge.sidewalkLeft ?? edge.sidewalk ?? 12;
+               const sw_right = edge.sidewalkRight ?? edge.sidewalk ?? 12;
+               const OW_L = W + sw_left;
+               const OW_R = W + sw_right;
                leftPoints.push({ x: p2.x + dir.y * W, y: p2.y + -dir.x * W });
                rightPoints.push({ x: p2.x + -dir.y * W, y: p2.y + dir.x * W });
-               outerLeftPoints.push({ x: p2.x + dir.y * OW, y: p2.y + -dir.x * OW });
-               outerRightPoints.push({ x: p2.x + -dir.y * OW, y: p2.y + dir.x * OW });
+               outerLeftPoints.push({ x: p2.x + dir.y * OW_L, y: p2.y + -dir.x * OW_L });
+               outerRightPoints.push({ x: p2.x + -dir.y * OW_R, y: p2.y + dir.x * OW_R });
                poly = [bL, bR, ...rightPoints];
                outerPoly = [obL, obR, ...outerRightPoints];
                fullCenterLine.push(p2);

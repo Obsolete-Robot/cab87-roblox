@@ -7,6 +7,16 @@ import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
 
 const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+const ROAD_NETWORK_SCHEMA = 'cab87-road-network';
+const ROAD_NETWORK_VERSION = 1;
+const DEFAULT_CHAMFER_ANGLE = 70;
+const DEFAULT_MESH_RESOLUTION = 20;
+
+function sanitizeMeshResolution(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_MESH_RESOLUTION;
+  return Math.max(5, Math.min(100, Math.round(parsed)));
+}
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -38,16 +48,18 @@ export default function App() {
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [editingEdgeName, setEditingEdgeName] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState("");
-  const [chamferAngle, setChamferAngle] = useState(70);
+  const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
+  const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = () => {
     const data = JSON.stringify({
-      schema: 'cab87-road-network',
-      version: 1,
+      schema: ROAD_NETWORK_SCHEMA,
+      version: ROAD_NETWORK_VERSION,
       settings: {
         chamferAngleDeg: chamferAngle,
+        meshResolution,
       },
       nodes,
       edges,
@@ -70,11 +82,23 @@ export default function App() {
       try {
         const text = evt.target?.result as string;
         const data = JSON.parse(text);
+        if (data.schema != null && data.schema !== ROAD_NETWORK_SCHEMA) {
+          alert(`Unsupported road network schema: ${data.schema}`);
+          return;
+        }
         if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
           setNodes(data.nodes);
           setEdges(data.edges);
           if (typeof data.settings?.chamferAngleDeg === 'number') {
             setChamferAngle(data.settings.chamferAngleDeg);
+          } else {
+            setChamferAngle(DEFAULT_CHAMFER_ANGLE);
+          }
+          const importedMeshResolution = data.settings?.meshResolution ?? data.settings?.splineSegments;
+          if (typeof importedMeshResolution === 'number') {
+            setMeshResolution(sanitizeMeshResolution(importedMeshResolution));
+          } else {
+            setMeshResolution(DEFAULT_MESH_RESOLUTION);
           }
           setSelectedEdge(null);
           setSelectedNode(null);
@@ -241,16 +265,16 @@ export default function App() {
     ctx.save();
     ctx.translate(view.x, view.y);
     ctx.scale(view.zoom, view.zoom);
-    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle);
+    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle, meshResolution);
     ctx.restore();
-  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle]);
+  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution]);
 
-  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number) => {
+  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number, meshResolution: number) => {
     ctx.clearRect(0, 0, size.w, size.h);
 
     if (nodes.length === 0 || edges.length === 0) return;
 
-    const mesh = buildNetworkMesh(nodes, edges, chamferAngle);
+    const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution);
 
     if (showMesh) {
       mesh.triangles.forEach((tri, idx) => {
@@ -477,7 +501,7 @@ export default function App() {
 
         // Check if clicked ON a road segment to add a Node explicitly at any point
         // To accurately split, we need to find which control point segment was clicked.
-        const pts = sampleEdgeSpline(edge, nodes, edges, chamferAngle);
+        const pts = sampleEdgeSpline(edge, nodes, edges, chamferAngle, meshResolution);
         let hitIndex = -1;
         let minDist = Infinity;
         const threshold = Math.max(25, edge.width / 2);
@@ -495,8 +519,8 @@ export default function App() {
 
         if (hitIndex !== -1) {
             // Split edge at new position
-            const segmentsPerCurve = 15;
-            const curveIndex = Math.floor(hitIndex / segmentsPerCurve);
+            const hitPoint = pts[hitIndex];
+            const curveIndex = hitPoint.curveIndex ?? 0;
             
             const controlPoints = getExtendedEdgeControlPoints(edge, nodes, edges, chamferAngle);
             const cubicPts = controlPoints;
@@ -511,7 +535,7 @@ export default function App() {
             const p2 = cubicPts[curveIndex * 3 + 2];
             const p3 = cubicPts[curveIndex * 3 + 3];
 
-            let t = (hitIndex - curveIndex * segmentsPerCurve) / segmentsPerCurve;
+            let t = hitPoint.t ?? 0.5;
             if (t < 0.1) t = 0.1;
             if (t > 0.9) t = 0.9;
             
@@ -799,7 +823,7 @@ export default function App() {
     // Add point to edge middle
     for (let i = edges.length - 1; i >= 0; i--) {
       const edge = edges[i];
-      const pts = sampleEdgeSpline(edge, nodes, edges, chamferAngle);
+      const pts = sampleEdgeSpline(edge, nodes, edges, chamferAngle, meshResolution);
       let hitIndex = -1;
       let minDist = Infinity;
       const threshold = Math.max(25, edge.width / 2);
@@ -816,8 +840,8 @@ export default function App() {
       }
 
       if (hitIndex !== -1) {
-        const segmentsPerCurve = 15;
-        const curveIndex = Math.floor(hitIndex / segmentsPerCurve);
+        const hitPoint = pts[hitIndex];
+        const curveIndex = hitPoint.curveIndex ?? 0;
         
         // If clicking on the auto-generated straight segments at the hubs, ignore for inserting points.
         const numCurves = (getExtendedEdgeControlPoints(edge, nodes, edges, chamferAngle).length - 1) / 3;
@@ -839,7 +863,7 @@ export default function App() {
           const p3 = cubicPts[curveIndex * 3 + 3];
           
           // Split Bezier at t
-          let t = (hitIndex - curveIndex * segmentsPerCurve) / segmentsPerCurve;
+          let t = hitPoint.t ?? 0.5;
           if (t < 0.1) t = 0.1;
           if (t > 0.9) t = 0.9;
           
@@ -1302,6 +1326,29 @@ export default function App() {
                   />
                 </div>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">
+                  Mesh Split Size ({meshResolution} studs)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="range"
+                    min="5"
+                    max="100"
+                    value={meshResolution}
+                    onChange={(e) => setMeshResolution(sanitizeMeshResolution(e.target.value))}
+                    className="flex-grow min-w-0"
+                  />
+                  <input
+                    type="number"
+                    min="5"
+                    max="100"
+                    value={meshResolution}
+                    onChange={(e) => setMeshResolution(sanitizeMeshResolution(e.target.value))}
+                    className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                  />
+                </div>
+              </div>
             </div>
           </section>
 
@@ -1380,18 +1427,52 @@ export default function App() {
                     </div>
                     <div>
                       <div className="flex justify-between text-xs text-slate-400 mb-1">
-                        <span>Sidewalk</span>
-                        <span>{e.sidewalk ?? 12}px</span>
+                        <span>Sidewalk (Left)</span>
+                        <span>{e.sidewalkLeft ?? e.sidewalk ?? 12}px</span>
                       </div>
                       <input
                         type="range"
                         min="0"
-                        max="50"
+                        max="100"
                         step="2"
-                        value={e.sidewalk ?? 12}
+                        value={e.sidewalkLeft ?? e.sidewalk ?? 12}
                         onChange={(evt) =>
                           setEdges((prev) =>
-                            prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalk: parseInt(evt.target.value) } : pr))
+                            prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkLeft: parseInt(evt.target.value) } : pr))
+                          )
+                        }
+                        className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-3"
+                      />
+                      <div className="flex justify-between text-xs text-slate-400 mb-1">
+                        <span>Sidewalk (Right)</span>
+                        <span>{e.sidewalkRight ?? e.sidewalk ?? 12}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="2"
+                        value={e.sidewalkRight ?? e.sidewalk ?? 12}
+                        onChange={(evt) =>
+                          setEdges((prev) =>
+                            prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkRight: parseInt(evt.target.value) } : pr))
+                          )
+                        }
+                        className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-3"
+                      />
+                      <div className="flex justify-between text-xs text-slate-400 mb-1">
+                        <span>Transition Smoothing</span>
+                        <span>{e.transitionSmoothness ?? 0}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="200"
+                        step="5"
+                        value={e.transitionSmoothness ?? 0}
+                        onChange={(evt) =>
+                          setEdges((prev) =>
+                            prev.map((pr) => (pr.id === e.id ? { ...pr, transitionSmoothness: parseInt(evt.target.value) } : pr))
                           )
                         }
                         className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"

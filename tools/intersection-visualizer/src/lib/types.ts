@@ -3,6 +3,8 @@ export type Point = {
   y: number;
   linked?: boolean;
   linear?: boolean;
+  curveIndex?: number;
+  t?: number;
 };
 
 export type Triangle = [Point, Point, Point];
@@ -19,6 +21,9 @@ export type Edge = {
   points: Point[]; // internal spline points
   width: number;
   sidewalk: number;
+  sidewalkLeft?: number;
+  sidewalkRight?: number;
+  transitionSmoothness?: number;
   color: string;
   name?: string;
 };

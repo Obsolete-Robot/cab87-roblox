@@ -11,7 +11,28 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`, author the graph, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. In Studio, import the JSON, set a stable map ID, then use **Bake Runtime Geometry** so runtime uses baked road, sidewalk, crosswalk, and collision geometry. If Roblox Studio has not enabled programmatic mesh asset upload yet, the plugin falls back to persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead of uploading package or mesh asset IDs.
+Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for distance-based mesh density, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. In Studio, import the JSON, set a stable map ID, then use **Bake Runtime Geometry** so runtime uses baked road, sidewalk, crosswalk, and collision geometry. If Roblox Studio has not enabled programmatic mesh asset upload yet, the plugin falls back to persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead of uploading package or mesh asset IDs.
+
+## Export Format
+
+Exports use the `cab87-road-network` JSON schema with `version: 1`. The payload includes
+`settings` for mesh-affecting editor options and the authored `nodes` and `edges` arrays:
+
+```json
+{
+  "schema": "cab87-road-network",
+  "version": 1,
+  "settings": {
+    "chamferAngleDeg": 70,
+    "meshResolution": 20
+  },
+  "nodes": [],
+  "edges": []
+}
+```
+
+Imports remain backwards compatible with earlier Road-Maker exports that only contain
+`nodes` and `edges`.
 
 ## Technical Details: Intersection and Meshing
 

@@ -1,6 +1,7 @@
 local RoadGraphMesher = {}
 
 local EPSILON = 1e-4
+local DEFAULT_MESH_RESOLUTION = 20
 
 local function clonePoint(point)
 	return Vector3.new(point.X, point.Y, point.Z)
@@ -71,6 +72,27 @@ local function cubicBezier(p0, p1, p2, p3, t)
 	return p0 * mt3 + p1 * (3 * mt2 * t) + p2 * (3 * mt * t2) + p3 * t3
 end
 
+local function sanitizeMeshResolution(value)
+	local number = tonumber(value)
+	if not number or number ~= number or number == math.huge or number == -math.huge then
+		return DEFAULT_MESH_RESOLUTION
+	end
+	return math.max(number, 1)
+end
+
+local function bezierLength(p0, p1, p2, p3)
+	local length = 0
+	local previous = p0
+	local steps = 15
+	for step = 1, steps do
+		local t = step / steps
+		local current = cubicBezier(p0, p1, p2, p3, t)
+		length += horizontalDistance(previous, current)
+		previous = current
+	end
+	return length
+end
+
 local function ensurePiecewiseCubic(points)
 	if #points < 2 or #points % 3 == 1 then
 		return points
@@ -87,7 +109,8 @@ local function ensurePiecewiseCubic(points)
 	return result
 end
 
-local function sampleSpline(points, segmentsPerCurve)
+local function sampleSpline(points, segmentLength)
+	local safeSegmentLength = sanitizeMeshResolution(segmentLength)
 	local cubicPoints = ensurePiecewiseCubic(points)
 	if #cubicPoints == 0 then
 		return {}
@@ -95,7 +118,8 @@ local function sampleSpline(points, segmentsPerCurve)
 		return { cubicPoints[1] }
 	elseif #cubicPoints < 4 then
 		local result = {}
-		local steps = math.max(math.floor(segmentsPerCurve or 15), 1)
+		local distance = horizontalDistance(cubicPoints[1], cubicPoints[2])
+		local steps = math.max(math.ceil(distance / safeSegmentLength), 1)
 		for i = 0, steps do
 			table.insert(result, cubicPoints[1]:Lerp(cubicPoints[2], i / steps))
 		end
@@ -103,7 +127,6 @@ local function sampleSpline(points, segmentsPerCurve)
 	end
 
 	local result = {}
-	local steps = math.max(math.floor(segmentsPerCurve or 15), 1)
 	for i = 1, #cubicPoints - 1, 3 do
 		local p0 = cubicPoints[i]
 		local p1 = cubicPoints[i + 1]
@@ -112,6 +135,7 @@ local function sampleSpline(points, segmentsPerCurve)
 		if not (p0 and p1 and p2 and p3) then
 			break
 		end
+		local steps = math.max(math.ceil(bezierLength(p0, p1, p2, p3) / safeSegmentLength), 1)
 		for step = 0, steps do
 			if i == 1 or step > 0 then
 				table.insert(result, cubicBezier(p0, p1, p2, p3, step / steps))
@@ -167,6 +191,36 @@ local function getIncidentConnections(nodeId, edges)
 	return connections
 end
 
+local function getEdgeSidewalk(edge, settings)
+	return math.max(tonumber(edge.sidewalk) or tonumber(settings and settings.sidewalkWidth) or 12, 0)
+end
+
+local function getEdgeSidewalkLeft(edge, settings)
+	return math.max(tonumber(edge.sidewalkLeft) or getEdgeSidewalk(edge, settings), 0)
+end
+
+local function getEdgeSidewalkRight(edge, settings)
+	return math.max(tonumber(edge.sidewalkRight) or getEdgeSidewalk(edge, settings), 0)
+end
+
+local function getOutgoingLeftSidewalk(outgoing, settings)
+	if outgoing.isSource then
+		return getEdgeSidewalkLeft(outgoing.edge, settings)
+	end
+	return getEdgeSidewalkRight(outgoing.edge, settings)
+end
+
+local function getOutgoingRightSidewalk(outgoing, settings)
+	if outgoing.isSource then
+		return getEdgeSidewalkRight(outgoing.edge, settings)
+	end
+	return getEdgeSidewalkLeft(outgoing.edge, settings)
+end
+
+local function getEdgeTransitionSmoothness(edge)
+	return math.max(tonumber(edge.transitionSmoothness) or 0, 0)
+end
+
 local function connectionKey(edge, isSource)
 	return tostring(edge.id) .. "_" .. tostring(isSource)
 end
@@ -184,7 +238,7 @@ local function lineIntersectionWithParameters(a, dirA, b, dirB)
 	return Vector3.new(a.X + dirA.X * tA, a.Y, a.Z + dirA.Z * tA), tA, tB
 end
 
-local function calculateBothCornerPoints(center, dir1, width1, sw1, dir2, width2, sw2, chamferAngleDeg)
+local function calculateBothCornerPoints(center, dir1, width1, sw1, smoothness1, dir2, width2, sw2, smoothness2, chamferAngleDeg)
 	local right1 = rightFromDir(dir1)
 	local left2 = leftFromDir(dir2)
 
@@ -244,15 +298,41 @@ local function calculateBothCornerPoints(center, dir1, width1, sw1, dir2, width2
 			local capOuterT = capDistance(outerT, straightCapOuter, maxDistOuter, spikeCapOuterT)
 			local capOuterU = capDistance(outerU, straightCapOuter, maxDistOuter, spikeCapOuterT)
 
-			if capT ~= t or capU ~= u or capOuterT ~= outerT or capOuterU ~= outerU then
+			local finalT = capT + smoothness1
+			local finalU = capU + smoothness2
+			local finalOuterT = capOuterT + smoothness1
+			local finalOuterU = capOuterU + smoothness2
+
+			if
+				finalT ~= t
+				or finalU ~= u
+				or finalOuterT ~= outerT
+				or finalOuterU ~= outerU
+				or smoothness1 > 0
+				or smoothness2 > 0
+			then
 				return {
-					pointAt(a, dir1, capT),
-					pointAt(b, dir2, capU),
+					pointAt(a, dir1, finalT),
+					pointAt(b, dir2, finalU),
 				}, {
-					pointAt(outerA, dir1, capOuterT),
-					pointAt(outerB, dir2, capOuterU),
+					pointAt(outerA, dir1, finalOuterT),
+					pointAt(outerB, dir2, finalOuterU),
 				}
 			end
+		end
+
+		local finalT = t + smoothness1
+		local finalU = u + smoothness2
+		local finalOuterT = outerT + smoothness1
+		local finalOuterU = outerU + smoothness2
+		if smoothness1 > 0 or smoothness2 > 0 then
+			return {
+				pointAt(a, dir1, finalT),
+				pointAt(b, dir2, finalU),
+			}, {
+				pointAt(outerA, dir1, finalOuterT),
+				pointAt(outerB, dir2, finalOuterU),
+			}
 		end
 
 		return {
@@ -262,7 +342,13 @@ local function calculateBothCornerPoints(center, dir1, width1, sw1, dir2, width2
 		}
 	end
 
-	return { a, b }, { outerA, outerB }
+	return {
+		pointAt(a, dir1, smoothness1),
+		pointAt(b, dir2, smoothness2),
+	}, {
+		pointAt(outerA, dir1, smoothness1),
+		pointAt(outerB, dir2, smoothness2),
+	}
 end
 
 local function getOutgoing(node, edges, nodeLookup)
@@ -366,29 +452,33 @@ local function getEdgeClearance(nodeId, edge, isSourceQuery, nodes, edges, nodeL
 	for i = 1, count do
 		local r1 = outgoing[i]
 		local r2 = outgoing[(i % count) + 1]
-		local sidewalk = math.max(r1.edge.sidewalk or settings.sidewalkWidth, r2.edge.sidewalk or settings.sidewalkWidth)
+		local sidewalk1 = getOutgoingRightSidewalk(r1, settings)
+		local sidewalk2 = getOutgoingLeftSidewalk(r2, settings)
 		if count == 1 then
 			local left = leftFromDir(r1.dir)
 			local right = rightFromDir(r1.dir)
 			local width = r1.edge.width * 0.5
-			local outerWidth = width + sidewalk
+			local outerWidthLeft = width + getOutgoingLeftSidewalk(r1, settings)
+			local outerWidthRight = width + getOutgoingRightSidewalk(r1, settings)
 			corners[i] = {
 				node.point + left * width,
 				node.point + right * width,
 			}
 			outerCorners[i] = {
-				node.point + left * outerWidth,
-				node.point + right * outerWidth,
+				node.point + left * outerWidthLeft,
+				node.point + right * outerWidthRight,
 			}
 		else
 			local innerPoints, outerPoints = calculateBothCornerPoints(
 				node.point,
 				r1.dir,
 				r1.edge.width,
-				sidewalk,
+				sidewalk1,
+				getEdgeTransitionSmoothness(r1.edge),
 				r2.dir,
 				r2.edge.width,
-				sidewalk,
+				sidewalk2,
+				getEdgeTransitionSmoothness(r2.edge),
 				settings.chamferAngleDeg
 			)
 			corners[i] = innerPoints
@@ -487,7 +577,7 @@ local function getExtendedEdgeControlPoints(edge, nodes, edges, nodeLookup, sett
 end
 
 local function sampleEdgeSpline(edge, nodes, edges, nodeLookup, settings)
-	return sampleSpline(getExtendedEdgeControlPoints(edge, nodes, edges, nodeLookup, settings), settings.splineSegments)
+	return sampleSpline(getExtendedEdgeControlPoints(edge, nodes, edges, nodeLookup, settings), settings.meshResolution)
 end
 
 local function getEdgeBases(node, edge, isSource, nodeCorners)
@@ -527,7 +617,9 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 	settings.chamferAngleDeg = tonumber(options.chamferAngleDeg) or tonumber(settings.chamferAngleDeg) or 70
 	settings.crosswalkWidth = tonumber(options.crosswalkWidth) or tonumber(settings.crosswalkWidth) or 14
 	settings.sidewalkWidth = tonumber(options.sidewalkWidth) or tonumber(settings.sidewalkWidth) or 12
-	settings.splineSegments = math.max(math.floor(tonumber(options.splineSegments) or tonumber(settings.splineSegments) or 15), 1)
+	settings.meshResolution = sanitizeMeshResolution(
+		options.meshResolution or settings.meshResolution or options.splineSegments or settings.splineSegments
+	)
 
 	local nodes = graph.nodes or {}
 	local edges = graph.edges or {}
@@ -554,37 +646,43 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		for i = 1, count do
 			local r1 = outgoing[i]
 			local r2 = outgoing[(i % count) + 1]
-			local sidewalk = math.max(r1.edge.sidewalk or settings.sidewalkWidth, r2.edge.sidewalk or settings.sidewalkWidth)
+			local sidewalk1 = getOutgoingRightSidewalk(r1, settings)
+			local sidewalk2 = getOutgoingLeftSidewalk(r2, settings)
 			if count == 1 then
 				local left = leftFromDir(r1.dir)
 				local right = rightFromDir(r1.dir)
 				local width = r1.edge.width * 0.5
-				local outerWidth = width + sidewalk
+				local sidewalkLeft = getOutgoingLeftSidewalk(r1, settings)
+				local sidewalkRight = getOutgoingRightSidewalk(r1, settings)
+				local outerWidthLeft = width + sidewalkLeft
+				local outerWidthRight = width + sidewalkRight
 				corners[i] = {
 					points = {
 						node.point + left * width,
 						node.point + right * width,
 					},
-					sidewalkWidth = sidewalk,
+					sidewalkWidth = math.max(sidewalkLeft, sidewalkRight),
 				}
 				outerCorners[i] = {
-					node.point + left * outerWidth,
-					node.point + right * outerWidth,
+					node.point + left * outerWidthLeft,
+					node.point + right * outerWidthRight,
 				}
 			else
 				local innerPoints, outerPoints = calculateBothCornerPoints(
 					node.point,
 					r1.dir,
 					r1.edge.width,
-					sidewalk,
+					sidewalk1,
+					getEdgeTransitionSmoothness(r1.edge),
 					r2.dir,
 					r2.edge.width,
-					sidewalk,
+					sidewalk2,
+					getEdgeTransitionSmoothness(r2.edge),
 					settings.chamferAngleDeg
 				)
 				corners[i] = {
 					points = innerPoints,
-					sidewalkWidth = sidewalk,
+					sidewalkWidth = math.max(sidewalk1, sidewalk2),
 				}
 				outerCorners[i] = outerPoints
 			end
@@ -760,11 +858,12 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 			end
 			local left = leftFromDir(dir)
 			local right = rightFromDir(dir)
-			local outerWidth = halfWidth + (edge.sidewalk or settings.sidewalkWidth)
+			local outerLeftWidth = halfWidth + getEdgeSidewalkLeft(edge, settings)
+			local outerRightWidth = halfWidth + getEdgeSidewalkRight(edge, settings)
 			table.insert(leftPoints, p2 + left * halfWidth)
 			table.insert(rightPoints, p2 + right * halfWidth)
-			table.insert(outerLeftPoints, p2 + left * outerWidth)
-			table.insert(outerRightPoints, p2 + right * outerWidth)
+			table.insert(outerLeftPoints, p2 + left * outerLeftWidth)
+			table.insert(outerRightPoints, p2 + right * outerRightWidth)
 		end
 
 		if baseLeft and baseRight and outerBaseLeft and outerBaseRight then
@@ -832,11 +931,12 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 				if #leftPoints == 0 then
 					local dir = getDir(sourceNode.point, spline[#spline])
 					local p2 = spline[#spline]
-					local outerWidth = halfWidth + (edge.sidewalk or settings.sidewalkWidth)
+					local outerLeftWidth = halfWidth + getEdgeSidewalkLeft(edge, settings)
+					local outerRightWidth = halfWidth + getEdgeSidewalkRight(edge, settings)
 					table.insert(leftPoints, p2 + leftFromDir(dir) * halfWidth)
 					table.insert(rightPoints, p2 + rightFromDir(dir) * halfWidth)
-					table.insert(outerLeftPoints, p2 + leftFromDir(dir) * outerWidth)
-					table.insert(outerRightPoints, p2 + rightFromDir(dir) * outerWidth)
+					table.insert(outerLeftPoints, p2 + leftFromDir(dir) * outerLeftWidth)
+					table.insert(outerRightPoints, p2 + rightFromDir(dir) * outerRightWidth)
 					table.insert(polygon, rightPoints[#rightPoints])
 					table.insert(outerPolygon, outerRightPoints[#outerRightPoints])
 					table.insert(fullCenterLine, p2)
@@ -865,7 +965,7 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 				outerPolygon = outerPolygon,
 				outerLeftCurve = outerLeftPoints,
 				outerRightCurve = outerRightPoints,
-				sidewalkWidth = edge.sidewalk or settings.sidewalkWidth,
+				sidewalkWidth = getEdgeSidewalk(edge, settings),
 			})
 
 			local currentLeft = baseLeft

@@ -11,7 +11,7 @@ local RoadConfig = {
 	roadGraphDefaultChamferAngleDeg = 70,
 	roadGraphDefaultCrosswalkWidth = 14,
 	roadGraphDefaultSidewalkWidth = 12,
-	roadGraphSplineSegments = 15,
+	roadGraphMeshResolution = 20,
 }
 
 return RoadConfig

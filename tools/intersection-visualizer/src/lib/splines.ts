@@ -1,5 +1,7 @@
 import { Point } from "./types";
 
+const DEFAULT_SEGMENT_LENGTH = 20;
+
 export function cubicBezier(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Point {
   const t2 = t * t;
   const t3 = t2 * t;
@@ -41,22 +43,60 @@ export function ensurePiecewiseCubic(points: Point[]): Point[] {
   return res;
 }
 
-export function sampleSpline(points: Point[], segmentsPerCurve: number = 20): Point[] {
+export function bezierLength(p0: Point, p1: Point, p2: Point, p3: Point): number {
+  let length = 0;
+  let prev = p0;
+  const steps = 15;
+
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const curr = cubicBezier(p0, p1, p2, p3, t);
+    length += Math.hypot(curr.x - prev.x, curr.y - prev.y);
+    prev = curr;
+  }
+
+  return length;
+}
+
+export function sampleSpline(points: Point[], segmentLength: number = DEFAULT_SEGMENT_LENGTH): Point[] {
+  const safeSegmentLength = Math.max(Number.isFinite(segmentLength) ? segmentLength : DEFAULT_SEGMENT_LENGTH, 1);
   const cubicPts = ensurePiecewiseCubic(points);
   if (cubicPts.length < 4) {
       // Fallback for line
       const res: Point[] = [];
       if (cubicPts.length === 0) return res;
       if (cubicPts.length === 1) return [cubicPts[0]];
-      for(let t=0; t<=1; t+=1/segmentsPerCurve) res.push({x: cubicPts[0].x*(1-t) + cubicPts[1].x*t, y: cubicPts[0].y*(1-t) + cubicPts[1].y*t});
+      const distance = Math.hypot(cubicPts[1].x - cubicPts[0].x, cubicPts[1].y - cubicPts[0].y);
+      const segments = Math.max(1, Math.ceil(distance / safeSegmentLength));
+      for (let step = 0; step <= segments; step++) {
+          const t = step / segments;
+          res.push({
+            x: cubicPts[0].x*(1-t) + cubicPts[1].x*t,
+            y: cubicPts[0].y*(1-t) + cubicPts[1].y*t,
+            curveIndex: 0,
+            t
+          });
+      }
       return res;
   }
   
   const result: Point[] = [];
   for (let i = 0; i < cubicPts.length - 1; i += 3) {
-      for (let t = 0; t <= 1; t += 1/segmentsPerCurve) {
-          if (i > 0 && t === 0) continue;
-          result.push(cubicBezier(cubicPts[i], cubicPts[i+1], cubicPts[i+2], cubicPts[i+3], t));
+      const p0 = cubicPts[i];
+      const p1 = cubicPts[i+1];
+      const p2 = cubicPts[i+2];
+      const p3 = cubicPts[i+3];
+      const curveIndex = i / 3;
+      const segments = Math.max(1, Math.ceil(bezierLength(p0, p1, p2, p3) / safeSegmentLength));
+
+      for (let step = 0; step <= segments; step++) {
+          if (i > 0 && step === 0) continue;
+          const t = step / segments;
+          result.push({
+            ...cubicBezier(p0, p1, p2, p3, t),
+            curveIndex,
+            t
+          });
       }
   }
   return result;

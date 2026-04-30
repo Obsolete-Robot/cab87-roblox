@@ -10,9 +10,11 @@ export function calculateBothCornerPoints(
   dir1: Point,
   width1: number,
   sw1: number,
+  smoothness1: number,
   dir2: Point,
   width2: number,
   sw2: number,
+  smoothness2: number,
   chamferAngleDeg: number
 ): [Point[], Point[]] {
   const right1 = { x: -dir1.y, y: dir1.x };
@@ -63,19 +65,42 @@ export function calculateBothCornerPoints(
         const capU = isNearlyStraight ? Math.max(-straightCapInner, Math.min(u, straightCapInner)) : (u < 0 ? Math.max(u, -maxDistInner) : Math.min(u, spikeCapT));
         const capOT = isNearlyStraight ? Math.max(-straightCapOuter, Math.min(ot, straightCapOuter)) : (ot < 0 ? Math.max(ot, -maxDistOuter) : Math.min(ot, spikeCapOT));
         const capOU = isNearlyStraight ? Math.max(-straightCapOuter, Math.min(ou, straightCapOuter)) : (ou < 0 ? Math.max(ou, -maxDistOuter) : Math.min(ou, spikeCapOT));
+
+        const finalT = capT + smoothness1;
+        const finalU = capU + smoothness2;
+        const finalOT = capOT + smoothness1;
+        const finalOU = capOU + smoothness2;
         
-        if (capT !== t || capU !== u || capOT !== ot || capOU !== ou) {
+        if (finalT !== t || finalU !== u || finalOT !== ot || finalOU !== ou || smoothness1 > 0 || smoothness2 > 0) {
           return [
             [
-              { x: A.x + capT * dir1.x, y: A.y + capT * dir1.y },
-              { x: B.x + capU * dir2.x, y: B.y + capU * dir2.y }
+              { x: A.x + finalT * dir1.x, y: A.y + finalT * dir1.y },
+              { x: B.x + finalU * dir2.x, y: B.y + finalU * dir2.y }
             ],
             [
-              { x: OA.x + capOT * dir1.x, y: OA.y + capOT * dir1.y },
-              { x: OB.x + capOU * dir2.x, y: OB.y + capOU * dir2.y }
+              { x: OA.x + finalOT * dir1.x, y: OA.y + finalOT * dir1.y },
+              { x: OB.x + finalOU * dir2.x, y: OB.y + finalOU * dir2.y }
             ]
           ];
         }
+    }
+
+    const finalT = t + smoothness1;
+    const finalU = u + smoothness2;
+    const finalOT = ot + smoothness1;
+    const finalOU = ou + smoothness2;
+
+    if (smoothness1 > 0 || smoothness2 > 0) {
+      return [
+        [
+          { x: A.x + finalT * dir1.x, y: A.y + finalT * dir1.y },
+          { x: B.x + finalU * dir2.x, y: B.y + finalU * dir2.y }
+        ],
+        [
+          { x: OA.x + finalOT * dir1.x, y: OA.y + finalOT * dir1.y },
+          { x: OB.x + finalOU * dir2.x, y: OB.y + finalOU * dir2.y }
+        ]
+      ];
     }
     
     return [
@@ -85,8 +110,14 @@ export function calculateBothCornerPoints(
   }
 
   return [
-    [A, B],
-    [OA, OB]
+    [
+      { x: A.x + smoothness1 * dir1.x, y: A.y + smoothness1 * dir1.y },
+      { x: B.x + smoothness2 * dir2.x, y: B.y + smoothness2 * dir2.y }
+    ],
+    [
+      { x: OA.x + smoothness1 * dir1.x, y: OA.y + smoothness1 * dir1.y },
+      { x: OB.x + smoothness2 * dir2.x, y: OB.y + smoothness2 * dir2.y }
+    ]
   ];
 }
 
@@ -115,26 +146,30 @@ export function getEdgeClearance(nodeId: string, edge: Edge, isSourceQuery: bool
   for (let i = 0; i < N; i++) {
       const r1 = outgoing[i];
       const r2 = outgoing[(i + 1) % N];
-      const sw = Math.max(r1.edge.sidewalk ?? 12, r2.edge.sidewalk ?? 12);
+      const sw1 = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
+      const sw2 = r2.isSource ? (r2.edge.sidewalkLeft ?? r2.edge.sidewalk ?? 12) : (r2.edge.sidewalkRight ?? r2.edge.sidewalk ?? 12);
       
       if (N === 1) {
+          const sw_left = r1.isSource ? (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12);
+          const sw_right = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
           const left = { x: r1.dir.y, y: -r1.dir.x };
           const right = { x: -r1.dir.y, y: r1.dir.x };
           const W = r1.edge.width / 2;
-          const OW = W + sw;
+          const OW_L = W + sw_left;
+          const OW_R = W + sw_right;
           corners.push([
             { x: node.point.x + left.x * W, y: node.point.y + left.y * W },
             { x: node.point.x + right.x * W, y: node.point.y + right.y * W }
           ]);
           outerCorners.push([
-              { x: node.point.x + left.x * OW, y: node.point.y + left.y * OW },
-              { x: node.point.x + right.x * OW, y: node.point.y + right.y * OW }
+              { x: node.point.x + left.x * OW_L, y: node.point.y + left.y * OW_L },
+              { x: node.point.x + right.x * OW_R, y: node.point.y + right.y * OW_R }
           ]);
       } else {
           const [innerPts, outerPts] = calculateBothCornerPoints(
             node.point, 
-            r1.dir, r1.edge.width, sw, 
-            r2.dir, r2.edge.width, sw,
+            r1.dir, r1.edge.width, sw1, r1.edge.transitionSmoothness ?? 0,
+            r2.dir, r2.edge.width, sw2, r2.edge.transitionSmoothness ?? 0,
             chamferAngleDeg
           );
           corners.push(innerPts);

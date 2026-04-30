@@ -15,6 +15,7 @@ RoadGraphData.EDGE_POINTS_NAME = "Points"
 
 local DEFAULT_CHAMFER_ANGLE_DEG = 70
 local DEFAULT_SIDEWALK_WIDTH = 12
+local DEFAULT_MESH_RESOLUTION = 20
 
 local function finiteNumber(value)
 	local number = tonumber(value)
@@ -121,7 +122,9 @@ function RoadGraphData.defaultSettings(config)
 		chamferAngleDeg = finiteNumber(config and config.roadGraphDefaultChamferAngleDeg) or DEFAULT_CHAMFER_ANGLE_DEG,
 		crosswalkWidth = finiteNumber(config and config.roadGraphDefaultCrosswalkWidth) or 14,
 		sidewalkWidth = finiteNumber(config and config.roadGraphDefaultSidewalkWidth) or DEFAULT_SIDEWALK_WIDTH,
-		splineSegments = finiteNumber(config and config.roadGraphSplineSegments) or 15,
+		meshResolution = finiteNumber(config and config.roadGraphMeshResolution)
+			or finiteNumber(config and config.roadGraphSplineSegments)
+			or DEFAULT_MESH_RESOLUTION,
 	}
 end
 
@@ -158,7 +161,9 @@ function RoadGraphData.normalizePayload(payload, options)
 		settings.chamferAngleDeg = finiteNumber(payload.settings.chamferAngleDeg) or settings.chamferAngleDeg
 		settings.crosswalkWidth = finiteNumber(payload.settings.crosswalkWidth) or settings.crosswalkWidth
 		settings.sidewalkWidth = finiteNumber(payload.settings.sidewalkWidth) or settings.sidewalkWidth
-		settings.splineSegments = finiteNumber(payload.settings.splineSegments) or settings.splineSegments
+		settings.meshResolution = finiteNumber(payload.settings.meshResolution)
+			or finiteNumber(payload.settings.splineSegments)
+			or settings.meshResolution
 	end
 
 	local normalizedNodes = {}
@@ -201,6 +206,9 @@ function RoadGraphData.normalizePayload(payload, options)
 					points = controlPoints,
 					width = RoadSampling.sanitizeRoadWidth(edge.width),
 					sidewalk = math.max(finiteNumber(edge.sidewalk) or settings.sidewalkWidth, 0),
+					sidewalkLeft = finiteNumber(edge.sidewalkLeft),
+					sidewalkRight = finiteNumber(edge.sidewalkRight),
+					transitionSmoothness = finiteNumber(edge.transitionSmoothness),
 					color = sanitizeColor(edge.color),
 					name = sanitizeName(edge.name, nil),
 				})
@@ -259,7 +267,12 @@ function RoadGraphData.writeGraph(root, graph, name)
 	graphFolder:SetAttribute("ChamferAngleDeg", finiteNumber(graph.settings and graph.settings.chamferAngleDeg) or DEFAULT_CHAMFER_ANGLE_DEG)
 	graphFolder:SetAttribute("CrosswalkWidth", finiteNumber(graph.settings and graph.settings.crosswalkWidth) or 14)
 	graphFolder:SetAttribute("DefaultSidewalkWidth", finiteNumber(graph.settings and graph.settings.sidewalkWidth) or DEFAULT_SIDEWALK_WIDTH)
-	graphFolder:SetAttribute("SplineSegments", finiteNumber(graph.settings and graph.settings.splineSegments) or 15)
+	graphFolder:SetAttribute(
+		"MeshResolution",
+		finiteNumber(graph.settings and graph.settings.meshResolution)
+			or finiteNumber(graph.settings and graph.settings.splineSegments)
+			or DEFAULT_MESH_RESOLUTION
+	)
 	graphFolder.Parent = root
 
 	local nodesFolder = Instance.new("Folder")
@@ -288,6 +301,15 @@ function RoadGraphData.writeGraph(root, graph, name)
 		end
 		edgeFolder:SetAttribute("Width", RoadSampling.sanitizeRoadWidth(edge.width))
 		edgeFolder:SetAttribute("Sidewalk", math.max(finiteNumber(edge.sidewalk) or DEFAULT_SIDEWALK_WIDTH, 0))
+		if finiteNumber(edge.sidewalkLeft) then
+			edgeFolder:SetAttribute("SidewalkLeft", math.max(finiteNumber(edge.sidewalkLeft), 0))
+		end
+		if finiteNumber(edge.sidewalkRight) then
+			edgeFolder:SetAttribute("SidewalkRight", math.max(finiteNumber(edge.sidewalkRight), 0))
+		end
+		if finiteNumber(edge.transitionSmoothness) then
+			edgeFolder:SetAttribute("TransitionSmoothness", math.max(finiteNumber(edge.transitionSmoothness), 0))
+		end
 		if edge.color then
 			edgeFolder:SetAttribute("Color", edge.color)
 		end
@@ -322,7 +344,9 @@ function RoadGraphData.collectGraph(root, config)
 	settings.chamferAngleDeg = finiteNumber(graphFolder:GetAttribute("ChamferAngleDeg")) or settings.chamferAngleDeg
 	settings.crosswalkWidth = finiteNumber(graphFolder:GetAttribute("CrosswalkWidth")) or settings.crosswalkWidth
 	settings.sidewalkWidth = finiteNumber(graphFolder:GetAttribute("DefaultSidewalkWidth")) or settings.sidewalkWidth
-	settings.splineSegments = finiteNumber(graphFolder:GetAttribute("SplineSegments")) or settings.splineSegments
+	settings.meshResolution = finiteNumber(graphFolder:GetAttribute("MeshResolution"))
+		or finiteNumber(graphFolder:GetAttribute("SplineSegments"))
+		or settings.meshResolution
 
 	local nodes = {}
 	local nodeLookup = {}
@@ -361,6 +385,9 @@ function RoadGraphData.collectGraph(root, config)
 					points = points,
 					width = RoadSampling.sanitizeRoadWidth(edgeFolder:GetAttribute("Width")),
 					sidewalk = math.max(finiteNumber(edgeFolder:GetAttribute("Sidewalk")) or settings.sidewalkWidth, 0),
+					sidewalkLeft = finiteNumber(edgeFolder:GetAttribute("SidewalkLeft")),
+					sidewalkRight = finiteNumber(edgeFolder:GetAttribute("SidewalkRight")),
+					transitionSmoothness = finiteNumber(edgeFolder:GetAttribute("TransitionSmoothness")),
 					color = sanitizeColor(edgeFolder:GetAttribute("Color")),
 					name = sanitizeName(edgeFolder:GetAttribute("DisplayName"), nil),
 				})
@@ -405,6 +432,9 @@ function RoadGraphData.toPayload(graph)
 			points = points,
 			width = edge.width,
 			sidewalk = edge.sidewalk,
+			sidewalkLeft = edge.sidewalkLeft,
+			sidewalkRight = edge.sidewalkRight,
+			transitionSmoothness = edge.transitionSmoothness,
 			color = edge.color,
 			name = edge.name,
 		})
