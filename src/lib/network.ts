@@ -152,6 +152,6 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
   return res;
 }
 
-export function sampleEdgeSpline(edge: Edge, nodes: Node[], edges: Edge[], chamferAngleDeg: number): Point[] {
-  return sampleSpline(getExtendedEdgeControlPoints(edge, nodes, edges, chamferAngleDeg), 15);
+export function sampleEdgeSpline(edge: Edge, nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20): Point[] {
+  return sampleSpline(getExtendedEdgeControlPoints(edge, nodes, edges, chamferAngleDeg), meshResolution);
 }

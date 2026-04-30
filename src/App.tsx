@@ -39,6 +39,7 @@ export default function App() {
   const [editingEdgeName, setEditingEdgeName] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState("");
   const [chamferAngle, setChamferAngle] = useState(70);
+  const [meshResolution, setMeshResolution] = useState(20);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -230,16 +231,16 @@ export default function App() {
     ctx.save();
     ctx.translate(view.x, view.y);
     ctx.scale(view.zoom, view.zoom);
-    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle);
+    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle, meshResolution);
     ctx.restore();
-  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle]);
+  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution]);
 
-  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number) => {
+  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number, meshResolution: number) => {
     ctx.clearRect(0, 0, size.w, size.h);
 
     if (nodes.length === 0 || edges.length === 0) return;
 
-    const mesh = buildNetworkMesh(nodes, edges, chamferAngle);
+    const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution);
 
     if (showMesh) {
       mesh.triangles.forEach((tri, idx) => {
@@ -466,7 +467,7 @@ export default function App() {
 
         // Check if clicked ON a road segment to add a Node explicitly at any point
         // To accurately split, we need to find which control point segment was clicked.
-        const pts = sampleEdgeSpline(edge, nodes, edges, chamferAngle);
+        const pts = sampleEdgeSpline(edge, nodes, edges, chamferAngle, meshResolution);
         let hitIndex = -1;
         let minDist = Infinity;
         const threshold = Math.max(25, edge.width / 2);
@@ -484,8 +485,8 @@ export default function App() {
 
         if (hitIndex !== -1) {
             // Split edge at new position
-            const segmentsPerCurve = 15;
-            const curveIndex = Math.floor(hitIndex / segmentsPerCurve);
+            const hitPt = pts[hitIndex];
+            const curveIndex = hitPt.curveIndex ?? 0;
             
             const controlPoints = getExtendedEdgeControlPoints(edge, nodes, edges, chamferAngle);
             const cubicPts = controlPoints;
@@ -500,7 +501,7 @@ export default function App() {
             const p2 = cubicPts[curveIndex * 3 + 2];
             const p3 = cubicPts[curveIndex * 3 + 3];
 
-            let t = (hitIndex - curveIndex * segmentsPerCurve) / segmentsPerCurve;
+            let t = hitPt.t ?? 0.5;
             if (t < 0.1) t = 0.1;
             if (t > 0.9) t = 0.9;
             
@@ -787,7 +788,7 @@ export default function App() {
     // Add point to edge middle
     for (let i = edges.length - 1; i >= 0; i--) {
       const edge = edges[i];
-      const pts = sampleEdgeSpline(edge, nodes, edges, chamferAngle);
+      const pts = sampleEdgeSpline(edge, nodes, edges, chamferAngle, meshResolution);
       let hitIndex = -1;
       let minDist = Infinity;
       const threshold = Math.max(25, edge.width / 2);
@@ -804,8 +805,8 @@ export default function App() {
       }
 
       if (hitIndex !== -1) {
-        const segmentsPerCurve = 15;
-        const curveIndex = Math.floor(hitIndex / segmentsPerCurve);
+        const hitPt = pts[hitIndex];
+        const curveIndex = hitPt.curveIndex ?? 0;
         
         // If clicking on the auto-generated straight segments at the hubs, ignore for inserting points.
         const numCurves = (getExtendedEdgeControlPoints(edge, nodes, edges, chamferAngle).length - 1) / 3;
@@ -827,7 +828,7 @@ export default function App() {
           const p3 = cubicPts[curveIndex * 3 + 3];
           
           // Split Bezier at t
-          let t = (hitIndex - curveIndex * segmentsPerCurve) / segmentsPerCurve;
+          let t = hitPt.t ?? 0.5;
           if (t < 0.1) t = 0.1;
           if (t > 0.9) t = 0.9;
           
@@ -1278,6 +1279,29 @@ export default function App() {
                     max="180"
                     value={chamferAngle}
                     onChange={(e) => setChamferAngle(parseInt(e.target.value) || 70)}
+                    className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">
+                  Mesh Split Size ({meshResolution}px)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="range"
+                    min="5"
+                    max="100"
+                    value={meshResolution}
+                    onChange={(e) => setMeshResolution(parseInt(e.target.value))}
+                    className="flex-grow min-w-0"
+                  />
+                  <input
+                    type="number"
+                    min="5"
+                    max="100"
+                    value={meshResolution}
+                    onChange={(e) => setMeshResolution(parseInt(e.target.value) || 20)}
                     className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
                   />
                 </div>

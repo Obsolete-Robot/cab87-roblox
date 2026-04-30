@@ -11,7 +11,7 @@ export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource:
   return [bases[0], bases[1]];
 }
 
-export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number): MeshData {
+export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20): MeshData {
   const mesh: MeshData = {
     vertices: [],
     triangles: [],
@@ -23,7 +23,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
   };
 
   const edgeSplines = new Map<string, Point[]>();
-  edges.forEach(e => edgeSplines.set(e.id, sampleEdgeSpline(e, nodes, edges, chamferAngleDeg)));
+  edges.forEach(e => edgeSplines.set(e.id, sampleEdgeSpline(e, nodes, edges, chamferAngleDeg, meshResolution)));
 
   const nodeClearances = new Map<string, Map<string, number>>();
   const nodeCorners = new Map<string, Map<string, Point[]>>();

@@ -3,6 +3,8 @@ export type Point = {
   y: number;
   linked?: boolean;
   linear?: boolean;
+  curveIndex?: number;
+  t?: number;
 };
 
 export type Triangle = [Point, Point, Point];
