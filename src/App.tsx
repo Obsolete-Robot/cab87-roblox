@@ -1384,18 +1384,52 @@ export default function App() {
                     </div>
                     <div>
                       <div className="flex justify-between text-xs text-slate-400 mb-1">
-                        <span>Sidewalk</span>
-                        <span>{e.sidewalk ?? 12}px</span>
+                        <span>Sidewalk (Left)</span>
+                        <span>{e.sidewalkLeft ?? e.sidewalk ?? 12}px</span>
                       </div>
                       <input
                         type="range"
                         min="0"
-                        max="50"
+                        max="100"
                         step="2"
-                        value={e.sidewalk ?? 12}
+                        value={e.sidewalkLeft ?? e.sidewalk ?? 12}
                         onChange={(evt) =>
                           setEdges((prev) =>
-                            prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalk: parseInt(evt.target.value) } : pr))
+                            prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkLeft: parseInt(evt.target.value) } : pr))
+                          )
+                        }
+                        className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-3"
+                      />
+                      <div className="flex justify-between text-xs text-slate-400 mb-1">
+                        <span>Sidewalk (Right)</span>
+                        <span>{e.sidewalkRight ?? e.sidewalk ?? 12}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="2"
+                        value={e.sidewalkRight ?? e.sidewalk ?? 12}
+                        onChange={(evt) =>
+                          setEdges((prev) =>
+                            prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkRight: parseInt(evt.target.value) } : pr))
+                          )
+                        }
+                        className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-3"
+                      />
+                      <div className="flex justify-between text-xs text-slate-400 mb-1">
+                        <span>Transition Smoothing</span>
+                        <span>{e.transitionSmoothness ?? 0}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="200"
+                        step="5"
+                        value={e.transitionSmoothness ?? 0}
+                        onChange={(evt) =>
+                          setEdges((prev) =>
+                            prev.map((pr) => (pr.id === e.id ? { ...pr, transitionSmoothness: parseInt(evt.target.value) } : pr))
                           )
                         }
                         className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
