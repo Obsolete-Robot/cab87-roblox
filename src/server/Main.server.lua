@@ -1,8 +1,11 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
 
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
-local VehicleCatalog = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VehicleCatalog"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared:WaitForChild("Config"))
+local GameManagerSettings = require(Shared:WaitForChild("GameManagerSettings"))
+local VehicleCatalog = require(Shared:WaitForChild("VehicleCatalog"))
 
 local serverRoot = script.Parent
 local runtimeFolder = serverRoot:WaitForChild("Runtime")
@@ -205,6 +208,32 @@ local function buildRefuelStations(world)
 		return station.position
 	end
 
+	local function getCabCompanyStationMarker()
+		local cabCompanyRoot = world:FindFirstChild("CabCompany")
+		local markersFolder = cabCompanyRoot and cabCompanyRoot:FindFirstChild("Markers")
+		local refuelMarker = markersFolder and markersFolder:FindFirstChild("CabRefuelPoint")
+		if refuelMarker and refuelMarker:IsA("BasePart") then
+			return refuelMarker
+		end
+
+		local spawnFolder = cabCompanyRoot and cabCompanyRoot:FindFirstChild("Spawn")
+		local marker = spawnFolder and spawnFolder:FindFirstChild("CabSpawnPoint")
+		if marker and marker:IsA("BasePart") then
+			return marker
+		end
+
+		return nil
+	end
+
+	local function setStationAttributes(marker, station, stationPosition)
+		marker:SetAttribute("StationId", station.id)
+		marker:SetAttribute("RefuelMode", station.kind == "cab_company" and "cab_company" or "paid")
+		marker:SetAttribute("DisplayName", station.name or station.id)
+		marker:SetAttribute("StationX", stationPosition.X)
+		marker:SetAttribute("StationY", stationPosition.Y)
+		marker:SetAttribute("StationZ", stationPosition.Z)
+	end
+
 	for _, station in ipairs(stations) do
 		local stationPosition = type(station) == "table" and getCabCompanyStationPosition(station) or nil
 		if type(station) == "table"
@@ -212,32 +241,36 @@ local function buildRefuelStations(world)
 			and type(station.id) == "string"
 			and station.id ~= ""
 		then
-			local marker = root:FindFirstChild(station.id)
-			if marker and not marker:IsA("Part") then
-				marker:Destroy()
-				marker = nil
-			end
-			if not marker then
-				marker = Instance.new("Part")
-				marker.Name = station.id
-				marker.Parent = root
-			end
+			local cabCompanyMarker = station.kind == "cab_company" and getCabCompanyStationMarker() or nil
+			if cabCompanyMarker then
+				local duplicate = root:FindFirstChild(station.id)
+				if duplicate then
+					duplicate:Destroy()
+				end
+				setStationAttributes(cabCompanyMarker, station, stationPosition)
+			else
+				local marker = root:FindFirstChild(station.id)
+				if marker and not marker:IsA("Part") then
+					marker:Destroy()
+					marker = nil
+				end
+				if not marker then
+					marker = Instance.new("Part")
+					marker.Name = station.id
+					marker.Parent = root
+				end
 
-			local radius = station.kind == "cab_company" and Config.fuelCabCompanyStationRadius or Config.fuelRefuelStationRadius
-			marker.Anchored = true
-			marker.CanCollide = false
-			marker.Shape = Enum.PartType.Cylinder
-			marker.Size = Vector3.new(radius * 2, 0.4, radius * 2)
-			marker.CFrame = CFrame.new(stationPosition + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
-			marker.Transparency = 0.45
-			marker.Material = Enum.Material.Neon
-			marker.Color = station.kind == "cab_company" and Color3.fromRGB(95, 255, 160) or Color3.fromRGB(91, 169, 255)
-			marker:SetAttribute("StationId", station.id)
-			marker:SetAttribute("RefuelMode", station.kind == "cab_company" and "cab_company" or "paid")
-			marker:SetAttribute("DisplayName", station.name or station.id)
-			marker:SetAttribute("StationX", stationPosition.X)
-			marker:SetAttribute("StationY", stationPosition.Y)
-			marker:SetAttribute("StationZ", stationPosition.Z)
+				local radius = station.kind == "cab_company" and Config.fuelCabCompanyStationRadius or Config.fuelRefuelStationRadius
+				marker.Anchored = true
+				marker.CanCollide = false
+				marker.Shape = Enum.PartType.Cylinder
+				marker.Size = Vector3.new(radius * 2, 0.4, radius * 2)
+				marker.CFrame = CFrame.new(stationPosition + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
+				marker.Transparency = 0.45
+				marker.Material = Enum.Material.Neon
+				marker.Color = station.kind == "cab_company" and Color3.fromRGB(95, 255, 160) or Color3.fromRGB(91, 169, 255)
+				setStationAttributes(marker, station, stationPosition)
+			end
 		end
 	end
 end
@@ -273,6 +306,7 @@ end
 local function createGeneratedWorld()
 	authoredRoadStartupLog("creating generated fallback world")
 	local world = MapGenerator.Generate()
+	world:SetAttribute("Source", "Procedural")
 	local driveSurfaces, crashObstacles = collectWorldParts(world)
 	buildStuntFeatures(world, driveSurfaces)
 
@@ -292,32 +326,71 @@ local function createGeneratedWorld()
 	return world, driveSurfaces, crashObstacles, spawnPose
 end
 
-local function createRuntimeWorld()
+local function createBlankWorld()
+	authoredRoadStartupLog("creating blank runtime world; procedural fallback is disabled")
+	local oldWorld = Workspace:FindFirstChild("Cab87World")
+	if oldWorld then
+		oldWorld:Destroy()
+	end
+
+	local world = Instance.new("Model")
+	world.Name = "Cab87World"
+	world:SetAttribute("GeneratorVersion", "blank")
+	world:SetAttribute("Source", "Blank")
+	world:SetAttribute("ProceduralWorldEnabled", false)
+	world:SetAttribute("NeedsClientRoadMesh", false)
+	world.Parent = Workspace
+
+	return world, {}, {}, {
+		position = Config.carSpawn,
+		yaw = 0,
+	}
+end
+
+local function createRuntimeWorld(gameSettings)
+	local proceduralWorldEnabled = GameManagerSettings.isEnabled(gameSettings, "ProceduralWorldEnabled")
+	local authoredRoadSource = GameManagerSettings.getAuthoredRoadSource(gameSettings)
+	local manager = GameManagerSettings.getManager(Workspace)
+	Workspace:SetAttribute("Cab87ManagerFound", manager ~= nil)
+	Workspace:SetAttribute("Cab87ManagerClassName", manager and manager.ClassName or "")
+	Workspace:SetAttribute("Cab87ProceduralWorldEnabled", proceduralWorldEnabled)
+	Workspace:SetAttribute("Cab87AuthoredRoadSource", authoredRoadSource)
 	local authoredRoadRoot = AuthoredRoadRuntime.getRoot()
 	authoredRoadStartupLog(
-		"startup: useAuthoredRoadEditorWorld=%s root=%s",
+		"startup: useAuthoredRoadEditorWorld=%s proceduralWorldEnabled=%s authoredRoadSource=%s root=%s",
 		tostring(Config.useAuthoredRoadEditorWorld == true),
+		tostring(proceduralWorldEnabled == true),
+		tostring(authoredRoadSource),
 		authoredRoadRoot and authoredRoadRoot:GetFullName() or "nil"
 	)
 
 	local okHasAuthoredRoad, hasAuthoredRoad = pcall(function()
-		return AuthoredRoadRuntime.hasRoadData(authoredRoadRoot)
+		return AuthoredRoadRuntime.hasRoadData(authoredRoadRoot, authoredRoadSource)
 	end)
 	if not okHasAuthoredRoad then
-		warn("[cab87] Authored road data check failed; using generated map: " .. tostring(hasAuthoredRoad))
+		warn("[cab87] Authored road data check failed: " .. tostring(hasAuthoredRoad))
 		hasAuthoredRoad = false
 	end
+	Workspace:SetAttribute("Cab87AuthoredRoadDetected", hasAuthoredRoad == true)
 	authoredRoadStartupLog("hasAuthoredRoad=%s", tostring(hasAuthoredRoad == true))
 
 	if not hasAuthoredRoad then
-		return createGeneratedWorld()
+		if proceduralWorldEnabled then
+			Workspace:SetAttribute("Cab87RuntimeWorldSource", "ProceduralFallbackNoAuthoredRoad")
+			return createGeneratedWorld()
+		end
+
+		warn("[cab87] No authored road data found and procedural world generation is disabled.")
+		Workspace:SetAttribute("Cab87RuntimeWorldSource", "BlankNoAuthoredRoad")
+		return createBlankWorld()
 	end
 
 	authoredRoadStartupLog("creating authored road world")
 	local okWorld, world, driveSurfaces, crashObstacles, spawnPose = pcall(function()
-		return AuthoredRoadRuntime.createWorld(authoredRoadRoot)
+		return AuthoredRoadRuntime.createWorld(authoredRoadRoot, authoredRoadSource)
 	end)
 	if okWorld and world then
+		Workspace:SetAttribute("Cab87RuntimeWorldSource", tostring(world:GetAttribute("AuthoredRoadFormat") or "AuthoredRoad"))
 		authoredRoadStartupLog(
 			"authored road world active: driveSurfaces=%d spawn=(%.1f, %.1f, %.1f)",
 			#(driveSurfaces or {}),
@@ -328,8 +401,15 @@ local function createRuntimeWorld()
 		return world, driveSurfaces, crashObstacles, spawnPose
 	end
 
-	warn("[cab87] Authored road world failed; using generated map so the taxi can spawn: " .. tostring(world))
-	return createGeneratedWorld()
+	if proceduralWorldEnabled then
+		warn("[cab87] Authored road world failed; using generated map so the taxi can spawn: " .. tostring(world))
+		Workspace:SetAttribute("Cab87RuntimeWorldSource", "ProceduralFallbackAuthoredRoadFailed")
+		return createGeneratedWorld()
+	end
+
+	warn("[cab87] Authored road world failed and procedural world generation is disabled: " .. tostring(world))
+	Workspace:SetAttribute("Cab87RuntimeWorldSource", "BlankAuthoredRoadFailed")
+	return createBlankWorld()
 end
 
 local function startShiftService(remotes, stateReplicator, economyService)
@@ -343,7 +423,24 @@ local function startShiftService(remotes, stateReplicator, economyService)
 	return shiftService
 end
 
+local function getCabConfigOverrides(gameSettings)
+	if GameManagerSettings.getCabVisualStyle(gameSettings) == "Blocky" then
+		return {
+			carForceProceduralVisual = true,
+		}
+	end
+
+	return nil
+end
+
 local function bootstrap()
+	local gameSettings = GameManagerSettings.readWorkspaceSettings(Workspace)
+	GameManagerSettings.ensureRuntimeSettings(ReplicatedStorage, gameSettings)
+
+	local passengersEnabled = GameManagerSettings.isEnabled(gameSettings, "PassengersEnabled")
+	local shiftEnabled = GameManagerSettings.isEnabled(gameSettings, "ShiftEnabled")
+	local cabConfigOverrides = getCabConfigOverrides(gameSettings)
+
 	local remotes = RemoteRegistry.ensure({
 		config = Config,
 	})
@@ -351,7 +448,7 @@ local function bootstrap()
 		config = Config,
 		remotes = remotes,
 	})
-	local world, driveSurfaces, crashObstacles, spawnPose = createRuntimeWorld()
+	local world, driveSurfaces, crashObstacles, spawnPose = createRuntimeWorld(gameSettings)
 	buildRefuelStations(world)
 	local persistenceService = PersistenceService.new({
 		config = Config,
@@ -399,7 +496,7 @@ local function bootstrap()
 	})
 	fuelService:start()
 
-	local shiftService = startShiftService(remotes, stateReplicator, economyService)
+	local shiftService = if shiftEnabled then startShiftService(remotes, stateReplicator, economyService) else nil
 	local activeCabRuntime = nil
 	local activePassengerService = nil
 	local activeFareService = nil
@@ -446,15 +543,20 @@ local function bootstrap()
 
 		stopActiveCabRuntime()
 
-		local gpsService = GpsService.start({
-			world = world,
-			car = handle.car,
-			driveSurfaces = driveSurfaces,
-		})
+		local gpsService = nil
+		if passengersEnabled then
+			gpsService = GpsService.start({
+				world = world,
+				car = handle.car,
+				driveSurfaces = driveSurfaces,
+			})
+		end
 		local fareService = FareService.new({
 			config = Config,
 			car = handle.car,
 			shiftService = shiftService,
+			economyService = economyService,
+			freeplayPayoutsEnabled = not shiftEnabled,
 			ownerPlayer = handle.ownerPlayer,
 			ownerUserId = handle.ownerUserId,
 		})
@@ -471,15 +573,18 @@ local function bootstrap()
 			ownerUserId = handle.ownerUserId,
 		})
 
-		local passengerService = PassengerService.start({
-			world = world,
-			car = handle.car,
-			driveSurfaces = driveSurfaces,
-			spawnPose = handle.spawnPose or runtimeSpawnPose or spawnPose,
-			gpsService = gpsService,
-			fareService = fareService,
-			stateReplicator = stateReplicator,
-		})
+		local passengerService = nil
+		if passengersEnabled then
+			passengerService = PassengerService.start({
+				world = world,
+				car = handle.car,
+				driveSurfaces = driveSurfaces,
+				spawnPose = handle.spawnPose or runtimeSpawnPose or spawnPose,
+				gpsService = gpsService,
+				fareService = fareService,
+				stateReplicator = stateReplicator,
+			})
+		end
 
 		local runtime = {
 			handle = handle,
@@ -520,6 +625,8 @@ local function bootstrap()
 		taxiService = taxiService,
 		vehicleCatalog = VehicleCatalog,
 		vehicleInventoryService = vehicleInventoryService,
+		cabConfigOverrides = cabConfigOverrides,
+		shopPromptEnabled = GameManagerSettings.isEnabled(gameSettings, "UiGarageShopEnabled"),
 		onCabReady = function(handle, request)
 			startCabRuntime(handle, request and request.spawnPose or spawnPose)
 		end,
@@ -553,6 +660,7 @@ local function bootstrap()
 		taxiId = Config.carDefaultTaxiId,
 		spawnPose = spawnPose,
 		world = world,
+		configOverrides = cabConfigOverrides,
 	})
 	startCabRuntime(starterCab, spawnPose)
 end

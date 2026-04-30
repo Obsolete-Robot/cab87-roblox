@@ -391,6 +391,20 @@ function clearFolder(folder)
 	end
 end
 
+function clearAuthoredRoadEditorRoot()
+	local root = getOrCreateRoot()
+	for _, child in ipairs(root:GetChildren()) do
+		child:Destroy()
+	end
+	for attributeName in pairs(root:GetAttributes()) do
+		root:SetAttribute(attributeName, nil)
+	end
+	root:SetAttribute(ACTIVE_SPLINE_ATTR, nil)
+	lastWireframeEdges = {}
+	Selection:Set({ root })
+	return root
+end
+
 function sortedPoints()
 	local folder = getOrCreatePointsFolder()
 	local points = {}
@@ -541,10 +555,25 @@ function raycastFromCamera(maxDistance)
 	end
 	local origin = camera.CFrame.Position
 	local direction = camera.CFrame.LookVector * (maxDistance or 4000)
+	local root = getOrCreateRoot()
+	local exclude = {}
+	for _, name in ipairs({
+		MARKERS_NAME,
+		SPLINES_NAME,
+		POINTS_NAME,
+		JUNCTIONS_NAME,
+		WIRE_NAME,
+		NETWORK_BUILD_NAME,
+	}) do
+		local child = root:FindFirstChild(name)
+		if child then
+			table.insert(exclude, child)
+		end
+	end
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Blacklist
-	params.FilterDescendantsInstances = { getOrCreateRoot() }
+	params.FilterDescendantsInstances = exclude
 	params.IgnoreWater = false
 
 	local hit = Workspace:Raycast(origin, direction, params)
@@ -4388,6 +4417,7 @@ local btnSnap = makeButton("Snap Points To Terrain")
 local btnRebuild = makeButton("Rebuild Road (Mesh)")
 local btnWireframe = makeButton("Wireframe Mesh: Off")
 local btnClear = makeButton("Clear Road")
+local btnClearAll = makeButton("Clear All Road Data")
 local btnAutoRebuild = makeButton("Auto Rebuild: Off")
 
 function refreshCurveModeButton()
@@ -5038,6 +5068,19 @@ btnClear.MouseButton1Click:Connect(function()
 	lastWireframeEdges = {}
 	ChangeHistoryService:SetWaypoint("cab87 roads after clear")
 	updateStatus("Cleared road geometry")
+end)
+
+btnClearAll.MouseButton1Click:Connect(function()
+	ChangeHistoryService:SetWaypoint("cab87 roads before clear all")
+	clearAuthoredRoadEditorRoot()
+	refreshPointWatchers()
+	refreshCurveModeButton()
+	refreshRoadWidthInput()
+	refreshJunctionRadiusInput()
+	refreshJunctionSubdivisionsInput()
+	refreshWireframeButton()
+	ChangeHistoryService:SetWaypoint("cab87 roads after clear all")
+	updateStatus("Cleared all authored road data. Import curve JSON and rebuild when ready.")
 end)
 
 btnAutoRebuild.MouseButton1Click:Connect(function()

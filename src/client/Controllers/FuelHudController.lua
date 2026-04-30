@@ -1,3 +1,4 @@
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -11,6 +12,7 @@ local GameplayStateStore = require(script.Parent.Parent:WaitForChild("GameplaySt
 local FuelHudController = {}
 
 local LOW_FUEL_RATIO = 0.2
+local player = Players.LocalPlayer
 
 local REASON_TEXT = {
 	cooldown = "Refuel cooling down",
@@ -33,6 +35,15 @@ local function toNumber(value, fallback)
 		return value
 	end
 	return fallback
+end
+
+local function getBankMoney()
+	local shiftState = GameplayStateStore.getShiftState()
+	if shiftState then
+		return toNumber(shiftState.bankMoney, 0)
+	end
+
+	return toNumber(player:GetAttribute(Config.shiftBankMoneyAttribute or "Cab87BankMoney"), 0)
 end
 
 local function get2dDistance(a, b)
@@ -231,8 +242,7 @@ function FuelHudController.start(parentGui, cabTracker)
 			end
 
 			local estimatedPrice = math.max(math.floor(missing * toNumber(Config.fuelPaidPricePerUnit, 2) + 0.5), 0)
-			local shiftState = GameplayStateStore.getShiftState()
-			local bankMoney = shiftState and toNumber(shiftState.bankMoney, 0) or 0
+			local bankMoney = getBankMoney()
 			if estimatedPrice <= bankMoney then
 				controller.promptStation = {
 					stationId = nearest.id,

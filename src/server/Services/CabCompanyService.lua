@@ -7,6 +7,9 @@ CabCompanyService.__index = CabCompanyService
 local REQUEST_PROMPT_ATTRIBUTE = "Cab87CabRequestPrompt"
 local REQUEST_ACTION_ATTRIBUTE = "Cab87CabRequestAction"
 local REQUEST_ZONE_ATTRIBUTE = "Cab87CabRequestZone"
+local CAB_SPAWN_MARKER_NAME = "CabSpawnPoint"
+local CAB_REFUEL_MARKER_NAME = "CabRefuelPoint"
+local CAB_SERVICE_MARKER_NAME = "CabServicePoint"
 
 local ACTION_ZONES = {
 	claim = { "CabPickupZone" },
@@ -40,6 +43,12 @@ local PROMPT_DEFINITIONS = {
 		action = "shop",
 		actionText = "Open Garage",
 	},
+}
+
+local MARKER_PROMPT_ZONE_NAMES = {
+	CabPickupZone = true,
+	GarageZone = true,
+	ServiceDeskZone = true,
 }
 
 local function getConfigNumber(config, key, fallback)
@@ -167,6 +176,8 @@ function CabCompanyService.new(options)
 		taxiService = options.taxiService,
 		vehicleCatalog = options.vehicleCatalog,
 		vehicleInventoryService = options.vehicleInventoryService,
+		cabConfigOverrides = options.cabConfigOverrides,
+		shopPromptEnabled = options.shopPromptEnabled ~= false,
 		onCabReady = options.onCabReady,
 		connections = {},
 		lastRequestAtByUserId = {},
@@ -213,10 +224,53 @@ function CabCompanyService:_findZone(zoneName)
 	return nil
 end
 
+function CabCompanyService:_getMarker(markerName)
+	local root = self:_getCabCompanyRoot()
+	local spawnFolder = root and root:FindFirstChild("Spawn")
+	local spawnMarker = spawnFolder and spawnFolder:FindFirstChild(markerName)
+	if spawnMarker and spawnMarker:IsA("BasePart") then
+		return spawnMarker
+	end
+
+	local markersFolder = root and root:FindFirstChild("Markers")
+	local marker = markersFolder and markersFolder:FindFirstChild(markerName)
+	if marker and marker:IsA("BasePart") then
+		return marker
+	end
+
+	local world = self.world
+	if markerName == CAB_REFUEL_MARKER_NAME then
+		local refuelStations = world and world:FindFirstChild("RefuelStations")
+		local refuelMarker = refuelStations and refuelStations:FindFirstChild("cab-company")
+		if refuelMarker and refuelMarker:IsA("BasePart") then
+			return refuelMarker
+		end
+	end
+
+	return nil
+end
+
+function CabCompanyService:_getPromptPart(zoneName)
+	local zone = self:_findZone(zoneName)
+	if zone then
+		return zone
+	end
+
+	if not self:_getZonesFolder() and MARKER_PROMPT_ZONE_NAMES[zoneName] then
+		if zoneName == "GarageZone" or zoneName == "ServiceDeskZone" then
+			return self:_getMarker(CAB_SERVICE_MARKER_NAME) or self:_getMarker(CAB_SPAWN_MARKER_NAME)
+		end
+
+		return self:_getMarker(CAB_SPAWN_MARKER_NAME)
+	end
+
+	return nil
+end
+
 function CabCompanyService:_getSpawnPose()
 	local root = self:_getCabCompanyRoot()
 	local spawnFolder = root and root:FindFirstChild("Spawn")
-	local spawnPoint = spawnFolder and spawnFolder:FindFirstChild("CabSpawnPoint")
+	local spawnPoint = spawnFolder and spawnFolder:FindFirstChild(CAB_SPAWN_MARKER_NAME)
 	if spawnPoint and spawnPoint:IsA("BasePart") then
 		return {
 			position = spawnPoint.Position + Vector3.new(0, 1.5, 0),
@@ -308,10 +362,24 @@ function CabCompanyService:_getValidZoneForAction(action, position)
 	return nil
 end
 
-function CabCompanyService:_isInFallbackCompanyRange(position)
-	local spawnPose = self:_getSpawnPose()
+function CabCompanyService:_getValidMarkerForAction(action, position)
+	if self:_getZonesFolder() then
+		return nil
+	end
+
 	local radius = math.max(getConfigNumber(self.config, "cabCompanyFallbackRequestRadius", 95), 0)
-	return horizontalDistance(position, spawnPose.position) <= radius
+	local seen = {}
+	for _, zoneName in ipairs(ACTION_ZONES[action] or ACTION_ZONES.claim) do
+		local marker = self:_getPromptPart(zoneName)
+		if marker and not seen[marker] then
+			seen[marker] = true
+			if horizontalDistance(position, marker.Position) <= radius then
+				return marker
+			end
+		end
+	end
+
+	return nil
 end
 
 function CabCompanyService:_validateRequest(player, action)
@@ -325,9 +393,9 @@ function CabCompanyService:_validateRequest(player, action)
 		return true, nil, zone
 	end
 
-	local zonesFolder = self:_getZonesFolder()
-	if not zonesFolder and self:_isInFallbackCompanyRange(rootPart.Position) then
-		return true, nil, nil
+	local marker = self:_getValidMarkerForAction(action, rootPart.Position)
+	if marker then
+		return true, nil, marker
 	end
 
 	return false, "outOfCabCompanyZone", nil
@@ -361,12 +429,12 @@ function CabCompanyService:_markCabRequest(handle, action, zone)
 end
 
 function CabCompanyService:_installPrompt(zoneName, action, actionText)
-	local zone = self:_findZone(zoneName)
-	if not zone then
+	local promptParent = self:_getPromptPart(zoneName)
+	if not promptParent then
 		return
 	end
 
-	local legacyPrompt = zone:FindFirstChild("RequestCabPrompt")
+	local legacyPrompt = promptParent:FindFirstChild("RequestCabPrompt")
 	if legacyPrompt and legacyPrompt:IsA("ProximityPrompt") then
 		legacyPrompt:Destroy()
 	elseif legacyPrompt then
@@ -374,7 +442,7 @@ function CabCompanyService:_installPrompt(zoneName, action, actionText)
 	end
 
 	local promptName = promptNameForAction(action)
-	local prompt = zone:FindFirstChild(promptName)
+	local prompt = promptParent:FindFirstChild(promptName)
 	if prompt and not prompt:IsA("ProximityPrompt") then
 		prompt:Destroy()
 		prompt = nil
@@ -383,11 +451,11 @@ function CabCompanyService:_installPrompt(zoneName, action, actionText)
 	if not prompt then
 		prompt = Instance.new("ProximityPrompt")
 		prompt.Name = promptName
-		prompt.Parent = zone
+		prompt.Parent = promptParent
 	end
 
 	prompt.ActionText = actionText
-	prompt.ObjectText = "Cab Company"
+	prompt.ObjectText = "Cab Depot"
 	prompt.KeyboardKeyCode = Enum.KeyCode.E
 	prompt.GamepadKeyCode = Enum.KeyCode.ButtonY
 	prompt.HoldDuration = 0
@@ -401,12 +469,14 @@ end
 function CabCompanyService:_installPrompts()
 	local installedKeys = {}
 	for _, definition in ipairs(PROMPT_DEFINITIONS) do
-		local key = string.format("%s|%s", tostring(definition.zoneName), tostring(definition.action))
-		if installedKeys[key] then
-			warn("[cab87] Duplicate prompt definition skipped: " .. key)
-		else
-			installedKeys[key] = true
-			self:_installPrompt(definition.zoneName, definition.action, definition.actionText)
+		if definition.action ~= "shop" or self.shopPromptEnabled then
+			local key = string.format("%s|%s", tostring(definition.zoneName), tostring(definition.action))
+			if installedKeys[key] then
+				warn("[cab87] Duplicate prompt definition skipped: " .. key)
+			else
+				installedKeys[key] = true
+				self:_installPrompt(definition.zoneName, definition.action, definition.actionText)
+			end
 		end
 	end
 end
@@ -422,8 +492,7 @@ function CabCompanyService:isShopEligible(player)
 		return true
 	end
 
-	local zonesFolder = self:_getZonesFolder()
-	if not zonesFolder and self:_isInFallbackCompanyRange(rootPart.Position) then
+	if self:_getValidMarkerForAction("shop", rootPart.Position) then
 		return true
 	end
 
@@ -452,19 +521,17 @@ function CabCompanyService:requestCab(player, actionOrPayload, taxiId)
 
 	local resolvedTaxiId = self:_resolveTaxiId(player, payload.taxiId)
 	local spawnPose = self:_getSpawnPose()
+	local cabOptions = {
+		world = self.world,
+		configOverrides = self.cabConfigOverrides,
+	}
 	local handle, created
 	if action == "recover" then
-		handle, created = self.taxiService:recoverCabForPlayer(player, resolvedTaxiId, spawnPose, {
-			world = self.world,
-		})
+		handle, created = self.taxiService:recoverCabForPlayer(player, resolvedTaxiId, spawnPose, cabOptions)
 	elseif self.taxiService.claimCabForPlayer then
-		handle, created = self.taxiService:claimCabForPlayer(player, resolvedTaxiId, spawnPose, {
-			world = self.world,
-		})
+		handle, created = self.taxiService:claimCabForPlayer(player, resolvedTaxiId, spawnPose, cabOptions)
 	else
-		handle, created = self.taxiService:spawnCabForPlayer(player, resolvedTaxiId, spawnPose, {
-			world = self.world,
-		})
+		handle, created = self.taxiService:spawnCabForPlayer(player, resolvedTaxiId, spawnPose, cabOptions)
 	end
 
 	self:_markCabRequest(handle, action, zone)

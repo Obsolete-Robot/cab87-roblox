@@ -1,12 +1,12 @@
 import { Point, Node, Edge, MeshData } from "./types";
 import { getDir } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
-import { getEdgeControlPoints, sampleEdgeSpline } from "./network";
+import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
   const corners = nodeCorners.get(node.id);
   if (!corners) return null;
-  const bases = corners.get(edge.id);
+  const bases = corners.get(`${edge.id}_${isSource}`) || corners.get(edge.id);
   if (!bases || bases.length < 2) return null;
   return [bases[0], bases[1]];
 }
@@ -31,11 +31,12 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
   // 1. Build Hubs
   for (const node of nodes) {
-    const incidentEdges = edges.filter(e => e.source === node.id || e.target === node.id);
-    if (incidentEdges.length === 0) continue;
+    const conns = getIncidentConnections(node.id, edges);
+    if (conns.length === 0) continue;
 
-    const outgoing = incidentEdges.map(e => {
-      const isSource = e.source === node.id;
+    const outgoing = conns.map(c => {
+      const isSource = c.isSource;
+      const e = c.edge;
       const controlPts = getEdgeControlPoints(e, nodes);
       const p1 = node.point;
       const p2 = isSource ? controlPts[1] : controlPts[controlPts.length - 2];
@@ -133,15 +134,15 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         if (odistL < maxDist - 0.01) hubOuterPolygon.push(osL);
         if (odistR < maxDist - 0.01) hubOuterPolygon.push(osR);
 
-        squaredBases.set(r.edge.id, [sL, sR]);
-        squaredOuterBases.set(r.edge.id, [osL, osR]);
+        squaredBases.set(`${r.edge.id}_${r.isSource}`, [sL, sR]);
+        squaredOuterBases.set(`${r.edge.id}_${r.isSource}`, [osL, osR]);
       } else {
         const distMin = Math.min(distL, distR);
-        squaredBases.set(r.edge.id, [bL, bR]);
-        squaredOuterBases.set(r.edge.id, [obL, obR]);
+        squaredBases.set(`${r.edge.id}_${r.isSource}`, [bL, bR]);
+        squaredOuterBases.set(`${r.edge.id}_${r.isSource}`, [obL, obR]);
       }
       
-      clearances.set(r.edge.id, maxDist);
+      clearances.set(`${r.edge.id}_${r.isSource}`, maxDist);
     }
     
     mesh.hubs.push({ id: node.id, polygon: hubPolygon, corners, outerPolygon: hubOuterPolygon, outerCorners });
@@ -180,8 +181,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     const spline = edgeSplines.get(edge.id)!;
     const W = edge.width / 2;
 
-    const sourceClearance = nodeClearances.get(sourceNode.id)?.get(edge.id) || 0;
-    const targetClearance = targetNode ? (nodeClearances.get(targetNode.id)?.get(edge.id) || 0) : 0;
+    const sourceClearance = nodeClearances.get(sourceNode.id)?.get(`${edge.id}_true`) || 0;
+    const targetClearance = targetNode ? (nodeClearances.get(targetNode.id)?.get(`${edge.id}_false`) || 0) : 0;
 
     const sourceBases = getEdgeBases(sourceNode, sourceNode, edge, true, nodeCorners);
     const targetBases = targetNode ? getEdgeBases(targetNode, sourceNode, edge, false, nodeCorners) : null;
@@ -238,16 +239,13 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       outerRightPoints.push({ x: p2.x + right.x * OW, y: p2.y + right.y * OW });
     }
 
-    const sourceDegree = edges.filter(e => e.source === sourceNode.id || e.target === sourceNode.id).length;
-    const targetDegree = targetNode ? edges.filter(e => e.source === targetNode.id || e.target === targetNode.id).length : 0;
-
     const cwWidth = 14;
 
     if (sourceBases && outerSourceBases) {
        let [bL, bR] = sourceBases;
        let [obL, obR] = outerSourceBases;
        
-       if (sourceDegree > 1) {
+       if (isTrueJunction(sourceNode.id, nodes, edges)) {
          const sDir = getDir(spline[0], spline[Math.min(1, spline.length - 1)]);
          
          const new_bL = { x: bL.x + sDir.x * cwWidth, y: bL.y + sDir.y * cwWidth };
@@ -255,7 +253,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
          const new_obL = { x: obL.x + sDir.x * cwWidth, y: obL.y + sDir.y * cwWidth };
          const new_obR = { x: obR.x + sDir.x * cwWidth, y: obR.y + sDir.y * cwWidth };
          
-         mesh.crosswalks.push({ edgeId: edge.id, nodeId: sourceNode.id, polygon: [bL, bR, new_bR, new_bL] });
+         if (hasCrosswalk(edge.id, true, nodes, edges)) {
+           mesh.crosswalks.push({ edgeId: edge.id, nodeId: sourceNode.id, polygon: [bL, bR, new_bR, new_bL] });
+         }
          mesh.sidewalkPolygons.push([obL, bL, new_bL, new_obL]);
          mesh.sidewalkPolygons.push([bR, obR, new_obR, new_bR]);
          
@@ -279,7 +279,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            [tbL, tbR] = targetBases; 
            [otbL, otbR] = outerTargetBases;
            
-           if (targetDegree > 1) {
+           if (isTrueJunction(targetNode!.id, nodes, edges)) {
              const tDir = getDir(spline[spline.length - 1], spline[Math.max(0, spline.length - 2)]);
              
              const new_tbL = { x: tbL.x + tDir.x * cwWidth, y: tbL.y + tDir.y * cwWidth };
@@ -287,7 +287,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
              const new_otbL = { x: otbL.x + tDir.x * cwWidth, y: otbL.y + tDir.y * cwWidth };
              const new_otbR = { x: otbR.x + tDir.x * cwWidth, y: otbR.y + tDir.y * cwWidth };
              
-             mesh.crosswalks.push({ edgeId: edge.id, nodeId: targetNode!.id, polygon: [tbL, tbR, new_tbR, new_tbL] });
+             if (hasCrosswalk(edge.id, false, nodes, edges)) {
+               mesh.crosswalks.push({ edgeId: edge.id, nodeId: targetNode!.id, polygon: [tbL, tbR, new_tbR, new_tbL] });
+             }
              mesh.sidewalkPolygons.push([otbL, tbL, new_tbL, new_otbL]);
              mesh.sidewalkPolygons.push([tbR, otbR, new_otbR, new_tbR]);
              

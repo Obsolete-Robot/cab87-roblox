@@ -1,6 +1,6 @@
 import { Point, Node, Edge } from "./types";
 import { getDir } from "./math";
-import { getEdgeControlPoints } from "./network";
+import { getEdgeControlPoints, getIncidentConnections } from "./network";
 
 /**
  * Calculates a corner intersection between two road boundaries.
@@ -30,7 +30,7 @@ export function calculateBothCornerPoints(
 
   const cross = dir1.x * dir2.y - dir1.y * dir2.x;
 
-  if (Math.abs(cross) > 0.05) {
+  if (Math.abs(cross) > 0.001) {
     const dx = B.x - A.x;
     const dy = B.y - A.y;
     const t = (dx * dir2.y - dy * dir2.x) / cross;
@@ -44,36 +44,44 @@ export function calculateBothCornerPoints(
     const dot = dir1.x * dir2.x + dir1.y * dir2.y;
     let interiorAngle = Math.atan2(cross, dot);
     if (interiorAngle < 0) interiorAngle += 2 * Math.PI;
+    const interiorAngleDeg = interiorAngle * 180 / Math.PI;
 
-    const isSharp = interiorAngle < chamferAngleDeg * Math.PI / 180 || interiorAngle > (360 - chamferAngleDeg) * Math.PI / 180;
+    const isSharp = interiorAngleDeg < chamferAngleDeg || interiorAngleDeg > (360 - chamferAngleDeg);
+    const isNearlyStraight = interiorAngleDeg > 150 && interiorAngleDeg < 210;
     
-    if (Math.abs(t) < 1000 && Math.abs(ot) < 1000) {
-      if (isSharp) {
+    if (isSharp || isNearlyStraight) {
         const maxDistInner = Math.max(W1, W2) * 1.5;
         const maxDistOuter = Math.max(OW1, OW2) * 1.5;
 
-        const capT = Math.sign(t) * Math.min(Math.abs(t), maxDistInner);
-        const capU = Math.sign(u) * Math.min(Math.abs(u), maxDistInner);
-        const capOT = Math.sign(ot) * Math.min(Math.abs(ot), maxDistOuter);
-        const capOU = Math.sign(ou) * Math.min(Math.abs(ou), maxDistOuter);
+        const straightCapInner = Math.max(W1, W2) * 0.1;
+        const straightCapOuter = Math.max(OW1, OW2) * 0.1;
+
+        const spikeCapT = Math.max(W1, W2) * 5;
+        const spikeCapOT = Math.max(OW1, OW2) * 5;
+
+        const capT = isNearlyStraight ? Math.max(-straightCapInner, Math.min(t, straightCapInner)) : (t < 0 ? Math.max(t, -maxDistInner) : Math.min(t, spikeCapT));
+        const capU = isNearlyStraight ? Math.max(-straightCapInner, Math.min(u, straightCapInner)) : (u < 0 ? Math.max(u, -maxDistInner) : Math.min(u, spikeCapT));
+        const capOT = isNearlyStraight ? Math.max(-straightCapOuter, Math.min(ot, straightCapOuter)) : (ot < 0 ? Math.max(ot, -maxDistOuter) : Math.min(ot, spikeCapOT));
+        const capOU = isNearlyStraight ? Math.max(-straightCapOuter, Math.min(ou, straightCapOuter)) : (ou < 0 ? Math.max(ou, -maxDistOuter) : Math.min(ou, spikeCapOT));
         
-        return [
-          [
-            { x: A.x + capT * dir1.x, y: A.y + capT * dir1.y },
-            { x: B.x + capU * dir2.x, y: B.y + capU * dir2.y }
-          ],
-          [
-            { x: OA.x + capOT * dir1.x, y: OA.y + capOT * dir1.y },
-            { x: OB.x + capOU * dir2.x, y: OB.y + capOU * dir2.y }
-          ]
-        ];
-      }
-      
-      return [
-        [{ x: A.x + t * dir1.x, y: A.y + t * dir1.y }],
-        [{ x: OA.x + ot * dir1.x, y: OA.y + ot * dir1.y }]
-      ];
+        if (capT !== t || capU !== u || capOT !== ot || capOU !== ou) {
+          return [
+            [
+              { x: A.x + capT * dir1.x, y: A.y + capT * dir1.y },
+              { x: B.x + capU * dir2.x, y: B.y + capU * dir2.y }
+            ],
+            [
+              { x: OA.x + capOT * dir1.x, y: OA.y + capOT * dir1.y },
+              { x: OB.x + capOU * dir2.x, y: OB.y + capOU * dir2.y }
+            ]
+          ];
+        }
     }
+    
+    return [
+      [{ x: A.x + t * dir1.x, y: A.y + t * dir1.y }],
+      [{ x: OA.x + ot * dir1.x, y: OA.y + ot * dir1.y }]
+    ];
   }
 
   return [
@@ -82,15 +90,16 @@ export function calculateBothCornerPoints(
   ];
 }
 
-export function getEdgeClearance(nodeId: string, edge: Edge, nodes: Node[], edges: Edge[], chamferAngleDeg: number): number {
+export function getEdgeClearance(nodeId: string, edge: Edge, isSourceQuery: boolean, nodes: Node[], edges: Edge[], chamferAngleDeg: number): number {
   const node = nodes.find(n => n.id === nodeId);
   if (!node) return 0;
 
-  const incidentEdges = edges.filter(e => e.source === node.id || e.target === node.id);
-  if (incidentEdges.length === 0) return 0;
+  const conns = getIncidentConnections(nodeId, edges);
+  if (conns.length === 0) return 0;
 
-  const outgoing = incidentEdges.map(e => {
-    const isSource = e.source === node.id;
+  const outgoing = conns.map(c => {
+    const isSource = c.isSource;
+    const e = c.edge;
     const controlPts = getEdgeControlPoints(e, nodes);
     const p1 = node.point;
     const p2 = isSource ? controlPts[1] : controlPts[controlPts.length - 2];
@@ -133,7 +142,7 @@ export function getEdgeClearance(nodeId: string, edge: Edge, nodes: Node[], edge
       }
   }
 
-  const outIdx = outgoing.findIndex(o => o.edge.id === edge.id);
+  const outIdx = outgoing.findIndex(o => o.edge.id === edge.id && o.isSource === isSourceQuery);
   if (outIdx === -1) return 0;
 
   const r = outgoing[outIdx];
