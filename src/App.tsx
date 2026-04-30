@@ -7,6 +7,16 @@ import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
 
 const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+const ROAD_NETWORK_SCHEMA = 'cab87-road-network';
+const ROAD_NETWORK_VERSION = 1;
+const DEFAULT_CHAMFER_ANGLE = 70;
+const DEFAULT_MESH_RESOLUTION = 20;
+
+function sanitizeMeshResolution(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_MESH_RESOLUTION;
+  return Math.max(5, Math.min(100, Math.round(parsed)));
+}
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -38,13 +48,22 @@ export default function App() {
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [editingEdgeName, setEditingEdgeName] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState("");
-  const [chamferAngle, setChamferAngle] = useState(70);
-  const [meshResolution, setMeshResolution] = useState(20);
+  const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
+  const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = () => {
-    const data = JSON.stringify({ nodes, edges }, null, 2);
+    const data = JSON.stringify({
+      schema: ROAD_NETWORK_SCHEMA,
+      version: ROAD_NETWORK_VERSION,
+      settings: {
+        chamferAngleDeg: chamferAngle,
+        meshResolution,
+      },
+      nodes,
+      edges,
+    }, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -63,9 +82,24 @@ export default function App() {
       try {
         const text = evt.target?.result as string;
         const data = JSON.parse(text);
+        if (data.schema != null && data.schema !== ROAD_NETWORK_SCHEMA) {
+          alert(`Unsupported road network schema: ${data.schema}`);
+          return;
+        }
         if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
           setNodes(data.nodes);
           setEdges(data.edges);
+          if (typeof data.settings?.chamferAngleDeg === 'number') {
+            setChamferAngle(data.settings.chamferAngleDeg);
+          } else {
+            setChamferAngle(DEFAULT_CHAMFER_ANGLE);
+          }
+          const importedMeshResolution = data.settings?.meshResolution ?? data.settings?.splineSegments;
+          if (typeof importedMeshResolution === 'number') {
+            setMeshResolution(sanitizeMeshResolution(importedMeshResolution));
+          } else {
+            setMeshResolution(DEFAULT_MESH_RESOLUTION);
+          }
           setSelectedEdge(null);
           setSelectedNode(null);
           setSelectedPointIndex(null);
@@ -1293,7 +1327,7 @@ export default function App() {
                     min="5"
                     max="100"
                     value={meshResolution}
-                    onChange={(e) => setMeshResolution(parseInt(e.target.value))}
+                    onChange={(e) => setMeshResolution(sanitizeMeshResolution(e.target.value))}
                     className="flex-grow min-w-0"
                   />
                   <input
@@ -1301,7 +1335,7 @@ export default function App() {
                     min="5"
                     max="100"
                     value={meshResolution}
-                    onChange={(e) => setMeshResolution(parseInt(e.target.value) || 20)}
+                    onChange={(e) => setMeshResolution(sanitizeMeshResolution(e.target.value))}
                     className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
                   />
                 </div>

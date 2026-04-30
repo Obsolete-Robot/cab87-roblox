@@ -2,6 +2,27 @@
 
 This application procedurally generates and visualizes complex road intersections based on angular mathematics and 2D mesh generation.
 
+## Export Format
+
+Exports use the `cab87-road-network` JSON schema with `version: 1`. The payload includes
+`settings` for mesh-affecting editor options and the authored `nodes` and `edges` arrays:
+
+```json
+{
+  "schema": "cab87-road-network",
+  "version": 1,
+  "settings": {
+    "chamferAngleDeg": 70,
+    "meshResolution": 20
+  },
+  "nodes": [],
+  "edges": []
+}
+```
+
+Imports remain backwards compatible with earlier Road-Maker exports that only contain
+`nodes` and `edges`.
+
 ## Technical Details: Intersection and Meshing
 
 The architecture cleanly separates the mathematical logic from the view layer, providing an accurate, triangulated geometric representation of how multiple roads of varying widths interact at a central 2D point.
