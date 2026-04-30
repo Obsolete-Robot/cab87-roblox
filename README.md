@@ -73,15 +73,22 @@ Then restart Studio. You will get these tools:
   - **Road Editor** (legacy spline editor/reference)
 
 Road Graph Builder panel actions:
+- Clear All Road Data to empty `Cab87RoadEditor` before importing a fresh road.
 - Import Graph JSON exported from `tools/intersection-visualizer`.
 - Rebuild Preview Mesh from `Cab87RoadEditor/RoadGraph`.
 - Bake Runtime Geometry to create persistent road, sidewalk, crosswalk, and collision geometry for the current map.
 - Fork As New Map to clear baked output before baking a new level from the same graph.
 - Set/select cab spawn, refuel, service, and player spawn markers.
 
-Use **Cab87 -> Add Manager** to create `Workspace.Cab87Manager`. The manager panel can toggle passengers, shift mode, UI panels, cab visual style, and **Procedural World**. Turn **Procedural World** off when you want Play mode to use authored road graph or legacy curve-editor geometry without falling back to the generated city.
+Use **Cab87 -> Add Manager** to create `Workspace.Cab87Manager`. The manager panel can toggle passengers, shift mode, UI panels, cab visual style, **Road Source**, and **Procedural World**. Turn **Procedural World** off when you want Play mode to use authored road graph or legacy curve-editor geometry without falling back to the generated city.
+
+Set **Road Source** to choose which authored road data is real in Play:
+- **Auto**: use a valid `RoadGraph` first, then fall back to legacy curve roads.
+- **RoadGraph**: use only baked graph-road geometry from `Cab87RoadEditor/RoadGraph`.
+- **LegacyCurve**: use the legacy Road Editor `RoadNetwork` visual mesh plus generated runtime collision.
 
 The legacy Road Editor can still be used for curve-authored roads. Rebuild its `RoadNetwork` mesh before Play.
+Use **Clear All Road Data** first when you want to remove old graph, legacy, baked, marker, and preview data before importing a fresh curve JSON.
 
 When you click **Generate Map**, check Studio Output for seed + generator version.
 

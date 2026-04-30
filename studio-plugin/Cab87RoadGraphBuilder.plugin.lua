@@ -260,6 +260,7 @@ local importButton = makeButton("Import Graph JSON")
 local rebuildButton = makeButton("Rebuild Preview Mesh")
 local bakeAssetsButton = makeButton("Bake Runtime Geometry")
 local forkMapButton = makeButton("Fork As New Map")
+local clearAllButton = makeButton("Clear All Road Data")
 local setCabSpawnButton = makeButton("Set Cab Spawn From Camera")
 local setCabRefuelButton = makeButton("Set Refuel From Camera")
 local setCabServiceButton = makeButton("Set Service From Camera")
@@ -841,6 +842,18 @@ local function forkAsNewMap()
 	setStatus("Forked graph as new map ID " .. mapId .. ". Bake Runtime Geometry will create separate baked output for this map.")
 end
 
+local function clearAuthoredRoadEditorRoot()
+	local root = getOrCreateRoot()
+	for _, child in ipairs(root:GetChildren()) do
+		child:Destroy()
+	end
+	for attributeName in pairs(root:GetAttributes()) do
+		root:SetAttribute(attributeName, nil)
+	end
+	Selection:Set({ root })
+	setStatus("Cleared all authored road data. Import graph or curve JSON and rebuild when ready.")
+end
+
 local autoRestoreScheduled = false
 
 local function scheduleGraphMeshRestore()
@@ -1026,6 +1039,11 @@ forkMapButton.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 road graph before fork")
 	forkAsNewMap()
 	ChangeHistoryService:SetWaypoint("cab87 road graph after fork")
+end)
+clearAllButton.MouseButton1Click:Connect(function()
+	ChangeHistoryService:SetWaypoint("cab87 road graph before clear all")
+	clearAuthoredRoadEditorRoot()
+	ChangeHistoryService:SetWaypoint("cab87 road graph after clear all")
 end)
 setCabSpawnButton.MouseButton1Click:Connect(function()
 	setMarkerFromCamera(CAB_COMPANY_NODE_NAME, "CabCompany", Color3.fromRGB(90, 255, 150), 2.3)

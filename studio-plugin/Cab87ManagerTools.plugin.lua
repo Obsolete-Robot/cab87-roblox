@@ -15,6 +15,13 @@ local FALLBACK_DEFINITIONS = {
 	{ key = "PassengersEnabled", kind = "boolean", default = true },
 	{ key = "ShiftEnabled", kind = "boolean", default = true },
 	{ key = "ProceduralWorldEnabled", kind = "boolean", default = true },
+	{
+		key = "AuthoredRoadSource",
+		kind = "enum",
+		default = "Auto",
+		options = { "Auto", "RoadGraph", "LegacyCurve" },
+		values = { Auto = true, RoadGraph = true, LegacyCurve = true },
+	},
 	{ key = "CabVisualStyle", kind = "enum", default = "Asset", options = { "Asset", "Blocky" }, values = { Asset = true, Blocky = true } },
 	{ key = "UiGpsWindowEnabled", kind = "boolean", default = true },
 	{ key = "UiShiftPanelEnabled", kind = "boolean", default = true },
@@ -103,6 +110,7 @@ local LABELS = {
 	PassengersEnabled = "Passengers",
 	ShiftEnabled = "Shift",
 	ProceduralWorldEnabled = "Procedural World",
+	AuthoredRoadSource = "Road Source",
 	CabVisualStyle = "Cab Visual Style",
 	UiGpsWindowEnabled = "GPS Window",
 	UiShiftPanelEnabled = "Shift Panel",
@@ -116,6 +124,9 @@ local LABELS = {
 }
 
 local ENUM_HELP = {
+	Auto = "graph first, then legacy",
+	RoadGraph = "baked graph roads",
+	LegacyCurve = "legacy road editor",
 	Asset = "current visual cab",
 	Blocky = "original prototype cab",
 }

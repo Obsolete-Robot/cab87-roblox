@@ -642,12 +642,12 @@ export default function App() {
                     const deltaN = { x: mid.x - n.point.x, y: mid.y - n.point.y };
 
                     setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: mid } : node).filter(node => node.id !== selectedNode));
-                    
+
                     setEdges(prev => prev.map(edge => {
                         const newEdge = { ...edge };
                         const newPts = [...edge.points];
                         let changed = false;
-                        
+
                         if (edge.source === selectedNode) {
                             newEdge.source = n.id;
                             if (newPts.length > 0) {
@@ -678,9 +678,10 @@ export default function App() {
                             newEdge.points = newPts;
                         }
                         return newEdge;
-                    }));
+                    }).filter(edge => edge.source !== edge.target));
 
                     setSelectedNode(n.id);
+                    setSelectedEdge(null);
                     setIsMergeMode(false);
                 }
             } else {

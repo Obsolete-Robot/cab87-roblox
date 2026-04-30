@@ -7,6 +7,13 @@ local ATTRIBUTE_DEFINITIONS = {
 	{ key = "PassengersEnabled", kind = "boolean", default = true },
 	{ key = "ShiftEnabled", kind = "boolean", default = true },
 	{ key = "ProceduralWorldEnabled", kind = "boolean", default = true },
+	{
+		key = "AuthoredRoadSource",
+		kind = "enum",
+		default = "Auto",
+		options = { "Auto", "RoadGraph", "LegacyCurve" },
+		values = { Auto = true, RoadGraph = true, LegacyCurve = true },
+	},
 	{ key = "CabVisualStyle", kind = "enum", default = "Asset", options = { "Asset", "Blocky" }, values = { Asset = true, Blocky = true } },
 	{ key = "UiGpsWindowEnabled", kind = "boolean", default = true },
 	{ key = "UiShiftPanelEnabled", kind = "boolean", default = true },
@@ -155,6 +162,10 @@ end
 
 function GameManagerSettings.getCabVisualStyle(settings)
 	return normalizeValue(definitionsByKey.CabVisualStyle, settings and settings.CabVisualStyle)
+end
+
+function GameManagerSettings.getAuthoredRoadSource(settings)
+	return normalizeValue(definitionsByKey.AuthoredRoadSource, settings and settings.AuthoredRoadSource)
 end
 
 return GameManagerSettings

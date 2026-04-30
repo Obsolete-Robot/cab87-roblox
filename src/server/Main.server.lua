@@ -349,20 +349,23 @@ end
 
 local function createRuntimeWorld(gameSettings)
 	local proceduralWorldEnabled = GameManagerSettings.isEnabled(gameSettings, "ProceduralWorldEnabled")
+	local authoredRoadSource = GameManagerSettings.getAuthoredRoadSource(gameSettings)
 	local manager = GameManagerSettings.getManager(Workspace)
 	Workspace:SetAttribute("Cab87ManagerFound", manager ~= nil)
 	Workspace:SetAttribute("Cab87ManagerClassName", manager and manager.ClassName or "")
 	Workspace:SetAttribute("Cab87ProceduralWorldEnabled", proceduralWorldEnabled)
+	Workspace:SetAttribute("Cab87AuthoredRoadSource", authoredRoadSource)
 	local authoredRoadRoot = AuthoredRoadRuntime.getRoot()
 	authoredRoadStartupLog(
-		"startup: useAuthoredRoadEditorWorld=%s proceduralWorldEnabled=%s root=%s",
+		"startup: useAuthoredRoadEditorWorld=%s proceduralWorldEnabled=%s authoredRoadSource=%s root=%s",
 		tostring(Config.useAuthoredRoadEditorWorld == true),
 		tostring(proceduralWorldEnabled == true),
+		tostring(authoredRoadSource),
 		authoredRoadRoot and authoredRoadRoot:GetFullName() or "nil"
 	)
 
 	local okHasAuthoredRoad, hasAuthoredRoad = pcall(function()
-		return AuthoredRoadRuntime.hasRoadData(authoredRoadRoot)
+		return AuthoredRoadRuntime.hasRoadData(authoredRoadRoot, authoredRoadSource)
 	end)
 	if not okHasAuthoredRoad then
 		warn("[cab87] Authored road data check failed: " .. tostring(hasAuthoredRoad))
@@ -384,7 +387,7 @@ local function createRuntimeWorld(gameSettings)
 
 	authoredRoadStartupLog("creating authored road world")
 	local okWorld, world, driveSurfaces, crashObstacles, spawnPose = pcall(function()
-		return AuthoredRoadRuntime.createWorld(authoredRoadRoot)
+		return AuthoredRoadRuntime.createWorld(authoredRoadRoot, authoredRoadSource)
 	end)
 	if okWorld and world then
 		Workspace:SetAttribute("Cab87RuntimeWorldSource", tostring(world:GetAttribute("AuthoredRoadFormat") or "AuthoredRoad"))

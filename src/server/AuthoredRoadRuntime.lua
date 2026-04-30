@@ -20,6 +20,9 @@ local BAKED_COLLISION_NAME = "RoadGraphBakedCollision"
 local LEGACY_COLLISION_NAME = "RoadNetworkCollision"
 local LEGACY_RUNTIME_COLLISION_GENERATOR = "Cab87LegacyRoadRuntimeCollision"
 local MARKER_TYPE_ATTR = "Cab87MarkerType"
+local ROAD_SOURCE_AUTO = "Auto"
+local ROAD_SOURCE_ROAD_GRAPH = "RoadGraph"
+local ROAD_SOURCE_LEGACY_CURVE = "LegacyCurve"
 
 local function roadDebugLog(message, ...)
 	if Config.authoredRoadDebugLogging == true then
@@ -31,6 +34,13 @@ end
 local function roadDebugWarn(message, ...)
 	local ok, formatted = pcall(string.format, tostring(message), ...)
 	warn(ROAD_LOG_PREFIX .. " " .. (ok and formatted or tostring(message)))
+end
+
+local function normalizeRoadSource(value)
+	if value == ROAD_SOURCE_ROAD_GRAPH or value == ROAD_SOURCE_LEGACY_CURVE then
+		return value
+	end
+	return ROAD_SOURCE_AUTO
 end
 
 local function yawToForward(yaw)
@@ -634,34 +644,7 @@ local function createLegacyCurveWorld(root)
 	return world, driveSurfaces, crashObstacles, spawnPose
 end
 
-function AuthoredRoadRuntime.getRoot()
-	local root = Workspace:FindFirstChild(RoadGraphData.EDITOR_ROOT_NAME)
-	if root and root:IsA("Model") then
-		roadDebugLog("found authored road root: %s", root:GetFullName())
-		return root
-	end
-
-	roadDebugLog("authored road root not found: %s", RoadGraphData.EDITOR_ROOT_NAME)
-	return nil
-end
-
-function AuthoredRoadRuntime.hasRoadData(root)
-	if Config.useAuthoredRoadEditorWorld ~= true or not root then
-		return false
-	end
-	return RoadGraphData.hasGraph(root) or hasLegacyCurveRoadData(root)
-end
-
-function AuthoredRoadRuntime.createWorld(root)
-	if hasLegacyCurveMesh(root) then
-		return createLegacyCurveWorld(root)
-	end
-
-	local graph = RoadGraphData.collectGraph(root, Config)
-	if not graph then
-		return createLegacyCurveWorld(root)
-	end
-
+local function createGraphWorld(root, graph)
 	local oldWorld = Workspace:FindFirstChild(RUNTIME_WORLD_NAME)
 	if oldWorld then
 		oldWorld:Destroy()
@@ -727,6 +710,51 @@ function AuthoredRoadRuntime.createWorld(root)
 
 	hideEditorRootForPlay(root, { preserveBakedGraph = true })
 	return world, driveSurfaces, crashObstacles, spawnPose
+end
+
+function AuthoredRoadRuntime.getRoot()
+	local root = Workspace:FindFirstChild(RoadGraphData.EDITOR_ROOT_NAME)
+	if root and root:IsA("Model") then
+		roadDebugLog("found authored road root: %s", root:GetFullName())
+		return root
+	end
+
+	roadDebugLog("authored road root not found: %s", RoadGraphData.EDITOR_ROOT_NAME)
+	return nil
+end
+
+function AuthoredRoadRuntime.hasRoadData(root, roadSource)
+	if Config.useAuthoredRoadEditorWorld ~= true or not root then
+		return false
+	end
+
+	roadSource = normalizeRoadSource(roadSource)
+	if roadSource == ROAD_SOURCE_ROAD_GRAPH then
+		return RoadGraphData.hasGraph(root)
+	elseif roadSource == ROAD_SOURCE_LEGACY_CURVE then
+		return hasLegacyCurveRoadData(root)
+	end
+
+	return RoadGraphData.hasGraph(root) or hasLegacyCurveRoadData(root)
+end
+
+function AuthoredRoadRuntime.createWorld(root, roadSource)
+	roadSource = normalizeRoadSource(roadSource)
+
+	if roadSource == ROAD_SOURCE_LEGACY_CURVE then
+		return createLegacyCurveWorld(root)
+	end
+
+	local graph = RoadGraphData.collectGraph(root, Config)
+	if graph then
+		return createGraphWorld(root, graph)
+	end
+
+	if roadSource == ROAD_SOURCE_ROAD_GRAPH then
+		error("Cab87Manager AuthoredRoadSource is RoadGraph, but Cab87RoadEditor has no valid RoadGraph data.", 0)
+	end
+
+	return createLegacyCurveWorld(root)
 end
 
 return AuthoredRoadRuntime
