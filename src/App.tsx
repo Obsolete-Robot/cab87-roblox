@@ -632,6 +632,7 @@ export default function App() {
                 setSelectedEdge(null);
                 setSelectedPointIndex(null);
                 setIsConnectMode(false);
+                setIsMergeMode(false);
                 setDragging({ type: 'node', id: n.id });
                 return;
             }
@@ -659,19 +660,18 @@ export default function App() {
                     setSelectedPointIndex(null);
                     setIsConnectMode(false);
                 } else if (isMergeMode) {
-                    // Merge selectedNode and n
                     const sn = nodes.find(nn => nn.id === selectedNode)!;
                     const mid = { x: (sn.point.x + n.point.x) / 2, y: (sn.point.y + n.point.y) / 2 };
                     const deltaSn = { x: mid.x - sn.point.x, y: mid.y - sn.point.y };
                     const deltaN = { x: mid.x - n.point.x, y: mid.y - n.point.y };
 
                     setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: mid } : node).filter(node => node.id !== selectedNode));
-                    
+
                     setEdges(prev => prev.map(edge => {
-                        let newEdge = { ...edge };
+                        const newEdge = { ...edge };
                         const newPts = [...edge.points];
                         let changed = false;
-                        
+
                         if (edge.source === selectedNode) {
                             newEdge.source = n.id;
                             if (newPts.length > 0) {
@@ -702,9 +702,10 @@ export default function App() {
                             newEdge.points = newPts;
                         }
                         return newEdge;
-                    }));
+                    }).filter(edge => edge.source !== edge.target));
 
                     setSelectedNode(n.id);
+                    setSelectedEdge(null);
                     setIsMergeMode(false);
                 }
             } else {
@@ -908,6 +909,7 @@ export default function App() {
         setSelectedNode(newNodeId);
         setSelectedPointIndex(null);
         setIsConnectMode(false);
+        setIsMergeMode(false);
         setDragging({ type: 'node', id: newNodeId });
         return;
     }
@@ -917,6 +919,7 @@ export default function App() {
     setSelectedEdge(null);
     setSelectedPointIndex(null);
     setIsConnectMode(false);
+    setIsMergeMode(false);
   };
 
   const enforceLinear = (edge: Edge, currentNodes: Node[]) => {
@@ -1265,6 +1268,12 @@ export default function App() {
                 {isConnectMode ? "Click Node/Space" : "C"}
               </span> 
               {isConnectMode ? "Connect to / New Road" : "Connect Mode"}
+            </div>
+            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
+              <span className={isMergeMode ? "text-red-400" : "text-blue-300"}>
+                {isMergeMode ? "Click Node" : "M"}
+              </span>
+              {isMergeMode ? "Merge With Selected" : "Merge Mode"}
             </div>
             <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Middle Drag / 2 Fingers</span> Pan</div>
             <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Scroll</span> Zoom</div>
