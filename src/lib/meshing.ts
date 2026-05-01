@@ -39,7 +39,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       const e = c.edge;
       const controlPts = getEdgeControlPoints(e, nodes);
       const p1 = node.point;
-      const p2 = isSource ? controlPts[1] : controlPts[controlPts.length - 2];
+      let p2 = isSource ? controlPts[1] : controlPts[controlPts.length - 2];
+      if (!p2) p2 = node.point; // Fallback if controlPts is too short
       const dir = getDir(p1, p2);
       const angle = Math.atan2(dir.y, dir.x);
       return { edge: e, angle, isSource, dir };
@@ -284,8 +285,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        let otbL: Point | null = null, otbR: Point | null = null;
        
        if (targetBases && outerTargetBases) {
-           [tbL, tbR] = targetBases; 
-           [otbL, otbR] = outerTargetBases;
+           [tbR, tbL] = targetBases; 
+           [otbR, otbL] = outerTargetBases;
            
            if (isTrueJunction(targetNode!.id, nodes, edges)) {
              const tDir = getDir(spline[spline.length - 1], spline[Math.max(0, spline.length - 2)]);
@@ -312,8 +313,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            const clEnd = { x: (tbL.x + tbR.x) / 2, y: (tbL.y + tbR.y) / 2 };
            fullCenterLine.push(clEnd);
            
-           poly.push(tbL, tbR);
-           outerPoly.push(otbL, otbR);
+           poly.push(tbR, tbL);
+           outerPoly.push(otbR, otbL);
        } else {
            if (leftPoints.length === 0) {
                const dir = getDir(sourceNode.point, spline[spline.length - 1]);
@@ -339,6 +340,18 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        outerPoly.push(...[...outerLeftPoints].reverse());
        mesh.centerLines.push(fullCenterLine);
        
+       const leftSidewalkPoly = [obL, bL, ...leftPoints];
+       if (tbL) leftSidewalkPoly.push(tbL);
+       if (otbL) leftSidewalkPoly.push(otbL);
+       leftSidewalkPoly.push(...[...outerLeftPoints].reverse());
+       mesh.sidewalkPolygons.push(leftSidewalkPoly);
+
+       const rightSidewalkPoly = [bR, obR, ...outerRightPoints];
+       if (otbR) rightSidewalkPoly.push(otbR);
+       if (tbR) rightSidewalkPoly.push(tbR);
+       rightSidewalkPoly.push(...[...rightPoints].reverse());
+       mesh.sidewalkPolygons.push(rightSidewalkPoly);
+
        mesh.roadPolygons.push({
            id: edge.id,
            polygon: poly,
@@ -376,14 +389,14 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        }
 
        if (tbL && tbR && otbL && otbR) {
-          mesh.triangles.push([currL, currR, tbL]);
-          mesh.triangles.push([currL, tbL, tbR]);
+          mesh.triangles.push([currL, currR, tbR]);
+          mesh.triangles.push([currL, tbR, tbL]);
           
-          mesh.triangles.push([currOL, currL, tbR]);
-          mesh.triangles.push([currOL, tbR, otbR]);
+          mesh.triangles.push([currOL, currL, tbL]);
+          mesh.triangles.push([currOL, tbL, otbL]);
           
-          mesh.triangles.push([currR, currOR, otbL]);
-          mesh.triangles.push([currR, otbL, tbL]);
+          mesh.triangles.push([currR, currOR, otbR]);
+          mesh.triangles.push([currR, otbR, tbR]);
        }
     }
   }

@@ -128,8 +128,16 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
       cwN = { x: pN.x + (dnX/lenN)*WN, y: pN.y + (dnY/lenN)*WN };
   }
 
-  // If there are middle points
-  if (basePts.length > 2) {
+  if (basePts.length === 3) {
+      const mid = basePts[1];
+      res.push({ x: cw0.x + 2/3*(mid.x - cw0.x), y: cw0.y + 2/3*(mid.y - cw0.y) });
+      res.push({ x: cwN.x + 2/3*(mid.x - cwN.x), y: cwN.y + 2/3*(mid.y - cwN.y) });
+      res.push(cwN);
+      
+      res.push({ x: cwN.x + (pN.x - cwN.x)/3, y: cwN.y + (pN.y - cwN.y)/3 });
+      res.push({ x: cwN.x + 2*(pN.x - cwN.x)/3, y: cwN.y + 2*(pN.y - cwN.y)/3 });
+      res.push(pN);
+  } else if (basePts.length > 2) {
     for (let i = 1; i < basePts.length - 1; i++) {
        res.push(basePts[i]);
     }

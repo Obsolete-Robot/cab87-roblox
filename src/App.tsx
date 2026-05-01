@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings2, Trash2, Plus, Bug, Menu, X, Layers, Download, Upload } from 'lucide-react';
+import { Settings2, Trash2, Plus, Bug, Menu, X, Layers, Download, Upload, Box } from 'lucide-react';
 import { Point, Node, Edge, MeshData } from './lib/types';
 import { getEdgeControlPoints, getExtendedEdgeControlPoints, sampleEdgeSpline } from './lib/network';
 import { buildNetworkMesh } from './lib/meshing';
 import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
+import ThreeScene from './ThreeScene';
 
 const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 const ROAD_NETWORK_SCHEMA = 'cab87-road-network';
@@ -31,9 +32,9 @@ export default function App() {
   ]);
 
   const [edges, setEdges] = useState<Edge[]>([
-    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250}, {x: 533, y: 200}], width: 60, sidewalk: 12, color: '#ef4444' },
-    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333}, {x: 266, y: 366}], width: 60, sidewalk: 12, color: '#10b981' },
-    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233}, {x: 333, y: 166}], width: 80, sidewalk: 12, color: '#3b82f6' },
+    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: 60, sidewalk: 12, color: '#ef4444' },
+    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: 60, sidewalk: 12, color: '#10b981' },
+    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: 12, color: '#3b82f6' },
   ]);
 
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
@@ -50,6 +51,7 @@ export default function App() {
   const [editingNameValue, setEditingNameValue] = useState("");
   const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
   const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
+  const [is3DMode, setIs3DMode] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -412,7 +414,7 @@ export default function App() {
                 ctx.beginPath();
                 ctx.strokeStyle = '#475569';
                 ctx.lineWidth = 2;
-                for (let i = 0; i < cubicPts.length - 1; i += 3) {
+                for (let i = 0; i + 3 < cubicPts.length; i += 3) {
                     ctx.moveTo(cubicPts[i].x, cubicPts[i].y);
                     ctx.lineTo(cubicPts[i+1].x, cubicPts[i+1].y);
                     ctx.moveTo(cubicPts[i+2].x, cubicPts[i+2].y);
@@ -466,7 +468,8 @@ export default function App() {
     });
   };
 
-  const getMousePos = (e: React.PointerEvent | React.MouseEvent) => {
+  const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
+    if (e.__scenePos) return e.__scenePos;
     const rect = canvasRef.current!.getBoundingClientRect();
     return {
       x: (e.clientX - rect.left - view.x) / view.zoom,
@@ -474,9 +477,42 @@ export default function App() {
     };
   };
 
-    const onContextMenu = (e: React.MouseEvent) => {
+    const onContextMenu = (e: React.MouseEvent | any) => {
     e.preventDefault();
     const pos = getMousePos(e);
+
+    // Right click existing node
+    for (const n of nodes) {
+        if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < 25) {
+            if (selectedNode && selectedNode !== n.id) {
+                const sn = nodes.find(nn => nn.id === selectedNode)!;
+                const newEdgeId = Math.random().toString(36).substring(2, 9);
+                const newEdge: Edge = {
+                    id: newEdgeId,
+                    source: selectedNode,
+                    target: n.id,
+                    points: [
+                      { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, linear: true },
+                      { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, linear: true }
+                    ],
+                    width: 60,
+                    sidewalk: 12,
+                    color: COLORS[edges.length % COLORS.length]
+                };
+                setEdges(prev => [...prev, newEdge]);
+                setSelectedNode(n.id);
+                setSelectedEdge(newEdgeId);
+                setSelectedPointIndex(null);
+                setIsConnectMode(false);
+                setIsMergeMode(false);
+            } else {
+                setSelectedNode(n.id);
+                setSelectedEdge(null);
+                setSelectedPointIndex(null);
+            }
+            return;
+        }
+    }
 
     // Right click point to turn to node
     for (let i = edges.length - 1; i >= 0; i--) {
@@ -487,8 +523,8 @@ export default function App() {
             if (Math.hypot(pos.x - edge.points[j].x, pos.y - edge.points[j].y) < 25) {
                 const newNodeId = Math.random().toString(36).substring(2, 9);
                 const newNode: Node = { id: newNodeId, point: edge.points[j] };
-                const edge1: Edge = { ...edge, target: newNodeId, points: edge.points.slice(0, j) };
-                const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: edge.points.slice(j + 1) };
+                const edge1: Edge = { ...edge, target: newNodeId, points: edge.points.slice(0, j).map(p => ({ ...p, linear: true })) };
+                const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: edge.points.slice(j + 1).map(p => ({ ...p, linear: true })) };
                 
                 const newEdges = [edge1];
                 if (edge2.points.length > 0 || edge2.target) newEdges.push(edge2);
@@ -555,11 +591,11 @@ export default function App() {
             const leftPoints = originalPoints.slice(0, userCurveIndex * 3);
             const rightPoints = originalPoints.slice(userCurveIndex * 3 + 2);
             
-            leftPoints.push(p01, p012);
-            rightPoints.unshift(p123, p23);
+            leftPoints.push({ ...p01, linear: true }, { ...p012, linear: true });
+            rightPoints.unshift({ ...p123, linear: true }, { ...p23, linear: true });
 
-            const edge1: Edge = { ...edge, target: newNodeId, points: leftPoints };
-            const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: rightPoints };
+            const edge1: Edge = { ...edge, target: newNodeId, points: leftPoints.map(p => ({ ...p, linear: true })) };
+            const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: rightPoints.map(p => ({ ...p, linear: true })) };
             
             const newEdges = [edge1, edge2];
 
@@ -569,38 +605,65 @@ export default function App() {
         }
     }
 
-    // Create free node
+    // Right click Empty Space
     const newNodeId = Math.random().toString(36).substring(2, 9);
     setNodes(prev => [...prev, { id: newNodeId, point: pos }]);
+
+    if (selectedNode) {
+        const sn = nodes.find(n => n.id === selectedNode);
+        if (sn) {
+            const newEdgeId = Math.random().toString(36).substring(2, 9);
+            const newEdge: Edge = {
+                id: newEdgeId, source: selectedNode, target: newNodeId, points: [
+                  { x: sn.point.x + (pos.x - sn.point.x)/3, y: sn.point.y + (pos.y - sn.point.y)/3, linear: true },
+                  { x: sn.point.x + 2*(pos.x - sn.point.x)/3, y: sn.point.y + 2*(pos.y - sn.point.y)/3, linear: true }
+                ], width: 60, sidewalk: 12, color: COLORS[edges.length % COLORS.length]
+            };
+            setEdges(prev => [...prev, newEdge]);
+            setSelectedEdge(newEdgeId);
+        }
+    } else {
+        setSelectedEdge(null);
+    }
+    
+    setSelectedNode(newNodeId);
+    setSelectedPointIndex(null);
+    setIsConnectMode(false);
+    setIsMergeMode(false);
   };
 
-  const onPointerDown = (e: React.PointerEvent) => {
+  const onPointerDown = (e: React.PointerEvent | any) => {
     if (e.button === 2) return; // ignore right click
 
-    const rect = canvasRef.current!.getBoundingClientRect();
-    const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    pointersRef.current.set(e.pointerId, rawPos);
-    
-    if (e.button === 1) { // middle mouse click
-      e.preventDefault();
-      setDragging({ type: 'pan', id: '' });
-      lastPanMidpointRef.current = rawPos;
-      return;
+    if (is3DMode) {
+      if (e.button !== 0) return;
+    } else {
+        const rect = canvasRef.current!.getBoundingClientRect();
+        const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        pointersRef.current.set(e.pointerId, rawPos);
+        
+        if (e.button === 1) { // middle mouse click
+          e.preventDefault();
+          setDragging({ type: 'pan', id: '' });
+          lastPanMidpointRef.current = rawPos;
+          return;
+        }
+
+        if (pointersRef.current.size === 2) {
+          const pts = Array.from(pointersRef.current.values()) as Point[];
+          lastPanMidpointRef.current = {
+            x: (pts[0].x + pts[1].x) / 2,
+            y: (pts[0].y + pts[1].y) / 2,
+          };
+          setDragging(null);
+          return;
+        }
+
+        if (pointersRef.current.size > 1) return;
+
+        if (e.target.setPointerCapture) (e.target as HTMLElement).setPointerCapture(e.pointerId);
     }
 
-    if (pointersRef.current.size === 2) {
-      const pts = Array.from(pointersRef.current.values()) as Point[];
-      lastPanMidpointRef.current = {
-        x: (pts[0].x + pts[1].x) / 2,
-        y: (pts[0].y + pts[1].y) / 2,
-      };
-      setDragging(null);
-      return;
-    }
-
-    if (pointersRef.current.size > 1) return;
-
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
     const pos = getMousePos(e);
 
     // Click nodes
@@ -647,8 +710,8 @@ export default function App() {
                         source: selectedNode,
                         target: n.id,
                         points: [
-                          { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3 },
-                          { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3 }
+                          { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, linear: true },
+                          { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, linear: true }
                         ],
                         width: 60,
                         sidewalk: 12,
@@ -893,27 +956,6 @@ export default function App() {
     }
 
     // Click Empty Space
-    if (selectedNode) {
-        const newNodeId = Math.random().toString(36).substring(2, 9);
-        const sn = nodes.find(n => n.id === selectedNode)!;
-        const newEdgeId = Math.random().toString(36).substring(2, 9);
-        const newEdge: Edge = {
-            id: newEdgeId, source: selectedNode, target: newNodeId, points: [
-              { x: sn.point.x + (pos.x - sn.point.x)/3, y: sn.point.y + (pos.y - sn.point.y)/3 },
-              { x: sn.point.x + 2*(pos.x - sn.point.x)/3, y: sn.point.y + 2*(pos.y - sn.point.y)/3 }
-            ], width: 60, sidewalk: 12, color: COLORS[edges.length % COLORS.length]
-        };
-        setNodes(prev => [...prev, { id: newNodeId, point: pos }]);
-        setEdges(prev => [...prev, newEdge]);
-        setSelectedEdge(newEdgeId);
-        setSelectedNode(newNodeId);
-        setSelectedPointIndex(null);
-        setIsConnectMode(false);
-        setIsMergeMode(false);
-        setDragging({ type: 'node', id: newNodeId });
-        return;
-    }
-
     // Default deselect
     setSelectedNode(null);
     setSelectedEdge(null);
@@ -964,43 +1006,24 @@ export default function App() {
       return changed ? { ...edge, points: newPts } : edge;
   };
 
-  const onPointerMove = (e: React.PointerEvent) => {
-    const rawPos = { x: e.clientX - canvasRef.current!.getBoundingClientRect().left, y: e.clientY - canvasRef.current!.getBoundingClientRect().top };
-    pointersRef.current.set(e.pointerId, rawPos);
-
-    if ((pointersRef.current.size === 2 || (dragging?.type === 'pan' && pointersRef.current.size === 1)) && lastPanMidpointRef.current) {
-      const pts = Array.from(pointersRef.current.values()) as Point[];
-      let newMidpoint = rawPos;
-      if (pointersRef.current.size === 2) {
-        newMidpoint = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-      }
-      const dx = newMidpoint.x - lastPanMidpointRef.current.x;
-      const dy = newMidpoint.y - lastPanMidpointRef.current.y;
-      setView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
-      lastPanMidpointRef.current = newMidpoint;
-      return;
-    }
-
-    if (!dragging || pointersRef.current.size > 1) return;
-    const pos = getMousePos(e);
-
-    if (dragging.type === 'node') {
-        const draggingNode = nodes.find(n => n.id === dragging.id);
+  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan'; id: string; pointId?: number }, pos: Point) => {
+    if (dragState.type === 'node') {
+        const draggingNode = nodes.find(n => n.id === dragState.id);
         if (draggingNode) {
             const dx = pos.x - draggingNode.point.x;
             const dy = pos.y - draggingNode.point.y;
-            const newNodes = nodes.map(n => n.id === dragging.id ? { ...n, point: pos } : n);
+            const newNodes = nodes.map(n => n.id === dragState.id ? { ...n, point: pos } : n);
             
             setNodes(newNodes);
             
             // Move only the explicitly connected control points (handles) with the node
-            setEdges(prev => prev.map(edge => {
-                if (edge.source === dragging.id || edge.target === dragging.id) {
+            setEdges(edges.map(edge => {
+                if (edge.source === dragState.id || edge.target === dragState.id) {
                     const newPoints = [...edge.points];
-                    if (edge.source === dragging.id && newPoints.length > 0) {
+                    if (edge.source === dragState.id && newPoints.length > 0) {
                         newPoints[0] = { ...newPoints[0], x: newPoints[0].x + dx, y: newPoints[0].y + dy };
                     }
-                    if (edge.target === dragging.id && newPoints.length > 1) {
+                    if (edge.target === dragState.id && newPoints.length > 1) {
                         newPoints[newPoints.length - 1] = { 
                             ...newPoints[newPoints.length - 1],
                             x: newPoints[newPoints.length - 1].x + dx, 
@@ -1012,11 +1035,11 @@ export default function App() {
                 return edge;
             }));
         }
-    } else if (dragging.type === 'edge' && dragging.pointId !== undefined) {
+    } else if (dragState.type === 'edge' && dragState.pointId !== undefined) {
       setEdges((prev) => prev.map((edge) => {
-        if (edge.id === dragging.id) {
+        if (edge.id === dragState.id) {
           const newPoints = [...edge.points];
-          const pid = dragging.pointId!;
+          const pid = dragState.pointId!;
           const oldPos = newPoints[pid];
           const dx = pos.x - oldPos.x;
           const dy = pos.y - oldPos.y;
@@ -1097,16 +1120,47 @@ export default function App() {
     }
   };
 
-  const onPointerUp = (e: React.PointerEvent) => {
-    pointersRef.current.delete(e.pointerId);
-    if (pointersRef.current.size < 2 && dragging?.type !== 'pan') {
-      lastPanMidpointRef.current = null;
+  const onPointerMove = (e: React.PointerEvent | any) => {
+    if (is3DMode) {
+      if (!dragging || dragging.type === 'pan') return;
+    } else {
+      const rect = canvasRef.current!.getBoundingClientRect();
+      const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      pointersRef.current.set(e.pointerId, rawPos);
+
+      if ((pointersRef.current.size === 2 || (dragging?.type === 'pan' && pointersRef.current.size === 1)) && lastPanMidpointRef.current) {
+        const pts = Array.from(pointersRef.current.values()) as Point[];
+        let newMidpoint = rawPos;
+        if (pointersRef.current.size === 2) {
+          newMidpoint = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        }
+        const dx = newMidpoint.x - lastPanMidpointRef.current.x;
+        const dy = newMidpoint.y - lastPanMidpointRef.current.y;
+        setView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+        lastPanMidpointRef.current = newMidpoint;
+        return;
+      }
+
+      if (!dragging || pointersRef.current.size > 1) return;
     }
 
-    if (dragging?.type === 'pan') {
-      setDragging(null);
-      lastPanMidpointRef.current = null;
-      return;
+    const pos = getMousePos(e);
+
+    handleDrag(dragging, pos);
+  };
+
+  const onPointerUp = (e: React.PointerEvent | any) => {
+    if (!is3DMode) {
+      pointersRef.current.delete(e.pointerId);
+      if (pointersRef.current.size < 2 && dragging?.type !== 'pan') {
+        lastPanMidpointRef.current = null;
+      }
+
+      if (dragging?.type === 'pan') {
+        setDragging(null);
+        lastPanMidpointRef.current = null;
+        return;
+      }
     }
 
     if (dragging?.type === 'edge') {
@@ -1114,7 +1168,7 @@ export default function App() {
         const pos = getMousePos(e);
         let targetNode = null;
         for (const n of nodes) {
-            if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < 30) {
+            if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < (is3DMode ? 40 : 30)) {
                 targetNode = n.id;
                 break;
             }
@@ -1135,21 +1189,25 @@ export default function App() {
         }
     }
 
-    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    if (!is3DMode && e.target.releasePointerCapture) {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    }
     setDragging(null);
   };
 
-  const onPointerCancel = (e: React.PointerEvent) => {
-    pointersRef.current.delete(e.pointerId);
-    if (pointersRef.current.size < 2) {
-      lastPanMidpointRef.current = null;
+  const onPointerCancel = (e: React.PointerEvent | any) => {
+    if (!is3DMode) {
+      pointersRef.current.delete(e.pointerId);
+      if (pointersRef.current.size < 2) {
+        lastPanMidpointRef.current = null;
+      }
     }
     setDragging(null);
   };
 
   const addNode = () => {
     const id = Math.random().toString(36).substring(2, 9);
-    setNodes(prev => [...prev, { id, point: { x: nodes[nodes.length-1]?.point.x + 100 || 400, y: nodes[nodes.length-1]?.point.y + 100 || 300 } }]);
+    setNodes(prev => [...prev, { id, point: { x: (nodes[nodes.length-1]?.point?.x ?? 300) + 100, y: (nodes[nodes.length-1]?.point?.y ?? 200) + 100 } }]);
   };
 
   const addEdge = () => {
@@ -1164,8 +1222,8 @@ export default function App() {
           source: srcNode.id,
           target: tgtId,
           points: [
-              { x: srcNode.point.x, y: srcNode.point.y + 33 },
-              { x: srcNode.point.x, y: srcNode.point.y + 66 }
+              { x: srcNode.point.x, y: srcNode.point.y + 33, linear: true },
+              { x: srcNode.point.x, y: srcNode.point.y + 66, linear: true }
           ],
           width: 60,
           sidewalk: 12,
@@ -1227,6 +1285,18 @@ export default function App() {
             <span className="md:hidden">Points</span>
           </label>
           <button
+            onClick={() => setIs3DMode(!is3DMode)}
+            className={`p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors ${
+              is3DMode 
+                ? 'bg-blue-600 border-blue-500 text-white hover:bg-blue-500' 
+                : 'border-slate-700 hover:bg-slate-800 text-slate-300'
+            }`}
+          >
+            <Box className="w-4 h-4" />
+            <span className="hidden md:inline">{is3DMode ? '2D View' : '3D View'}</span>
+          </button>
+          
+          <button
             onClick={() => setShowMesh(!showMesh)}
             className={`p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors ${
               showMesh 
@@ -1242,44 +1312,68 @@ export default function App() {
 
       <div className="flex flex-grow overflow-hidden relative">
         <main className="flex-grow relative bg-slate-900 overflow-hidden" ref={containerRef}>
-          <div 
-            className="absolute inset-0 opacity-10 pointer-events-none" 
-            style={{ 
-              backgroundImage: 'radial-gradient(#64748b 1px, transparent 1px)', 
-              backgroundSize: `${24 * view.zoom}px ${24 * view.zoom}px`,
-              backgroundPosition: `${view.x}px ${view.y}px`
-            }}
-          ></div>
-          
-          <canvas
-            ref={canvasRef}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerCancel}
-            onContextMenu={onContextMenu}
-            className="absolute inset-0 block outline-none cursor-crosshair touch-none"
-          />
+          {is3DMode ? (
+            <ThreeScene 
+              nodes={nodes} 
+              edges={edges} 
+              chamferAngle={chamferAngle} 
+              meshResolution={meshResolution} 
+              setNodes={setNodes} 
+              setEdges={setEdges} 
+              view={view}
+              setView={setView}
+              containerRef={containerRef}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
+              onContextMenu={onContextMenu}
+              isDragging={dragging !== null && dragging.type !== 'pan'}
+              selectedNode={selectedNode}
+              selectedEdge={selectedEdge}
+            />
+          ) : (
+            <>
+              <div 
+                className="absolute inset-0 opacity-10 pointer-events-none" 
+                style={{ 
+                  backgroundImage: 'radial-gradient(#64748b 1px, transparent 1px)', 
+                  backgroundSize: `${24 * view.zoom}px ${24 * view.zoom}px`,
+                  backgroundPosition: `${view.x}px ${view.y}px`
+                }}
+              ></div>
+              
+              <canvas
+                ref={canvasRef}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerCancel}
+                onContextMenu={onContextMenu}
+                className="absolute inset-0 block outline-none cursor-crosshair touch-none"
+              />
 
-          <div className="absolute bottom-10 lg:bottom-6 left-1/2 -translate-x-1/2 lg:left-6 lg:translate-x-0 p-2.5 lg:p-3 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-md shadow-xl flex gap-4 lg:gap-6 text-[9px] lg:text-[11px] font-medium tracking-wider uppercase pointer-events-none whitespace-nowrap z-10 flex-col sm:flex-row shadow-[0_0_20px_black] border-slate-600 flex-wrap justify-center">
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Right Click Edge</span> Create Node/Split</div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
-              <span className={isConnectMode ? "text-emerald-400" : "text-blue-300"}>
-                {isConnectMode ? "Click Node/Space" : "C"}
-              </span> 
-              {isConnectMode ? "Connect to / New Road" : "Connect Mode"}
-            </div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
-              <span className={isMergeMode ? "text-red-400" : "text-blue-300"}>
-                {isMergeMode ? "Click Node" : "M"}
-              </span>
-              {isMergeMode ? "Merge With Selected" : "Merge Mode"}
-            </div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Middle Drag / 2 Fingers</span> Pan</div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Scroll</span> Zoom</div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Click Edge</span> Add Point</div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Esc</span> Deselect</div>
-          </div>
+              <div className="absolute bottom-10 lg:bottom-6 left-1/2 -translate-x-1/2 lg:left-6 lg:translate-x-0 p-2.5 lg:p-3 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-md shadow-xl flex gap-4 lg:gap-6 text-[9px] lg:text-[11px] font-medium tracking-wider uppercase pointer-events-none whitespace-nowrap z-10 flex-col sm:flex-row shadow-[0_0_20px_black] border-slate-600 flex-wrap justify-center">
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Right Click Edge</span> Create Node/Split</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
+                  <span className={isConnectMode ? "text-emerald-400" : "text-blue-300"}>
+                    {isConnectMode ? "Click Node/Space" : "C"}
+                  </span> 
+                  {isConnectMode ? "Connect to / New Road" : "Connect Mode"}
+                </div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
+                  <span className={isMergeMode ? "text-red-400" : "text-blue-300"}>
+                    {isMergeMode ? "Click Node" : "M"}
+                  </span>
+                  {isMergeMode ? "Merge With Selected" : "Merge Mode"}
+                </div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Middle Drag / 2 Fingers</span> Pan</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Scroll</span> Zoom</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Click Edge</span> Add Point</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Esc</span> Deselect</div>
+              </div>
+            </>
+          )}
         </main>
 
         <aside className={`${isSidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} fixed lg:relative right-0 top-0 h-full w-full sm:w-80 lg:w-72 border-l border-slate-800 bg-slate-900 p-5 lg:p-6 flex flex-col gap-6 lg:gap-8 shrink-0 overflow-y-auto transition-transform duration-300 ease-in-out z-40 lg:z-10`}>
