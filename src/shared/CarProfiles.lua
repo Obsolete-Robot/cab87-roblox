@@ -5,7 +5,7 @@ CarProfiles.PlayerTaxi = {
 	driverMode = "Player",
 	drivePromptEnabled = true,
 
-	carModelAssetId = 75097386419105,
+	carModelAssetId = 130931394696553,
 	carModelAssetScale = 1,
 	carModelAssetYawOffsetDegrees = 0,
 	carModelAssetGroundAlign = true,
@@ -27,7 +27,7 @@ CarProfiles.BackgroundTaxi = {
 	driverMode = "AI",
 	drivePromptEnabled = false,
 
-	carModelAssetId = 75097386419105,
+	carModelAssetId = 130931394696553,
 	carModelAssetScale = 1,
 	carModelAssetYawOffsetDegrees = 0,
 	carModelAssetGroundAlign = true,
