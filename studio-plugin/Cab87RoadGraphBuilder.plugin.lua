@@ -21,9 +21,14 @@ local ROAD_GRAPH_COLLISION_NAME = "RoadGraphCollision"
 local BAKED_RUNTIME_NAME = "RoadGraphBakedRuntime"
 local BAKED_SURFACES_NAME = "RoadGraphBakedSurfaces"
 local BAKED_COLLISION_NAME = "RoadGraphBakedCollision"
+local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
 local ASSETS_NAME = "RoadGraphAssets"
 local GRAPH_MESH_GENERATOR_NAME = "Cab87RoadGraphBuilder"
 local BAKED_MESH_GENERATOR_NAME = "Cab87RoadGraphBake"
+local MINIMAP_MESH_GENERATOR_NAME = "Cab87MinimapRoadMeshBake"
+local MINIMAP_MESH_VERSION = 2
+local MINIMAP_MESH_CHUNK_STUDS = 1024
+local MINIMAP_MESH_MAX_PARTS = 256
 local IMPORT_FILE_FILTER = { "json" }
 local IMPORT_PLANE_Y_SETTING = "cab87_road_graph_import_plane_y"
 local MAP_ID_SETTING = "cab87_road_graph_map_id"
@@ -413,6 +418,7 @@ local function markBakedAssetsStale(root, reason)
 	clearChild(root, BAKED_RUNTIME_NAME)
 	clearChild(root, BAKED_SURFACES_NAME)
 	clearChild(root, BAKED_COLLISION_NAME)
+	clearChild(root, MINIMAP_ROAD_MESH_NAME)
 end
 
 local function clearPreviewMeshes(root)
@@ -528,10 +534,71 @@ local function createBakedPart(RoadMeshBuilder, parent, spec, assetId, triangleC
 	return part, nil
 end
 
+local function createBakedMinimapRoadMesh(parent, meshData, RoadMeshBuilder)
+	clearChild(parent, MINIMAP_ROAD_MESH_NAME)
+
+	local minimapMeshData = {
+		roadTriangles = if #(meshData.roadEdgeTriangles or {}) > 0
+			then meshData.roadEdgeTriangles
+			else meshData.roadTriangles,
+	}
+	local result = RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, minimapMeshData, {
+		meshFolderName = MINIMAP_ROAD_MESH_NAME,
+		generatedBy = MINIMAP_MESH_GENERATOR_NAME,
+		chunkSize = MINIMAP_MESH_CHUNK_STUDS,
+		surfaceKeys = { "roads" },
+		color = Color3.fromRGB(255, 255, 255),
+		material = Enum.Material.SmoothPlastic,
+		transparency = 0.15,
+	})
+	local folder = result.meshFolder
+	if not folder then
+		return nil, "minimap mesh produced no parts"
+	end
+
+	if #result.visibleParts > MINIMAP_MESH_MAX_PARTS then
+		local partCount = #result.visibleParts
+		folder:Destroy()
+		return nil, string.format(
+			"minimap mesh produced %d parts, above limit %d",
+			partCount,
+			MINIMAP_MESH_MAX_PARTS
+		)
+	end
+
+	for _, part in ipairs(result.visibleParts) do
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanTouch = false
+		part.CanQuery = false
+		part.CastShadow = false
+		part.Transparency = 0.15
+		part.Color = Color3.fromRGB(255, 255, 255)
+		part.Material = Enum.Material.SmoothPlastic
+		part:SetAttribute("MapId", mapId)
+		part:SetAttribute("BakedRoadGraphMesh", true)
+		part:SetAttribute("BakedMinimapRoadMesh", true)
+		part:SetAttribute("MinimapRoadMesh", true)
+	end
+
+	folder:SetAttribute("MapId", mapId)
+	folder:SetAttribute("BakedMinimapRoadMesh", true)
+	folder:SetAttribute("GeneratedBy", MINIMAP_MESH_GENERATOR_NAME)
+	folder:SetAttribute("Version", MINIMAP_MESH_VERSION)
+	folder:SetAttribute("MeshMode", "roadEdges")
+	folder:SetAttribute("SurfacePartCount", #result.visibleParts)
+	folder:SetAttribute("ChunkSize", MINIMAP_MESH_CHUNK_STUDS)
+	if #result.errors > 0 then
+		return result, table.concat(result.errors, " | ")
+	end
+	return result, nil
+end
+
 local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reason)
 	clearChild(root, BAKED_RUNTIME_NAME)
 	clearChild(root, BAKED_SURFACES_NAME)
 	clearChild(root, BAKED_COLLISION_NAME)
+	clearChild(root, MINIMAP_ROAD_MESH_NAME)
 
 	local bakedRoot = Instance.new("Model")
 	bakedRoot.Name = BAKED_RUNTIME_NAME
@@ -566,22 +633,27 @@ local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reas
 		part:SetAttribute("DriveSurface", true)
 	end
 
+	local minimapResult, minimapErr = createBakedMinimapRoadMesh(bakedRoot, meshData, RoadMeshBuilder)
+
 	local assets = getOrCreateAssetsFolder(root)
 	assets:SetAttribute("Stale", false)
 	assets:SetAttribute("BakeMode", "primitive")
 	assets:SetAttribute("PrimitiveFallbackReason", tostring(reason or "asset upload unavailable"))
 	assets:SetAttribute("LastBakeUnix", os.time())
 	assets:SetAttribute("BakedPartCount", #result.visibleParts + #result.collisionParts)
+	assets:SetAttribute("MinimapPartCount", minimapResult and #minimapResult.visibleParts or 0)
 	assets:SetAttribute("RoadTriangles", #(meshData.roadTriangles or {}))
 	assets:SetAttribute("SidewalkTriangles", #(meshData.sidewalkTriangles or {}))
 	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
 
 	clearPreviewMeshes(root)
 	setStatus(string.format(
-		"Asset upload API unavailable, so baked %s as saved WedgePart geometry: %d visible parts, %d collision parts. No package or mesh asset IDs were uploaded. Save the place; runtime will use this persistent fallback.",
+		"Asset upload API unavailable, so baked %s as saved WedgePart geometry: %d visible parts, %d collision parts, %d minimap parts. No package or mesh asset IDs were uploaded. Save the place; runtime will use this persistent fallback.%s",
 		BAKED_RUNTIME_NAME,
 		#result.visibleParts,
-		#result.collisionParts
+		#result.collisionParts,
+		minimapResult and #minimapResult.visibleParts or 0,
+		minimapErr and ("\nMinimap warning: " .. tostring(minimapErr)) or ""
 	))
 	return result, nil
 end
@@ -649,6 +721,7 @@ local function bakeMeshAssets()
 	local oldBakedRuntime = root:FindFirstChild(BAKED_RUNTIME_NAME)
 	local oldBakedSurfaces = root:FindFirstChild(BAKED_SURFACES_NAME)
 	local oldBakedCollision = root:FindFirstChild(BAKED_COLLISION_NAME)
+	local oldMinimapMesh = root:FindFirstChild(MINIMAP_ROAD_MESH_NAME)
 	if oldBakedRuntime then
 		oldBakedRuntime:Destroy()
 	end
@@ -657,6 +730,9 @@ local function bakeMeshAssets()
 	end
 	if oldBakedCollision then
 		oldBakedCollision:Destroy()
+	end
+	if oldMinimapMesh then
+		oldMinimapMesh:Destroy()
 	end
 	local bakedSurfaces = createFolder(root, BAKED_SURFACES_NAME)
 	local bakedCollision = createFolder(root, BAKED_COLLISION_NAME)
@@ -726,22 +802,29 @@ local function bakeMeshAssets()
 		return nil
 	end
 
+	local minimapResult, minimapErr = createBakedMinimapRoadMesh(root, meshData, RoadMeshBuilder)
+	if minimapErr then
+		table.insert(errors, "minimap: " .. tostring(minimapErr))
+	end
+
 	clearPreviewMeshes(root)
 	assets:SetAttribute("Stale", false)
 	assets:SetAttribute("BakeMode", "meshAsset")
 	assets:SetAttribute("PrimitiveFallbackReason", nil)
 	assets:SetAttribute("LastBakeUnix", os.time())
 	assets:SetAttribute("BakedPartCount", bakedParts)
+	assets:SetAttribute("MinimapPartCount", minimapResult and #minimapResult.visibleParts or 0)
 	assets:SetAttribute("RoadTriangles", #(meshData.roadTriangles or {}))
 	assets:SetAttribute("SidewalkTriangles", #(meshData.sidewalkTriangles or {}))
 	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
 
 	setStatus(string.format(
-		"Baked map %s: %d mesh assets created, %d updated, %d asset-backed parts.%s",
+		"Baked map %s: %d mesh assets created, %d updated, %d asset-backed parts, %d minimap parts.%s",
 		mapId,
 		created,
 		updated,
 		bakedParts,
+		minimapResult and #minimapResult.visibleParts or 0,
 		#errors > 0 and ("\nWarnings: " .. table.concat(errors, " | ")) or ""
 	))
 
@@ -749,6 +832,7 @@ local function bakeMeshAssets()
 		created = created,
 		updated = updated,
 		bakedParts = bakedParts,
+		minimapParts = minimapResult and #minimapResult.visibleParts or 0,
 		errors = errors,
 	}
 end
@@ -839,6 +923,7 @@ local function forkAsNewMap()
 	clearChild(root, BAKED_RUNTIME_NAME)
 	clearChild(root, BAKED_SURFACES_NAME)
 	clearChild(root, BAKED_COLLISION_NAME)
+	clearChild(root, MINIMAP_ROAD_MESH_NAME)
 	setStatus("Forked graph as new map ID " .. mapId .. ". Bake Runtime Geometry will create separate baked output for this map.")
 end
 

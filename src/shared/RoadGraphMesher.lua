@@ -595,6 +595,8 @@ end
 local function makeMeshData()
 	return {
 		roadTriangles = {},
+		roadEdgeTriangles = {},
+		roadHubTriangles = {},
 		sidewalkTriangles = {},
 		crosswalkTriangles = {},
 		hubs = {},
@@ -766,6 +768,7 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		if #hubPolygon >= 3 then
 			for i = 1, #hubPolygon do
 				addTriangle(mesh.roadTriangles, node.point, hubPolygon[i], hubPolygon[(i % #hubPolygon) + 1])
+				addTriangle(mesh.roadHubTriangles, node.point, hubPolygon[i], hubPolygon[(i % #hubPolygon) + 1])
 			end
 		end
 
@@ -978,6 +981,7 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 				local nextOuterLeft = outerLeftPoints[j]
 				local nextOuterRight = outerRightPoints[j]
 				addQuadTriangles(mesh.roadTriangles, currentLeft, currentRight, nextRight, nextLeft)
+				addQuadTriangles(mesh.roadEdgeTriangles, currentLeft, currentRight, nextRight, nextLeft)
 				addQuadTriangles(mesh.sidewalkTriangles, currentOuterLeft, currentLeft, nextLeft, nextOuterLeft)
 				addTriangle(mesh.sidewalkTriangles, currentRight, currentOuterRight, nextOuterRight)
 				addTriangle(mesh.sidewalkTriangles, currentRight, nextOuterRight, nextRight)
@@ -990,6 +994,8 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 			if targetBaseLeft and targetBaseRight and outerTargetBaseLeft and outerTargetBaseRight then
 				addTriangle(mesh.roadTriangles, currentLeft, currentRight, targetBaseLeft)
 				addTriangle(mesh.roadTriangles, currentLeft, targetBaseLeft, targetBaseRight)
+				addTriangle(mesh.roadEdgeTriangles, currentLeft, currentRight, targetBaseLeft)
+				addTriangle(mesh.roadEdgeTriangles, currentLeft, targetBaseLeft, targetBaseRight)
 				addTriangle(mesh.sidewalkTriangles, currentOuterLeft, currentLeft, targetBaseRight)
 				addTriangle(mesh.sidewalkTriangles, currentOuterLeft, targetBaseRight, outerTargetBaseRight)
 				addTriangle(mesh.sidewalkTriangles, currentRight, currentOuterRight, outerTargetBaseLeft)

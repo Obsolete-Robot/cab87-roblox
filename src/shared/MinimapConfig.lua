@@ -8,6 +8,8 @@ local MinimapConfig = {
 	minimapRouteLinePixels = 4,
 	minimapDestinationMarkerPixels = 16,
 	minimapRefreshRate = 1 / 30,
+	minimapRoadMeshChunkStuds = 1024,
+	minimapViewportMaxMeshParts = 256,
 }
 
 return MinimapConfig

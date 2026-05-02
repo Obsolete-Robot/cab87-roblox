@@ -5,6 +5,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
+local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
 local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
@@ -13,12 +14,24 @@ local MinimapController = {}
 local WORLD_NAME = "Cab87World"
 local ROAD_EDITOR_ROOT_NAME = "Cab87RoadEditor"
 local RUNTIME_SPLINE_DATA_NAME = RoadSplineData.RUNTIME_DATA_NAME
+local RUNTIME_GRAPH_DATA_NAME = RoadGraphData.RUNTIME_DATA_NAME
 local BAKED_ROAD_GRAPH_RUNTIME_NAME = "RoadGraphBakedRuntime"
 local BAKED_ROAD_GRAPH_SURFACES_NAME = "RoadGraphBakedSurfaces"
 local ROAD_GRAPH_SURFACES_NAME = "RoadGraphSurfaces"
 local CLIENT_VISUALS_NAME = "AuthoredRoadClientVisuals"
 local RUNTIME_MESH_NAME = "AuthoredRoadRuntimeMesh"
 local GENERATED_ROADS_NAME = "Roads"
+local LEGACY_ROAD_NETWORK_NAME = RoadSplineData.NETWORK_NAME
+local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
+local MINIMAP_BACKGROUND_COLOR = Color3.fromRGB(218, 220, 224)
+local MINIMAP_PANEL_COLOR = Color3.fromRGB(232, 234, 237)
+local MINIMAP_BORDER_COLOR = Color3.fromRGB(154, 160, 166)
+local MINIMAP_ROAD_COLOR = Color3.fromRGB(255, 255, 255)
+local MINIMAP_SIDEWALK_COLOR = Color3.fromRGB(232, 234, 237)
+local MINIMAP_CROSSWALK_COLOR = Color3.fromRGB(248, 249, 250)
+local MINIMAP_ROUTE_COLOR = Color3.fromRGB(26, 115, 232)
+local MINIMAP_ROUTE_LIFT = 4
+local MINIMAP_ROAD_LIFT = 0.12
 
 local player = Players.LocalPlayer
 
@@ -47,6 +60,17 @@ local function getConfigString(key, fallback)
 	end
 
 	return fallback
+end
+
+local function getMinimapSurfaceStyle(part)
+	local surfaceType = part and part:GetAttribute("SurfaceType")
+	if surfaceType == "sidewalk" then
+		return MINIMAP_SIDEWALK_COLOR, Enum.Material.SmoothPlastic
+	elseif surfaceType == "crosswalk" then
+		return MINIMAP_CROSSWALK_COLOR, Enum.Material.SmoothPlastic
+	end
+
+	return MINIMAP_ROAD_COLOR, Enum.Material.SmoothPlastic
 end
 
 local sortedChildren = RoadSplineData.sortedChildren
@@ -152,27 +176,41 @@ local function collectRoadPartsFromContainer(container)
 	return parts
 end
 
-local function collectMeshRoadData(world)
+local function collectMeshRoadData(world, dedicatedOnly)
 	if not world then
 		return nil
 	end
 
 	local editorRoot = Workspace:FindFirstChild(ROAD_EDITOR_ROOT_NAME)
 	local bakedRuntime = editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_RUNTIME_NAME)
-	local sources = {
-		bakedRuntime and bakedRuntime:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
-		editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
-		editorRoot and editorRoot:FindFirstChild(ROAD_GRAPH_SURFACES_NAME),
-		world:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
-		world:FindFirstChild(ROAD_GRAPH_SURFACES_NAME),
-		world:FindFirstChild(CLIENT_VISUALS_NAME),
-		world:FindFirstChild(RUNTIME_MESH_NAME),
-		world:FindFirstChild(GENERATED_ROADS_NAME),
-	}
+	local worldBakedRuntime = world:FindFirstChild(BAKED_ROAD_GRAPH_RUNTIME_NAME)
+	local sources = if dedicatedOnly
+		then {
+			world:FindFirstChild(MINIMAP_ROAD_MESH_NAME),
+		}
+		else {
+			world:FindFirstChild(MINIMAP_ROAD_MESH_NAME),
+			bakedRuntime and bakedRuntime:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
+			worldBakedRuntime and worldBakedRuntime:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
+			editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
+			editorRoot and editorRoot:FindFirstChild(ROAD_GRAPH_SURFACES_NAME),
+			world:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
+			world:FindFirstChild(ROAD_GRAPH_SURFACES_NAME),
+			world:FindFirstChild(LEGACY_ROAD_NETWORK_NAME),
+			world:FindFirstChild(CLIENT_VISUALS_NAME),
+			world:FindFirstChild(RUNTIME_MESH_NAME),
+			editorRoot and editorRoot:FindFirstChild(LEGACY_ROAD_NETWORK_NAME),
+			world:FindFirstChild(GENERATED_ROADS_NAME),
+		}
 
 	for _, source in ipairs(sources) do
 		local parts = collectRoadPartsFromContainer(source)
 		if #parts > 0 then
+			local maxMeshParts = math.max(math.floor(getConfigNumber("minimapViewportMaxMeshParts", 256)), 1)
+			if #parts > maxMeshParts then
+				continue
+			end
+
 			local bounds = newBounds()
 			for _, part in ipairs(parts) do
 				includePartBounds(bounds, part)
@@ -186,6 +224,89 @@ local function collectMeshRoadData(world)
 	end
 
 	return nil
+end
+
+local function clipLineToRect(ax, ay, bx, by, minX, minY, maxX, maxY)
+	local dx = bx - ax
+	local dy = by - ay
+	local u1 = 0
+	local u2 = 1
+
+	local function clipTest(p, q)
+		if p == 0 then
+			return q >= 0
+		end
+
+		local r = q / p
+		if p < 0 then
+			if r > u2 then
+				return false
+			end
+			if r > u1 then
+				u1 = r
+			end
+		else
+			if r < u1 then
+				return false
+			end
+			if r < u2 then
+				u2 = r
+			end
+		end
+
+		return true
+	end
+
+	if not clipTest(-dx, ax - minX) then
+		return nil
+	end
+	if not clipTest(dx, maxX - ax) then
+		return nil
+	end
+	if not clipTest(-dy, ay - minY) then
+		return nil
+	end
+	if not clipTest(dy, maxY - ay) then
+		return nil
+	end
+
+	return ax + u1 * dx, ay + u1 * dy, ax + u2 * dx, ay + u2 * dy
+end
+
+local function setClippedLineFrame(frame, ax, ay, bx, by, linePixels, viewportWidth, viewportHeight)
+	local inset = math.max(linePixels * 0.5 + 1, 1)
+	if viewportWidth <= inset * 2 or viewportHeight <= inset * 2 then
+		frame.Visible = false
+		return
+	end
+
+	local clippedAx, clippedAy, clippedBx, clippedBy = clipLineToRect(
+		ax,
+		ay,
+		bx,
+		by,
+		inset,
+		inset,
+		viewportWidth - inset,
+		viewportHeight - inset
+	)
+	if not clippedAx then
+		frame.Visible = false
+		return
+	end
+
+	local dx = clippedBx - clippedAx
+	local dy = clippedBy - clippedAy
+	local length = math.sqrt(dx * dx + dy * dy)
+	if length < 1 then
+		frame.Visible = false
+		return
+	end
+
+	frame.Position = UDim2.fromOffset((clippedAx + clippedBx) * 0.5, (clippedAy + clippedBy) * 0.5)
+	frame.Size = UDim2.fromOffset(length, linePixels)
+	frame.Rotation = math.deg(math.atan2(dy, dx))
+	frame.Visible = true
 end
 
 local function collectAuthoredRoadData(dataRoot)
@@ -224,6 +345,52 @@ local function collectAuthoredRoadData(dataRoot)
 	}
 end
 
+local function collectGraphRoadData(world)
+	local dataRoot = world and world:FindFirstChild(RUNTIME_GRAPH_DATA_NAME)
+	local graph = dataRoot and RoadGraphData.collectGraph(dataRoot, Config)
+	if not graph then
+		return nil
+	end
+
+	local segments = {}
+	local bounds = newBounds()
+	local defaultRoadWidth = RoadSampling.getConfiguredRoadWidth(Config)
+
+	for _, edge in ipairs(graph.edges or {}) do
+		local points = {}
+		local sourceNode = graph.nodeLookup and graph.nodeLookup[edge.source]
+		if sourceNode then
+			table.insert(points, sourceNode.point)
+		end
+
+		for _, point in ipairs(edge.points or {}) do
+			table.insert(points, point)
+		end
+
+		local targetNode = edge.target and graph.nodeLookup and graph.nodeLookup[edge.target]
+		if targetNode then
+			table.insert(points, targetNode.point)
+		end
+
+		local roadWidth = RoadSampling.sanitizeRoadWidth(edge.width, defaultRoadWidth)
+		for index = 1, #points - 1 do
+			addRoadSegment(segments, bounds, points[index], points[index + 1], roadWidth)
+		end
+	end
+
+	if #segments == 0 then
+		return nil
+	end
+
+	return {
+		graph = graph,
+		segments = segments,
+		junctionSegments = {},
+		bounds = bounds,
+		source = RUNTIME_GRAPH_DATA_NAME,
+	}
+end
+
 local function collectGeneratedRoadData(world)
 	local roadsFolder = world and world:FindFirstChild(GENERATED_ROADS_NAME)
 	local segments = {}
@@ -257,11 +424,17 @@ local function readRoadData(world)
 		return nil
 	end
 
-	local mesh = collectMeshRoadData(world)
 	local dataRoot = world:FindFirstChild(RUNTIME_SPLINE_DATA_NAME)
+	local graph = collectGraphRoadData(world)
+	local mesh = collectMeshRoadData(world, graph ~= nil)
 	local authored = nil
 	if dataRoot then
 		authored = collectAuthoredRoadData(dataRoot)
+	end
+
+	if graph then
+		graph.meshParts = if mesh and mesh.source ~= GENERATED_ROADS_NAME then mesh.meshParts else nil
+		return graph
 	end
 
 	if mesh then
@@ -292,9 +465,10 @@ local function createUi(parentGui)
 	root.Name = "Minimap"
 	root.Position = UDim2.fromOffset(inset, inset)
 	root.Size = UDim2.fromOffset(size, size)
-	root.BackgroundColor3 = Color3.fromRGB(19, 35, 32)
-	root.BackgroundTransparency = 0.06
+	root.BackgroundColor3 = MINIMAP_PANEL_COLOR
+	root.BackgroundTransparency = 0
 	root.BorderSizePixel = 0
+	root.ClipsDescendants = true
 	root.Visible = false
 	root.Parent = parentGui
 
@@ -303,8 +477,8 @@ local function createUi(parentGui)
 	rootCorner.Parent = root
 
 	local rootStroke = Instance.new("UIStroke")
-	rootStroke.Color = Color3.fromRGB(255, 206, 38)
-	rootStroke.Transparency = 0.12
+	rootStroke.Color = MINIMAP_BORDER_COLOR
+	rootStroke.Transparency = 0.05
 	rootStroke.Thickness = 2
 	rootStroke.Parent = root
 
@@ -312,8 +486,8 @@ local function createUi(parentGui)
 	viewport.Name = "Viewport"
 	viewport.Position = UDim2.fromOffset(8, 8)
 	viewport.Size = UDim2.new(1, -16, 1, -16)
-	viewport.BackgroundColor3 = Color3.fromRGB(18, 28, 30)
-	viewport.BackgroundTransparency = 0.02
+	viewport.BackgroundColor3 = MINIMAP_BACKGROUND_COLOR
+	viewport.BackgroundTransparency = 0
 	viewport.BorderSizePixel = 0
 	viewport.ClipsDescendants = true
 	viewport.Parent = root
@@ -324,12 +498,13 @@ local function createUi(parentGui)
 
 	local meshViewport = Instance.new("ViewportFrame")
 	meshViewport.Name = "RoadMesh"
-	meshViewport.BackgroundTransparency = 1
+	meshViewport.BackgroundColor3 = MINIMAP_BACKGROUND_COLOR
+	meshViewport.BackgroundTransparency = 0
 	meshViewport.BorderSizePixel = 0
 	meshViewport.Size = UDim2.fromScale(1, 1)
 	meshViewport.Visible = false
 	meshViewport.ZIndex = 1
-	meshViewport.Ambient = Color3.fromRGB(180, 180, 180)
+	meshViewport.Ambient = Color3.fromRGB(255, 255, 255)
 	meshViewport.LightColor = Color3.fromRGB(255, 255, 255)
 	meshViewport.LightDirection = Vector3.new(0, -1, 0)
 	meshViewport.Parent = viewport
@@ -344,9 +519,18 @@ local function createUi(parentGui)
 	meshWorld.Name = "RoadMeshWorld"
 	meshWorld.Parent = meshViewport
 
+	local meshRoadModel = Instance.new("Model")
+	meshRoadModel.Name = "RoadMesh"
+	meshRoadModel.Parent = meshWorld
+
+	local meshRouteModel = Instance.new("Model")
+	meshRouteModel.Name = "RouteGuide"
+	meshRouteModel.Parent = meshWorld
+
 	local roadLayer = Instance.new("Frame")
 	roadLayer.Name = "Roads"
 	roadLayer.BackgroundTransparency = 1
+	roadLayer.ClipsDescendants = true
 	roadLayer.Size = UDim2.fromScale(1, 1)
 	roadLayer.ZIndex = 2
 	roadLayer.Parent = viewport
@@ -354,6 +538,7 @@ local function createUi(parentGui)
 	local routeLayer = Instance.new("Frame")
 	routeLayer.Name = "Route"
 	routeLayer.BackgroundTransparency = 1
+	routeLayer.ClipsDescendants = true
 	routeLayer.Size = UDim2.fromScale(1, 1)
 	routeLayer.ZIndex = 3
 	routeLayer.Parent = viewport
@@ -361,7 +546,7 @@ local function createUi(parentGui)
 	local routeLine = Instance.new("Frame")
 	routeLine.Name = "DestinationLine"
 	routeLine.AnchorPoint = Vector2.new(0.5, 0.5)
-	routeLine.BackgroundColor3 = getConfigColor("passengerDeliveryColor", Color3.fromRGB(255, 70, 55))
+	routeLine.BackgroundColor3 = MINIMAP_ROUTE_COLOR
 	routeLine.BorderSizePixel = 0
 	routeLine.Visible = false
 	routeLine.ZIndex = 3
@@ -376,7 +561,7 @@ local function createUi(parentGui)
 	local destinationMarker = Instance.new("Frame")
 	destinationMarker.Name = "DestinationMarker"
 	destinationMarker.AnchorPoint = Vector2.new(0.5, 0.5)
-	destinationMarker.BackgroundColor3 = getConfigColor("passengerDeliveryColor", Color3.fromRGB(255, 70, 55))
+	destinationMarker.BackgroundColor3 = MINIMAP_ROUTE_COLOR
 	destinationMarker.BorderSizePixel = 0
 	destinationMarker.Rotation = 45
 	destinationMarker.Visible = false
@@ -410,7 +595,11 @@ local function createUi(parentGui)
 		meshViewport = meshViewport,
 		meshCamera = meshCamera,
 		meshWorld = meshWorld,
+		meshRoadModel = meshRoadModel,
+		meshRouteModel = meshRouteModel,
 		meshClones = {},
+		routeMeshParts = {},
+		destinationMeshMarker = nil,
 		roadLayer = roadLayer,
 		routeLayer = routeLayer,
 		routeLine = routeLine,
@@ -427,7 +616,7 @@ local function clearLayer(layer)
 end
 
 local function clearMeshWorld(ui)
-	for _, child in ipairs(ui.meshWorld:GetChildren()) do
+	for _, child in ipairs(ui.meshRoadModel:GetChildren()) do
 		child:Destroy()
 	end
 	table.clear(ui.meshClones)
@@ -442,6 +631,7 @@ local function addMeshClone(ui, sourcePart)
 	end
 
 	local clone = cloneOrErr
+	local color, material = getMinimapSurfaceStyle(sourcePart)
 	clone.Name = sourcePart.Name
 	clone.Anchored = true
 	clone.CanCollide = false
@@ -449,9 +639,10 @@ local function addMeshClone(ui, sourcePart)
 	clone.CanQuery = false
 	clone.CastShadow = false
 	clone.Transparency = 0
-	clone.Color = sourcePart.Color
-	clone.Material = sourcePart.Material
-	clone.Parent = ui.meshWorld
+	clone.Color = color
+	clone.Material = material
+	clone.CFrame = clone.CFrame + Vector3.new(0, MINIMAP_ROAD_LIFT, 0)
+	clone.Parent = ui.meshRoadModel
 	table.insert(ui.meshClones, clone)
 end
 
@@ -479,20 +670,23 @@ local function buildRoadUi(ui, mapData)
 	end
 
 	local segments = {}
-	if not hasMesh then
+	local allowSegmentFallback = mapData.graph == nil or not hasMesh
+	if not hasMesh and allowSegmentFallback then
 		for _, segment in ipairs(mapData.segments or {}) do
 			table.insert(segments, segment)
 		end
 	end
-	for _, segment in ipairs(mapData.junctionSegments or {}) do
-		table.insert(segments, segment)
+	if allowSegmentFallback then
+		for _, segment in ipairs(mapData.junctionSegments or {}) do
+			table.insert(segments, segment)
+		end
 	end
 
 	for _, segment in ipairs(segments) do
 		local frame = Instance.new("Frame")
 		frame.Name = segment.pixelWidth and "JunctionBoundary" or "Road"
 		frame.AnchorPoint = Vector2.new(0.5, 0.5)
-		frame.BackgroundColor3 = segment.color or Color3.fromRGB(72, 78, 82)
+		frame.BackgroundColor3 = segment.color or MINIMAP_ROAD_COLOR
 		frame.BorderSizePixel = 0
 		frame.Visible = false
 		frame.ZIndex = segment.pixelWidth and 3 or 2
@@ -592,25 +786,17 @@ local function updateRoadSegment(item, playerPosition, scale, halfWidth, halfHei
 		getConfigNumber("minimapRoadMaxPixels", 16)
 	)
 
-	local padding = math.max(roadPixels, 8)
-	local minX = math.min(ax, bx) - padding
-	local maxX = math.max(ax, bx) + padding
-	local minY = math.min(ay, by) - padding
-	local maxY = math.max(ay, by) + padding
 	local visible = length >= 1
-		and maxX >= 0
-		and minX <= viewportWidth
-		and maxY >= 0
-		and minY <= viewportHeight
-
-	item.frame.Visible = visible
+		and math.max(ax, bx) >= 0
+		and math.min(ax, bx) <= viewportWidth
+		and math.max(ay, by) >= 0
+		and math.min(ay, by) <= viewportHeight
 	if not visible then
+		item.frame.Visible = false
 		return
 	end
 
-	item.frame.Position = UDim2.fromOffset((ax + bx) * 0.5, (ay + by) * 0.5)
-	item.frame.Size = UDim2.fromOffset(length, roadPixels)
-	item.frame.Rotation = math.deg(math.atan2(dy, dx))
+	setClippedLineFrame(item.frame, ax, ay, bx, by, roadPixels, viewportWidth, viewportHeight)
 end
 
 local function updateMeshViewport(ui, playerPosition, worldSpan)
@@ -665,13 +851,89 @@ local function getWorldRouteSegmentParts(world)
 	return parts
 end
 
+local function createViewportRoutePart(parent, name)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanTouch = false
+	part.CanQuery = false
+	part.CastShadow = false
+	part.Color = MINIMAP_ROUTE_COLOR
+	part.Material = Enum.Material.SmoothPlastic
+	part.Transparency = 1
+	part.Parent = parent
+	return part
+end
+
+local function ensureViewportRouteParts(ui, count)
+	while #ui.routeMeshParts < count do
+		table.insert(
+			ui.routeMeshParts,
+			createViewportRoutePart(ui.meshRouteModel, string.format("RouteSegment_%02d", #ui.routeMeshParts + 1))
+		)
+	end
+end
+
+local function hideViewportDestinationGuide(ui)
+	for _, part in ipairs(ui.routeMeshParts) do
+		part.Transparency = 1
+	end
+	if ui.destinationMeshMarker then
+		ui.destinationMeshMarker.Transparency = 1
+	end
+end
+
+local function updateViewportDestinationMarker(ui, cab, scale)
+	local destination = getCabDestination(cab)
+	if not destination then
+		if ui.destinationMeshMarker then
+			ui.destinationMeshMarker.Transparency = 1
+		end
+		return
+	end
+
+	if not ui.destinationMeshMarker then
+		ui.destinationMeshMarker = createViewportRoutePart(ui.meshRouteModel, "DestinationMarker")
+	end
+
+	local markerSize = math.max(getConfigNumber("minimapDestinationMarkerPixels", 16), 8)
+	local markerStuds = math.max(markerSize / math.max(scale, 0.001), 8)
+	local marker = ui.destinationMeshMarker
+	marker.Color = MINIMAP_ROUTE_COLOR
+	marker.Material = Enum.Material.SmoothPlastic
+	marker.Size = Vector3.new(markerStuds, 0.35, markerStuds)
+	marker.CFrame = CFrame.new(destination + Vector3.new(0, MINIMAP_ROUTE_LIFT + 0.4, 0))
+		* CFrame.Angles(0, math.rad(45), 0)
+	marker.Transparency = 0
+end
+
+local function updateViewportDestinationGuide(ui, world, cab, scale)
+	hideViewportDestinationGuide(ui)
+
+	local routeParts = getWorldRouteSegmentParts(world)
+	ensureViewportRouteParts(ui, #routeParts)
+
+	local routeWidthPixels = math.max(getConfigNumber("minimapRouteLinePixels", 4) * 3, 12)
+	local routeWidthStuds = math.max(routeWidthPixels / math.max(scale, 0.001), 14)
+	for index, sourcePart in ipairs(routeParts) do
+		local routePart = ui.routeMeshParts[index]
+		routePart.Color = MINIMAP_ROUTE_COLOR
+		routePart.Material = Enum.Material.SmoothPlastic
+		routePart.Size = Vector3.new(routeWidthStuds, 0.45, sourcePart.Size.Z)
+		routePart.CFrame = sourcePart.CFrame + Vector3.new(0, MINIMAP_ROUTE_LIFT, 0)
+		routePart.Transparency = 0
+	end
+
+	updateViewportDestinationMarker(ui, cab, scale)
+end
+
 local function ensureRouteSegmentFrames(ui, count)
-	local routeColor = getConfigColor("passengerDeliveryColor", Color3.fromRGB(255, 70, 55))
 	while #ui.routeSegments < count do
 		local frame = Instance.new("Frame")
 		frame.Name = string.format("RouteSegment_%02d", #ui.routeSegments + 1)
 		frame.AnchorPoint = Vector2.new(0.5, 0.5)
-		frame.BackgroundColor3 = routeColor
+		frame.BackgroundColor3 = MINIMAP_ROUTE_COLOR
 		frame.BorderSizePixel = 0
 		frame.Visible = false
 		frame.ZIndex = 3
@@ -706,23 +968,19 @@ local function updateMinimapRouteSegment(frame, part, playerPosition, scale, hal
 	local dx = bx - ax
 	local dy = by - ay
 	local length = math.sqrt(dx * dx + dy * dy)
-	local linePixels = math.max(getConfigNumber("minimapRouteLinePixels", 4), 1)
-	local padding = math.max(linePixels, 8)
+	local linePixels = math.max(getConfigNumber("minimapRouteLinePixels", 4) * 3, 12)
 	local visible = length >= 1
-		and math.max(ax, bx) + padding >= 0
-		and math.min(ax, bx) - padding <= viewportWidth
-		and math.max(ay, by) + padding >= 0
-		and math.min(ay, by) - padding <= viewportHeight
-
-	frame.Visible = visible
+		and math.max(ax, bx) >= 0
+		and math.min(ax, bx) <= viewportWidth
+		and math.max(ay, by) >= 0
+		and math.min(ay, by) <= viewportHeight
 	if not visible then
+		frame.Visible = false
 		return
 	end
 
-	frame.BackgroundColor3 = getConfigColor("passengerDeliveryColor", Color3.fromRGB(255, 70, 55))
-	frame.Position = UDim2.fromOffset((ax + bx) * 0.5, (ay + by) * 0.5)
-	frame.Size = UDim2.fromOffset(length, linePixels)
-	frame.Rotation = math.deg(math.atan2(dy, dx))
+	frame.BackgroundColor3 = MINIMAP_ROUTE_COLOR
+	setClippedLineFrame(frame, ax, ay, bx, by, linePixels, viewportWidth, viewportHeight)
 end
 
 local function updateDestinationMarker(ui, cab, playerPosition, scale, viewportWidth, viewportHeight, halfWidth, halfHeight)
@@ -735,11 +993,11 @@ local function updateDestinationMarker(ui, cab, playerPosition, scale, viewportW
 	local targetY = halfHeight + (destination.Z - playerPosition.Z) * scale
 	local markerSize = math.max(getConfigNumber("minimapDestinationMarkerPixels", 16), 8)
 	local padding = markerSize * 0.5 + 4
-	local routeColor = getConfigColor("passengerDeliveryColor", Color3.fromRGB(255, 70, 55))
-	local visible = targetX + padding >= 0
-		and targetX - padding <= viewportWidth
-		and targetY + padding >= 0
-		and targetY - padding <= viewportHeight
+	local routeColor = MINIMAP_ROUTE_COLOR
+	local visible = targetX - padding >= 0
+		and targetX + padding <= viewportWidth
+		and targetY - padding >= 0
+		and targetY + padding <= viewportHeight
 
 	ui.destinationMarker.BackgroundColor3 = routeColor
 	ui.destinationMarker.Position = UDim2.fromOffset(targetX, targetY)
@@ -855,7 +1113,13 @@ function MinimapController.start(parentGui, cabTracker)
 		if watchedWorld then
 			table.insert(worldConnections, watchedWorld.ChildAdded:Connect(function(child)
 				if child.Name == RUNTIME_SPLINE_DATA_NAME
+					or child.Name == RUNTIME_GRAPH_DATA_NAME
 					or child.Name == GENERATED_ROADS_NAME
+					or child.Name == BAKED_ROAD_GRAPH_RUNTIME_NAME
+					or child.Name == BAKED_ROAD_GRAPH_SURFACES_NAME
+					or child.Name == ROAD_GRAPH_SURFACES_NAME
+					or child.Name == LEGACY_ROAD_NETWORK_NAME
+					or child.Name == MINIMAP_ROAD_MESH_NAME
 					or child.Name == CLIENT_VISUALS_NAME
 					or child.Name == RUNTIME_MESH_NAME
 				then
@@ -871,7 +1135,13 @@ function MinimapController.start(parentGui, cabTracker)
 			end))
 
 			watchMapContainer(watchedWorld:FindFirstChild(RUNTIME_SPLINE_DATA_NAME))
+			watchMapContainer(watchedWorld:FindFirstChild(RUNTIME_GRAPH_DATA_NAME))
 			watchMapContainer(watchedWorld:FindFirstChild(GENERATED_ROADS_NAME))
+			watchMapContainer(watchedWorld:FindFirstChild(BAKED_ROAD_GRAPH_RUNTIME_NAME))
+			watchMapContainer(watchedWorld:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME))
+			watchMapContainer(watchedWorld:FindFirstChild(ROAD_GRAPH_SURFACES_NAME))
+			watchMapContainer(watchedWorld:FindFirstChild(LEGACY_ROAD_NETWORK_NAME))
+			watchMapContainer(watchedWorld:FindFirstChild(MINIMAP_ROAD_MESH_NAME))
 			watchMapContainer(watchedWorld:FindFirstChild(CLIENT_VISUALS_NAME))
 			watchMapContainer(watchedWorld:FindFirstChild(RUNTIME_MESH_NAME))
 		end
@@ -923,17 +1193,16 @@ function MinimapController.start(parentGui, cabTracker)
 
 		if #ui.meshClones > 0 then
 			updateMeshViewport(ui, playerPosition, span)
-			for _, item in ipairs(roadItems) do
-				updateRoadSegment(item, playerPosition, scale, halfWidth, halfHeight, viewportSize.X, viewportSize.Y)
-			end
+			updateViewportDestinationGuide(ui, watchedWorld, cab, scale)
+			hideDestinationGuide(ui)
 		else
 			ui.meshViewport.Visible = false
+			hideViewportDestinationGuide(ui)
 			for _, item in ipairs(roadItems) do
 				updateRoadSegment(item, playerPosition, scale, halfWidth, halfHeight, viewportSize.X, viewportSize.Y)
 			end
+			updateDestinationGuide(ui, watchedWorld, cab, playerPosition, scale, halfWidth, halfHeight, viewportSize.X, viewportSize.Y)
 		end
-
-		updateDestinationGuide(ui, watchedWorld, cab, playerPosition, scale, halfWidth, halfHeight, viewportSize.X, viewportSize.Y)
 
 		ui.playerMarker.Position = UDim2.fromOffset(halfWidth, halfHeight)
 		if forward and forward.Magnitude > 0.001 then

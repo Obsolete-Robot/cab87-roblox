@@ -24,6 +24,7 @@ local DEFAULT_SURFACES = {
 }
 
 local MIN_PART_DIMENSION = 0.01
+local DEFAULT_CHUNK_SIZE = 1024
 
 local function newMeshState()
 	local ok, editableMeshOrErr = pcall(function()
@@ -37,6 +38,12 @@ local function newMeshState()
 		mesh = editableMeshOrErr,
 		faces = 0,
 	}
+end
+
+local function destroyEditableMesh(editableMesh)
+	pcall(function()
+		editableMesh:Destroy()
+	end)
 end
 
 local function addVertex(state, position)
@@ -218,11 +225,14 @@ local function createMeshPartFromState(state, parent, name, options)
 		return Content.fromObject(state.mesh)
 	end)
 	if not okContent or not meshContentOrErr then
+		destroyEditableMesh(state.mesh)
 		return nil, "Mesh content creation failed: " .. tostring(meshContentOrErr)
 	end
 
 	local meshContent = meshContentOrErr
-	return createMeshPartFromContent(meshContent, parent, name, options, state.faces)
+	local meshPart, err = createMeshPartFromContent(meshContent, parent, name, options, state.faces)
+	destroyEditableMesh(state.mesh)
+	return meshPart, err
 end
 
 function RoadMeshBuilder.createSurfaceState(triangles)
@@ -411,6 +421,98 @@ local function buildPrimitiveSurfacePair(meshParent, collisionParent, key, trian
 	return visibleParts, collisionParts, nil
 end
 
+local function triangleCenter(triangle)
+	local a = triangle and triangle[1]
+	local b = triangle and triangle[2]
+	local c = triangle and triangle[3]
+	if not (a and b and c) then
+		return nil
+	end
+
+	return (a + b + c) / 3
+end
+
+local function bucketTrianglesByCenter(triangles, chunkSize)
+	local buckets = {}
+	local keys = {}
+
+	for _, triangle in ipairs(triangles or {}) do
+		local center = triangleCenter(triangle)
+		if center then
+			local chunkX = math.floor(center.X / chunkSize)
+			local chunkZ = math.floor(center.Z / chunkSize)
+			local key = tostring(chunkX) .. ":" .. tostring(chunkZ)
+			local bucket = buckets[key]
+			if not bucket then
+				bucket = {
+					chunkX = chunkX,
+					chunkZ = chunkZ,
+					triangles = {},
+				}
+				buckets[key] = bucket
+				table.insert(keys, key)
+			end
+			table.insert(bucket.triangles, triangle)
+		end
+	end
+
+	table.sort(keys, function(a, b)
+		local left = buckets[a]
+		local right = buckets[b]
+		if left.chunkX == right.chunkX then
+			return left.chunkZ < right.chunkZ
+		end
+		return left.chunkX < right.chunkX
+	end)
+
+	return buckets, keys
+end
+
+local function buildChunkedSurface(meshParent, key, triangles, options)
+	local style = DEFAULT_SURFACES[key]
+	if not style or #(triangles or {}) == 0 then
+		return {}, nil
+	end
+
+	local surfaceType = string.gsub(key, "s$", "")
+	local chunkSize = math.max(tonumber(options.chunkSize) or DEFAULT_CHUNK_SIZE, 128)
+	local buckets, keys = bucketTrianglesByCenter(triangles, chunkSize)
+	local parts = {}
+	local errors = {}
+
+	for chunkIndex, bucketKey in ipairs(keys) do
+		local bucket = buckets[bucketKey]
+		local meshPart, err = RoadMeshBuilder.createSurfaceMesh(
+			meshParent,
+			string.format("%s_%03d", style.name, chunkIndex),
+			bucket.triangles,
+			{
+				color = options.color or style.color,
+				material = options.material or style.material,
+				surfaceType = surfaceType,
+				generatedBy = options.generatedBy,
+				canCollide = false,
+				canQuery = false,
+				canTouch = false,
+				castShadow = false,
+				transparency = options.transparency,
+			}
+		)
+		if meshPart then
+			meshPart:SetAttribute("MeshChunkKey", bucketKey)
+			meshPart:SetAttribute("MeshChunkSize", chunkSize)
+			table.insert(parts, meshPart)
+		elseif err then
+			table.insert(errors, string.format("%s[%s]: %s", key, bucketKey, tostring(err)))
+		end
+	end
+
+	if #errors > 0 then
+		return parts, table.concat(errors, " | ")
+	end
+	return parts, nil
+end
+
 function RoadMeshBuilder.createClassifiedMeshes(parent, meshData, options)
 	options = options or {}
 	local meshFolder = recreateFolder(parent, options.meshFolderName or "RoadGraphSurfaces")
@@ -447,6 +549,41 @@ function RoadMeshBuilder.createClassifiedMeshes(parent, meshData, options)
 	end
 	if #result.collisionParts == 0 then
 		collisionFolder:Destroy()
+	end
+
+	return result
+end
+
+function RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, meshData, options)
+	options = options or {}
+	local meshFolder = recreateFolder(parent, options.meshFolderName or "RoadGraphSurfaces")
+
+	local result = {
+		meshFolder = meshFolder,
+		visibleParts = {},
+		errors = {},
+	}
+
+	local trianglesByKey = {
+		roads = meshData.roadTriangles,
+		sidewalks = meshData.sidewalkTriangles,
+		crosswalks = meshData.crosswalkTriangles,
+	}
+	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks" }
+
+	for _, key in ipairs(surfaceKeys) do
+		local visibleParts, err = buildChunkedSurface(meshFolder, key, trianglesByKey[key], options)
+		if err then
+			table.insert(result.errors, err)
+		end
+		for _, part in ipairs(visibleParts) do
+			table.insert(result.visibleParts, part)
+		end
+	end
+
+	if #result.visibleParts == 0 then
+		meshFolder:Destroy()
+		result.meshFolder = nil
 	end
 
 	return result
