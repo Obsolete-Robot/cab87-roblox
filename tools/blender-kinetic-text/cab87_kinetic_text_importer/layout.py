@@ -26,6 +26,7 @@ class TimingWord:
 	text: str
 	start: float
 	end: float
+	break_after: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class LayoutWord:
 	text: str
 	start: float
 	end: float
+	break_after: bool
 	x: float
 	y: float
 	width: float
@@ -107,11 +109,21 @@ def parse_timing_payload(payload: dict[str, Any]) -> TimingDocument:
 		start = max(0.0, _read_number(raw_word, ("start", "startSeconds", "start_time", "startTime"), 0.0))
 		end = _read_number(raw_word, ("end", "endSeconds", "end_time", "endTime"), start)
 		end = max(start, end)
-		parsed_words.append(TimingWord(source_index=-1, text=text, start=start, end=end))
+		break_after = _read_bool(
+			raw_word,
+			("breakAfter", "manualBreakAfter", "captionBreakAfter", "forceBreakAfter", "break_after"),
+		)
+		parsed_words.append(TimingWord(source_index=-1, text=text, start=start, end=end, break_after=break_after))
 
 	parsed_words.sort(key=lambda word: (word.start, word.end, word.text))
 	indexed_words = tuple(
-		TimingWord(source_index=index, text=word.text, start=word.start, end=word.end)
+		TimingWord(
+			source_index=index,
+			text=word.text,
+			start=word.start,
+			end=word.end,
+			break_after=word.break_after and index < len(parsed_words) - 1,
+		)
 		for index, word in enumerate(parsed_words)
 	)
 
@@ -179,15 +191,11 @@ def _split_into_sections(words: Iterable[TimingWord], options: LayoutOptions) ->
 	current: list[TimingWord] = []
 
 	for word in words:
-		candidate = [*current, word]
-		would_exceed_words = len(candidate) > options.max_words_per_section
-		would_exceed_chars = _joined_length(candidate) > options.max_chars_per_section
+		current.append(word)
 
-		if current and (would_exceed_words or would_exceed_chars):
+		if word.break_after and current:
 			sections.append(current)
-			current = [word]
-		else:
-			current = candidate
+			current = []
 
 	if current:
 		sections.append(current)
@@ -220,6 +228,7 @@ def _layout_section_words(section_index: int, words: list[TimingWord], options: 
 					text=word.text,
 					start=word.start,
 					end=word.end,
+					break_after=word.break_after,
 					x=x,
 					y=y,
 					width=width,
@@ -279,6 +288,19 @@ def _read_number(payload: dict[str, Any], keys: tuple[str, ...], fallback: float
 		if key in payload:
 			return _read_float(payload.get(key), fallback)
 	return fallback
+
+
+def _read_bool(payload: dict[str, Any], keys: tuple[str, ...]) -> bool:
+	for key in keys:
+		if key not in payload:
+			continue
+		value = payload.get(key)
+		if isinstance(value, bool):
+			return value
+		if isinstance(value, str):
+			return value.strip().lower() in {"1", "true", "yes", "on"}
+		return bool(value)
+	return False
 
 
 def _read_float(value: Any, fallback: float) -> float:

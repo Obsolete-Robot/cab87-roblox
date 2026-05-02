@@ -364,11 +364,47 @@ button:focus-visible {
 }
 
 .word-preview {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.4rem;
+	display: grid;
+	gap: 0.6rem;
 	min-height: 92px;
 	align-content: flex-start;
+}
+
+.preview-section {
+	display: grid;
+	gap: 0.45rem;
+	padding: 0.65rem 0 0.65rem 0.8rem;
+	border-left: 3px solid var(--line-strong);
+}
+
+.preview-section.break-section {
+	border-left-color: var(--accent);
+}
+
+.section-meta,
+.section-words {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+.section-meta {
+	flex-wrap: wrap;
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 800;
+	text-transform: uppercase;
+}
+
+.section-words {
+	flex-wrap: wrap;
+}
+
+.break-tag {
+	border-radius: 999px;
+	padding: 0.12rem 0.42rem;
+	background: var(--accent-soft);
+	color: var(--accent-dark);
 }
 
 .word-chip {
@@ -410,12 +446,19 @@ button:focus-visible {
 }
 
 .borrow-actions,
+.auto-break-action,
 .nudge-actions {
 	flex-wrap: wrap;
 	justify-content: flex-end;
 }
 
+.auto-break-action {
+	border-right: 1px solid var(--line);
+	padding-right: 0.55rem;
+}
+
 .borrow-actions button,
+.auto-break-button,
 .nudge-actions button {
 	padding: 0.48rem 0.58rem;
 	font-size: 0.86rem;
@@ -473,6 +516,32 @@ tbody tr.selected {
 	box-shadow: inset 3px 0 0 var(--accent);
 }
 
+tbody tr.has-break-after td {
+	border-bottom: 2px solid rgba(18, 107, 88, 0.46);
+}
+
+tbody tr.break-entry-row {
+	background: #edf7f3;
+	color: var(--accent-dark);
+}
+
+tbody tr.break-entry-row td {
+	border-top: 1px solid rgba(18, 107, 88, 0.24);
+	border-bottom: 2px solid rgba(18, 107, 88, 0.46);
+	padding: 0.36rem 0.45rem;
+}
+
+.break-entry-number,
+.break-entry-label {
+	font-size: 0.8rem;
+	font-weight: 800;
+	text-transform: uppercase;
+}
+
+.break-entry-label {
+	letter-spacing: 0;
+}
+
 td input {
 	padding: 0.4rem 0.45rem;
 }
@@ -499,8 +568,23 @@ td input {
 }
 
 .split-button,
+.break-button,
 .delete-button {
 	padding: 0.42rem 0.58rem;
+}
+
+.break-button.active {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	color: var(--accent-dark);
+	font-weight: 800;
+}
+
+.break-remove-button {
+	border-color: var(--accent);
+	background: #fff;
+	color: var(--accent-dark);
+	padding: 0.38rem 0.55rem;
 }
 
 .delete-button {

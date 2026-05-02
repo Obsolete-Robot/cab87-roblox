@@ -32,12 +32,15 @@ The API key stays on the local Node server. The browser uploads the selected cli
 5. Use **Play** to watch the current word highlight against the clip.
 6. Click **Hide Sidebar** when you want the transcript workspace to fill the page.
 7. Nudge or edit any word start/end values that need tighter kinetic text timing, use **Prev +50/+100** and **Next +50/+100** to borrow timing from adjacent words, or click **Trash** to remove unwanted words.
-8. If a row contains combined words, add a space in the word text and click **Split**. The tool divides the original timing proportionally between the two new word rows.
-9. Export kinetic JSON, CSV, VTT, or SRT.
+8. Click **Auto Break** to insert suggested breaks, or click **Add Break** on a word row to place one yourself. Breaks appear as their own entries in the word timing list and can be removed there.
+9. If a row contains combined words, add a space in the word text and click **Split**. The tool divides the original timing proportionally between the two new word rows.
+10. Export kinetic JSON, CSV, VTT, or SRT.
 
 ## Notes
 
 - OpenAI audio uploads are limited to 25 MB by default. This tool enforces the same default with `MAX_AUDIO_BYTES`.
 - Word timestamps are model-estimated. For frame-critical animation, review the waveform and use the timing editor before final export.
-- `Import JSON` accepts OpenAI `verbose_json` responses and simple `{ "words": [{ "word": "...", "start": 0, "end": 1 }] }` timing files from other engines.
+- Kinetic JSON exports embed the selected audio/video clip so importing that JSON later restores the media player and waveform without retranscribing.
+- Preview sections and caption exports split only at break entries.
+- `Import JSON` accepts OpenAI `verbose_json` responses, this tool's kinetic JSON exports, and simple `{ "words": [{ "word": "...", "start": 0, "end": 1 }] }` timing files from other engines.
 - To change the port, run `PORT=8020 npm run dev`.

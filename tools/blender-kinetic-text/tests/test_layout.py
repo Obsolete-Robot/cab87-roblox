@@ -21,7 +21,7 @@ class LayoutTests(unittest.TestCase):
 				"duration": 2.0,
 				"text": "cab time",
 				"words": [
-					{"index": 1, "text": "cab", "start": 0.1, "end": 0.4},
+					{"index": 1, "text": "cab", "start": 0.1, "end": 0.4, "breakAfter": True},
 					{"index": 2, "text": "time", "start": 0.5, "end": 0.8},
 				],
 			}
@@ -31,6 +31,7 @@ class LayoutTests(unittest.TestCase):
 		self.assertEqual(document.version, 1)
 		self.assertEqual(document.fps, 30)
 		self.assertEqual([word.text for word in document.words], ["cab", "time"])
+		self.assertEqual([word.break_after for word in document.words], [True, False])
 		self.assertEqual(document.duration, 2.0)
 
 	def test_supports_simple_word_fallback_shape(self):
@@ -47,7 +48,7 @@ class LayoutTests(unittest.TestCase):
 		self.assertEqual([word.text for word in document.words], ["first", "later"])
 		self.assertEqual([word.source_index for word in document.words], [0, 1])
 
-	def test_splits_sections_by_word_and_character_limits(self):
+	def test_word_and_character_limits_do_not_create_sections(self):
 		payload = {
 			"words": [
 				{"text": "one", "start": 0.0, "end": 0.1},
@@ -58,10 +59,42 @@ class LayoutTests(unittest.TestCase):
 		}
 
 		result = layout.build_layout(payload, layout.LayoutOptions(max_words_per_section=2, max_chars_per_section=20))
-		self.assertEqual([section.text for section in result.sections], ["one two", "three four"])
+		self.assertEqual([section.text for section in result.sections], ["one two three four"])
 
 		result = layout.build_layout(payload, layout.LayoutOptions(max_words_per_section=10, max_chars_per_section=9))
-		self.assertEqual([section.text for section in result.sections], ["one two", "three", "four"])
+		self.assertEqual([section.text for section in result.sections], ["one two three four"])
+
+	def test_break_after_forces_new_section_within_existing_limits(self):
+		payload = {
+			"words": [
+				{"text": "one", "start": 0.0, "end": 0.1},
+				{"text": "two", "start": 0.2, "end": 0.3, "breakAfter": True},
+				{"text": "three", "start": 0.4, "end": 0.5},
+				{"text": "four", "start": 0.6, "end": 0.7},
+			]
+		}
+
+		result = layout.build_layout(payload, layout.LayoutOptions(max_words_per_section=10, max_chars_per_section=80))
+
+		self.assertEqual([section.text for section in result.sections], ["one two", "three four"])
+		self.assertEqual(result.words[1].break_after, True)
+		self.assertEqual(result.words[2].section_index, 1)
+
+	def test_break_after_is_the_only_section_boundary(self):
+		payload = {
+			"words": [
+				{"text": "one", "start": 0.0, "end": 0.1, "breakAfter": True},
+				{"text": "two", "start": 0.2, "end": 0.3},
+				{"text": "three", "start": 0.4, "end": 0.5},
+				{"text": "four", "start": 0.6, "end": 0.7},
+			]
+		}
+
+		result = layout.build_layout(payload, layout.LayoutOptions(max_words_per_section=2, max_chars_per_section=80))
+		self.assertEqual([section.text for section in result.sections], ["one", "two three four"])
+
+		result = layout.build_layout(payload, layout.LayoutOptions(max_words_per_section=10, max_chars_per_section=8))
+		self.assertEqual([section.text for section in result.sections], ["one", "two three four"])
 
 	def test_wraps_lines_by_character_limit(self):
 		payload = {

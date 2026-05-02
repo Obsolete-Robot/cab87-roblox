@@ -46,8 +46,6 @@ Select the parent Empty, or any generated word, click `Load Group Settings`, adj
 
 The update pass reapplies:
 
-- max words per section.
-- max characters per section.
 - max characters per line.
 - word and line spacing.
 - font file and font size.
@@ -63,10 +61,7 @@ Words keep their timing data as custom properties on the generated Text objects.
 
 Each word starts transparent and scaled down, then pops in at its word start time. Words stay visible inside their current section. When a new section begins, the previous section fades out over the configured clear frames.
 
-Sections are determined by the first limit reached:
-
-- max words per section.
-- max characters per section.
+Sections are determined only by `breakAfter` break points from the kinetic JSON.
 
 Within each section, lines wrap by max characters per line.
 

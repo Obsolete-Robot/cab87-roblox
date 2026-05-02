@@ -224,8 +224,6 @@ class CAB87_PT_kinetic_text_panel(Panel):
 
 		box = layout.box()
 		box.label(text="Layout")
-		box.prop(settings, "max_words_per_section")
-		box.prop(settings, "max_chars_per_section")
 		box.prop(settings, "max_chars_per_line")
 		box.prop(settings, "horizontal_alignment")
 		box.prop(settings, "word_spacing")
@@ -566,6 +564,7 @@ def write_word_properties(obj, layout_word) -> None:
 	obj["cab87_word_text"] = layout_word.text
 	obj["cab87_word_start"] = layout_word.start
 	obj["cab87_word_end"] = layout_word.end
+	obj["cab87_break_after"] = layout_word.break_after
 	obj["cab87_section_index"] = layout_word.section_index
 	obj["cab87_line_index"] = layout_word.line_index
 
@@ -633,6 +632,7 @@ def document_from_group(group, word_objects) -> TimingDocument:
 				"text": obj.data.body if obj.type == "FONT" else obj.get("cab87_word_text", ""),
 				"start": _float_prop(obj, "cab87_word_start", 0.0),
 				"end": _float_prop(obj, "cab87_word_end", 0.0),
+				"breakAfter": bool(obj.get("cab87_break_after", False)),
 			}
 		)
 	return parse_timing_payload(

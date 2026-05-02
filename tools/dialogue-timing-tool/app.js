@@ -22,6 +22,7 @@ const els = {
 	audioPlayer: document.getElementById("audioPlayer"),
 	playPauseButton: document.getElementById("playPauseButton"),
 	transcribeButton: document.getElementById("transcribeButton"),
+	autoBreakButton: document.getElementById("autoBreakButton"),
 	sidebarToggleButton: document.getElementById("sidebarToggleButton"),
 	clearButton: document.getElementById("clearButton"),
 	engineInput: document.getElementById("engineInput"),
@@ -48,6 +49,9 @@ const WORD_COLOR = "rgba(219, 235, 228, 0.18)";
 const SELECTED_COLOR = "rgba(249, 211, 91, 0.26)";
 const SIDEBAR_STORAGE_KEY = "cab87-dialogue-sidebar-collapsed";
 const MIN_WORD_DURATION_SECONDS = 0.02;
+const AUTO_BREAK_MAX_WORDS = 8;
+const AUTO_BREAK_MAX_CHARS = 42;
+const AUTO_BREAK_MAX_DURATION_SECONDS = 3.2;
 
 function secondsToClock(seconds) {
 	const safeSeconds = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
@@ -173,6 +177,7 @@ function setExportEnabled(enabled) {
 
 function updateTimingActionButtons() {
 	const hasSelection = state.selectedIndex >= 0 && state.selectedIndex < state.words.length;
+	els.autoBreakButton.disabled = state.words.length < 2;
 	for (const button of els.nudgeButtons) {
 		button.disabled = !hasSelection;
 	}
@@ -196,6 +201,7 @@ function clampWord(word) {
 function renumberWords() {
 	state.words.forEach((word, index) => {
 		word.id = index + 1;
+		word.breakAfter = Boolean(word.breakAfter) && index < state.words.length - 1;
 	});
 }
 
@@ -430,15 +436,43 @@ function renderPreview() {
 	}
 
 	const fragment = document.createDocumentFragment();
-	state.words.forEach((word, index) => {
-		const chip = document.createElement("button");
-		chip.type = "button";
-		chip.className = "word-chip";
-		chip.dataset.wordIndex = String(index);
-		chip.textContent = word.word;
-		chip.title = `${secondsToClock(word.start)} - ${secondsToClock(word.end)}`;
-		chip.addEventListener("click", () => selectWord(index));
-		fragment.append(chip);
+	const sections = buildCaptionSections(state.words);
+	sections.forEach((section, sectionIndex) => {
+		const sectionNode = document.createElement("div");
+		sectionNode.className = "preview-section";
+		if (section.endsWithBreak) {
+			sectionNode.classList.add("break-section");
+		}
+
+		const meta = document.createElement("div");
+		meta.className = "section-meta";
+		const label = document.createElement("span");
+		label.textContent = `Section ${sectionIndex + 1}`;
+		const time = document.createElement("span");
+		time.textContent = `${secondsToClock(section.start)} - ${secondsToClock(section.end)}`;
+		meta.append(label, time);
+		if (section.endsWithBreak) {
+			const tag = document.createElement("span");
+			tag.className = "break-tag";
+			tag.textContent = "Break";
+			meta.append(tag);
+		}
+
+		const words = document.createElement("div");
+		words.className = "section-words";
+		for (const item of section.items) {
+			const chip = document.createElement("button");
+			chip.type = "button";
+			chip.className = "word-chip";
+			chip.dataset.wordIndex = String(item.index);
+			chip.textContent = item.word.word;
+			chip.title = `${secondsToClock(item.word.start)} - ${secondsToClock(item.word.end)}`;
+			chip.addEventListener("click", () => selectWord(item.index));
+			words.append(chip);
+		}
+
+		sectionNode.append(meta, words);
+		fragment.append(sectionNode);
 	});
 
 	els.wordPreview.append(fragment);
@@ -462,7 +496,11 @@ function renderTable() {
 	const fragment = document.createDocumentFragment();
 	state.words.forEach((word, index) => {
 		const row = document.createElement("tr");
+		row.className = "timing-row";
 		row.dataset.rowIndex = String(index);
+		if (word.breakAfter) {
+			row.classList.add("has-break-after");
+		}
 		row.addEventListener("click", (event) => {
 			if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) {
 				return;
@@ -524,6 +562,19 @@ function renderTable() {
 			splitWord(index, wordInput.value, wordInput.selectionStart);
 		});
 
+		const breakButton = document.createElement("button");
+		breakButton.type = "button";
+		breakButton.className = "break-button";
+		breakButton.textContent = word.breakAfter ? "Remove Break" : "Add Break";
+		breakButton.disabled = index >= state.words.length - 1;
+		breakButton.title = word.breakAfter
+			? `Remove section break after "${word.word}"`
+			: `Insert section break after "${word.word}"`;
+		if (word.breakAfter) {
+			breakButton.classList.add("active");
+		}
+		breakButton.addEventListener("click", () => toggleBreakAfter(index));
+
 		const deleteButton = document.createElement("button");
 		deleteButton.type = "button";
 		deleteButton.className = "delete-button";
@@ -531,13 +582,58 @@ function renderTable() {
 		deleteButton.title = `Remove "${word.word}"`;
 		deleteButton.addEventListener("click", () => deleteWord(index));
 
-		actionsCell.append(splitButton, deleteButton);
+		actionsCell.append(splitButton, breakButton, deleteButton);
 
 		row.append(numberCell, wordCell, startCell, endCell, timecodeCell, actionsCell);
 		fragment.append(row);
+
+		if (word.breakAfter && index < state.words.length - 1) {
+			fragment.append(createBreakEntryRow(index, fps));
+		}
 	});
 
 	els.wordTableBody.append(fragment);
+}
+
+function createBreakEntryRow(index, fps) {
+	const word = state.words[index];
+	const nextWord = state.words[index + 1];
+	const row = document.createElement("tr");
+	row.className = "break-entry-row";
+	row.dataset.breakAfterIndex = String(index);
+
+	const numberCell = document.createElement("td");
+	numberCell.className = "break-entry-number";
+	numberCell.textContent = "Break";
+
+	const labelCell = document.createElement("td");
+	labelCell.className = "break-entry-label";
+	labelCell.textContent = "Section break";
+
+	const startCell = document.createElement("td");
+	startCell.className = "timecode-cell";
+	startCell.textContent = secondsToClock(word.end);
+
+	const endCell = document.createElement("td");
+	endCell.className = "timecode-cell";
+	endCell.textContent = secondsToClock(nextWord.start);
+
+	const timecodeCell = document.createElement("td");
+	timecodeCell.className = "timecode-cell";
+	timecodeCell.textContent = `${secondsToTimecode(word.end, fps)} - ${secondsToTimecode(nextWord.start, fps)}`;
+
+	const actionsCell = document.createElement("td");
+	actionsCell.className = "actions-cell";
+	const button = document.createElement("button");
+	button.type = "button";
+	button.className = "break-remove-button";
+	button.textContent = "Remove Break";
+	button.title = `Remove section break between "${word.word}" and "${nextWord.word}"`;
+	button.addEventListener("click", () => toggleBreakAfter(index));
+	actionsCell.append(button);
+
+	row.append(numberCell, labelCell, startCell, endCell, timecodeCell, actionsCell);
+	return row;
 }
 
 function renderAll(resetSelection = true) {
@@ -621,6 +717,63 @@ function formatBytes(bytes) {
 	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function readFileAsDataUrl(file) {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.addEventListener("load", () => resolve(String(reader.result || "")));
+		reader.addEventListener("error", () => reject(reader.error || new Error("Could not read audio clip.")));
+		reader.readAsDataURL(file);
+	});
+}
+
+async function buildEmbeddedAudio() {
+	if (!state.file) {
+		return null;
+	}
+
+	return {
+		name: state.file.name,
+		type: state.file.type || "application/octet-stream",
+		size: state.file.size,
+		lastModified: state.file.lastModified || null,
+		dataUrl: await readFileAsDataUrl(state.file),
+	};
+}
+
+function findEmbeddedAudio(payload) {
+	const candidate = payload?.audio ?? payload?.audioClip ?? payload?.sourceAudio ?? payload?.embeddedAudio;
+	if (typeof candidate === "string") {
+		return { dataUrl: candidate };
+	}
+	if (candidate && typeof candidate === "object" && typeof candidate.dataUrl === "string") {
+		return candidate;
+	}
+	return null;
+}
+
+async function loadEmbeddedAudio(payload) {
+	const audio = findEmbeddedAudio(payload);
+	if (!audio) {
+		return false;
+	}
+
+	const response = await fetch(audio.dataUrl);
+	if (!response.ok) {
+		throw new Error("Embedded audio could not be decoded.");
+	}
+
+	const blob = await response.blob();
+	const name = String(audio.name || payload.sourceFile || "dialogue-audio").trim();
+	const type = String(audio.type || blob.type || "application/octet-stream").trim();
+	const file = new File([blob], name, {
+		type,
+		lastModified: Number(audio.lastModified) || Date.now(),
+	});
+
+	await loadAudioFile(file);
+	return true;
+}
+
 async function transcribe() {
 	if (!state.file) {
 		return;
@@ -672,6 +825,9 @@ function normalizeImportedWords(input) {
 				end: Math.max(start, end),
 				startMs: Math.round(Math.max(0, start) * 1000),
 				endMs: Math.round(Math.max(start, end) * 1000),
+				breakAfter: Boolean(
+					word.breakAfter ?? word.manualBreakAfter ?? word.captionBreakAfter ?? word.forceBreakAfter,
+				),
 			};
 		})
 		.filter((word) => word.word.length > 0);
@@ -783,11 +939,13 @@ function splitWord(index, text, cursorIndex) {
 		...word,
 		word: leftText,
 		end: splitTime,
+		breakAfter: false,
 	};
 	const rightWord = {
 		...word,
 		word: rightText,
 		start: splitTime,
+		breakAfter: Boolean(word.breakAfter),
 	};
 	clampWord(leftWord);
 	clampWord(rightWord);
@@ -799,6 +957,92 @@ function splitWord(index, text, cursorIndex) {
 	setStatus(`Split "${leftText} ${rightText}" at ${secondsToClock(splitTime)}.`);
 }
 
+function toggleBreakAfter(index) {
+	const word = state.words[index];
+	if (!word) {
+		return;
+	}
+
+	if (index >= state.words.length - 1) {
+		setStatus("The final word cannot have a section break after it.", "warning");
+		return;
+	}
+
+	word.breakAfter = !word.breakAfter;
+	renumberWords();
+	renderAll(false);
+	selectWord(index, false);
+	setStatus(`${word.breakAfter ? "Inserted" : "Removed"} break after "${word.word}".`);
+}
+
+function autoBreakWords() {
+	if (state.words.length < 2) {
+		setStatus("Load at least two timed words before using Auto Break.", "warning");
+		return;
+	}
+
+	const suggestedBreaks = autoBreakIndices(state.words);
+	let insertedCount = 0;
+	for (const index of suggestedBreaks) {
+		const word = state.words[index];
+		if (word && !word.breakAfter && index < state.words.length - 1) {
+			word.breakAfter = true;
+			insertedCount += 1;
+		}
+	}
+
+	renumberWords();
+	renderAll(false);
+	if (state.selectedIndex >= 0) {
+		selectWord(state.selectedIndex, false);
+	}
+
+	if (insertedCount > 0) {
+		setStatus(`Auto Break inserted ${insertedCount} break${insertedCount === 1 ? "" : "s"}.`);
+	} else {
+		setStatus("Auto Break found no new section breaks to add.", "warning");
+	}
+}
+
+function autoBreakIndices(words) {
+	const breakIndices = new Set();
+	let current = [];
+	let charCount = 0;
+
+	for (const [index, word] of words.entries()) {
+		if (!word.word) {
+			continue;
+		}
+
+		if (current.length) {
+			const firstWord = current[0].word;
+			const previous = current[current.length - 1];
+			const wouldExceedWords = current.length + 1 > AUTO_BREAK_MAX_WORDS;
+			const wouldExceedChars = charCount + word.word.length + 1 > AUTO_BREAK_MAX_CHARS;
+			const wouldExceedDuration = word.end - firstWord.start > AUTO_BREAK_MAX_DURATION_SECONDS;
+			const previousEndsSentence = /[.!?]$/.test(previous.word.word || "");
+
+			if (wouldExceedWords || wouldExceedChars || wouldExceedDuration || previousEndsSentence) {
+				if (previous.index < words.length - 1) {
+					breakIndices.add(previous.index);
+				}
+				current = [];
+				charCount = 0;
+			}
+		}
+
+		current.push({ word, index });
+		charCount += word.word.length + (current.length > 1 ? 1 : 0);
+
+		if (word.breakAfter) {
+			current = [];
+			charCount = 0;
+		}
+	}
+
+	return breakIndices;
+}
+
 function deleteWord(index) {
 	const removedWord = state.words[index];
 	if (!removedWord) {
@@ -806,6 +1050,9 @@ function deleteWord(index) {
 	}
 
 	state.words.splice(index, 1);
+	if (removedWord.breakAfter && index > 0 && index <= state.words.length) {
+		state.words[index - 1].breakAfter = true;
+	}
 	renumberWords();
 
 	const nextSelection = state.words.length ? Math.min(index, state.words.length - 1) : -1;
@@ -827,61 +1074,73 @@ async function importJson(file) {
 
 	try {
 		const payload = JSON.parse(await file.text());
+		let restoredAudio = false;
+		let audioWarning = "";
+		try {
+			restoredAudio = await loadEmbeddedAudio(payload);
+		} catch (error) {
+			audioWarning = ` Embedded audio could not be restored: ${error.message}`;
+		}
 		loadResult(payload);
-		setStatus(`Imported ${state.words.length} timed words from JSON.`);
+		const audioStatus = restoredAudio ? " Embedded audio restored." : audioWarning;
+		setStatus(`Imported ${state.words.length} timed words from JSON.${audioStatus}`, audioWarning ? "warning" : "");
 	} catch (error) {
 		setStatus(`Could not import JSON: ${error.message}`, "error");
 	}
 }
 
-function buildCaptionCues(words) {
-	const cues = [];
+function buildCaptionSections(words) {
+	const sections = [];
 	let current = [];
-	let charCount = 0;
-	const maxChars = 42;
-	const maxDuration = 3.2;
 
-	for (const word of words) {
+	for (const [index, word] of words.entries()) {
 		if (!word.word) {
 			continue;
 		}
 
-		const wouldDuration = current.length ? word.end - current[0].start : 0;
-		const wouldChars = charCount + word.word.length + (current.length ? 1 : 0);
-		const endsSentence = /[.!?]$/.test(current[current.length - 1]?.word || "");
+		current.push({ word, index });
 
-		if (current.length && (wouldChars > maxChars || wouldDuration > maxDuration || endsSentence)) {
-			cues.push(wordsToCue(current));
+		if (word.breakAfter) {
+			sections.push(wordsToSection(current, true));
 			current = [];
-			charCount = 0;
 		}
-
-		current.push(word);
-		charCount += word.word.length + (current.length > 1 ? 1 : 0);
 	}
 
 	if (current.length) {
-		cues.push(wordsToCue(current));
+		sections.push(wordsToSection(current, false));
 	}
 
-	return cues;
+	return sections;
 }
 
-function wordsToCue(words) {
+function wordsToSection(items, endsWithBreak) {
+	const first = items[0].word;
+	const last = items[items.length - 1].word;
 	return {
-		start: words[0].start,
-		end: words[words.length - 1].end,
-		text: words.map((word) => word.word).join(" "),
+		start: first.start,
+		end: last.end,
+		text: items.map((item) => item.word.word).join(" "),
+		items,
+		endsWithBreak,
 	};
 }
 
-function exportKineticJson() {
+function buildCaptionCues(words) {
+	return buildCaptionSections(words).map((section) => ({
+		start: section.start,
+		end: section.end,
+		text: section.text,
+	}));
+}
+
+async function exportKineticJson() {
 	const fps = Number(els.fpsInput.value);
 	return {
 		schema: "cab87-dialogue-timing",
 		version: 1,
 		fps,
 		sourceFile: state.file?.name || null,
+		audio: await buildEmbeddedAudio(),
 		duration: getDuration(),
 		text: state.words.map((word) => word.word).join(" "),
 		words: state.words.map((word, index) => ({
@@ -893,6 +1152,7 @@ function exportKineticJson() {
 			endMs: Math.round(word.end * 1000),
 			timecodeIn: secondsToTimecode(word.start, fps),
 			timecodeOut: secondsToTimecode(word.end, fps),
+			breakAfter: Boolean(word.breakAfter),
 		})),
 		cues: buildCaptionCues(state.words).map((cue, index) => ({
 			index: index + 1,
@@ -907,7 +1167,19 @@ function exportKineticJson() {
 
 function exportCsv() {
 	const fps = Number(els.fpsInput.value);
-	const rows = [["index", "word", "start_seconds", "end_seconds", "start_ms", "end_ms", "timecode_in", "timecode_out"]];
+	const rows = [
+		[
+			"index",
+			"word",
+			"start_seconds",
+			"end_seconds",
+			"start_ms",
+			"end_ms",
+			"timecode_in",
+			"timecode_out",
+			"break_after",
+		],
+	];
 	for (const [index, word] of state.words.entries()) {
 		rows.push([
 			index + 1,
@@ -918,6 +1190,7 @@ function exportCsv() {
 			Math.round(word.end * 1000),
 			secondsToTimecode(word.start, fps),
 			secondsToTimecode(word.end, fps),
+			word.breakAfter ? "true" : "false",
 		]);
 	}
 
@@ -966,14 +1239,16 @@ function downloadText(filename, content, type) {
 	URL.revokeObjectURL(url);
 }
 
-function handleExport(kind) {
+async function handleExport(kind) {
 	if (!state.words.length) {
 		return;
 	}
 
 	const stem = (state.file?.name || "dialogue").replace(/\.[^.]+$/, "");
 	if (kind === "json") {
-		downloadText(`${stem}-timing.json`, JSON.stringify(exportKineticJson(), null, 2), "application/json");
+		setStatus(state.file ? "Preparing kinetic JSON with embedded audio..." : "Preparing kinetic JSON...");
+		downloadText(`${stem}-timing.json`, JSON.stringify(await exportKineticJson(), null, 2), "application/json");
+		setStatus(`Exported kinetic JSON${state.file ? " with embedded audio" : ""}.`);
 	}
 	if (kind === "csv") {
 		downloadText(`${stem}-timing.csv`, exportCsv(), "text/csv");
@@ -1107,6 +1382,7 @@ els.dropZone.addEventListener("drop", (event) => {
 });
 
 els.transcribeButton.addEventListener("click", transcribe);
+els.autoBreakButton.addEventListener("click", autoBreakWords);
 els.playPauseButton.addEventListener("click", () => {
 	togglePlayback().catch((error) => setStatus(`Playback failed: ${error.message}`, "error"));
 });
@@ -1150,7 +1426,9 @@ els.waveformCanvas.addEventListener("click", (event) => {
 });
 
 for (const button of els.exportButtons) {
-	button.addEventListener("click", () => handleExport(button.dataset.export));
+	button.addEventListener("click", () => {
+		handleExport(button.dataset.export).catch((error) => setStatus(`Export failed: ${error.message}`, "error"));
+	});
 }
 
 for (const button of els.nudgeButtons) {
