@@ -129,6 +129,17 @@ Use `tools/dialogue-timing-tool` when you need word-level dialogue timing for ki
 
 The tool keeps the API key on the local Node server and uses OpenAI Whisper's verbose JSON word timestamps because the newer GPT transcription models do not currently expose word-level timestamp granularities.
 
+### Blender video plane workflow
+
+Use `tools/blender-video-plane` when you need to place reference footage or rendered video in Blender:
+
+1. Run `tools/blender-video-plane/package.bat`.
+2. Install the generated `cab87_video_plane_tool_vX.Y.Z.zip` in Blender.
+3. Open `3D Viewport > Sidebar > Cab87 > Video Plane`.
+4. Click `Load Video Plane` and choose a supported movie file.
+
+The add-on creates a UV-mapped plane matching the movie aspect ratio and assigns a movie texture material with auto-refresh enabled for playback.
+
 ### Legacy spline workflow
 
 1. Click **New Spline**.

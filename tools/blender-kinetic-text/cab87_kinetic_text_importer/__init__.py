@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Kinetic Text Importer",
 	"author": "Cab87",
-	"version": (0, 1, 0),
+	"version": (0, 1, 4),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Kinetic Text",
 	"description": "Import Cab87 dialogue timing JSON and create animated kinetic Text objects.",
@@ -18,6 +18,7 @@ from bpy.types import Operator, Panel, PropertyGroup
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
+from .animation import set_fcurve_interpolation
 from .layout import LayoutDocument, LayoutOptions, TimingDocument, build_layout, parse_timing_payload
 from .utils.version_gate import run_version_gate
 
@@ -26,6 +27,12 @@ GROUP_PROP = "cab87_kinetic_text_group"
 WORD_PROP = "cab87_kinetic_text_word"
 COLLECTION_PROP = "cab87_kinetic_text_collection"
 ADDON_ID = "cab87_kinetic_text_importer"
+ADDON_VERSION = ".".join(str(part) for part in bl_info["version"])
+FILL_MODE_ALIASES = {
+	"FULL": "BOTH",
+	"BOTH": "FULL",
+}
+SETTINGS_FILL_MODES = {"BOTH", "FRONT", "BACK", "NONE"}
 
 
 class CAB87_KineticTextSettings(PropertyGroup):
@@ -91,12 +98,12 @@ class CAB87_KineticTextSettings(PropertyGroup):
 	fill_mode: EnumProperty(
 		name="Fill Mode",
 		items=(
-			("FULL", "Full", "Fill front and back faces."),
+			("BOTH", "Both", "Fill front and back faces."),
 			("FRONT", "Front", "Fill front face only."),
 			("BACK", "Back", "Fill back face only."),
 			("NONE", "None", "No face fill."),
 		),
-		default="FULL",
+		default="BOTH",
 	)
 
 
@@ -186,7 +193,7 @@ class CAB87_OT_load_kinetic_text_settings(Operator):
 
 
 class CAB87_PT_kinetic_text_panel(Panel):
-	bl_label = "Kinetic Text"
+	bl_label = f"Kinetic Text v{ADDON_VERSION}"
 	bl_idname = "CAB87_PT_kinetic_text_panel"
 	bl_space_type = "VIEW_3D"
 	bl_region_type = "UI"
@@ -360,9 +367,84 @@ def apply_text_curve_style(curve, settings: CAB87_KineticTextSettings, font) -> 
 	curve.extrude = settings.extrude
 	curve.resolution_u = settings.resolution_u
 	if hasattr(curve, "fill_mode"):
-		curve.fill_mode = settings.fill_mode
+		set_curve_fill_mode(curve, settings.fill_mode)
 	if font is not None:
 		curve.font = font
+
+
+def set_curve_fill_mode(curve, fill_mode: str) -> None:
+	last_error = None
+	for candidate in curve_fill_mode_candidates(curve, fill_mode):
+		try:
+			curve.fill_mode = candidate
+			return
+		except TypeError as error:
+			last_error = error
+		except ValueError as error:
+			last_error = error
+
+	if last_error is not None:
+		raise last_error
+
+
+def curve_fill_mode_candidates(curve, fill_mode: str) -> list[str]:
+	candidates = [
+		resolve_curve_fill_mode(curve, fill_mode),
+		FILL_MODE_ALIASES.get(fill_mode, ""),
+		"BOTH",
+		"FULL",
+		"FRONT",
+		"BACK",
+		"NONE",
+	]
+
+	seen = set()
+	return [
+		candidate
+		for candidate in candidates
+		if candidate and not (candidate in seen or seen.add(candidate))
+	]
+
+
+def resolve_curve_fill_mode(curve, fill_mode: str) -> str:
+	enum_property = get_curve_fill_mode_property(curve)
+	supported_modes = {item.identifier for item in enum_property.enum_items} if enum_property else set()
+	if not supported_modes or fill_mode in supported_modes:
+		return fill_mode
+
+	alias = FILL_MODE_ALIASES.get(fill_mode)
+	if alias in supported_modes:
+		return alias
+
+	for fallback in ("BOTH", "FULL", "FRONT", "BACK", "NONE"):
+		if fallback in supported_modes:
+			return fallback
+	return fill_mode
+
+
+def get_curve_fill_mode_property(curve):
+	properties = curve.bl_rna.properties
+	get_property = getattr(properties, "get", None)
+	if callable(get_property):
+		property_info = get_property("fill_mode")
+		if property_info:
+			return property_info
+
+	try:
+		return properties["fill_mode"]
+	except Exception:
+		return None
+
+
+def resolve_settings_fill_mode(fill_mode: str, fallback: str) -> str:
+	if fill_mode in SETTINGS_FILL_MODES:
+		return fill_mode
+
+	alias = FILL_MODE_ALIASES.get(fill_mode)
+	if alias in SETTINGS_FILL_MODES:
+		return alias
+
+	return fallback if fallback in SETTINGS_FILL_MODES else "BOTH"
 
 
 def create_word_material(name: str, settings: CAB87_KineticTextSettings):
@@ -409,6 +491,7 @@ def animate_word_object(obj, material, layout_word, section_starts: list[float],
 	set_fcurve_interpolation(obj, "BEZIER")
 	if material:
 		set_fcurve_interpolation(material, "LINEAR")
+		set_fcurve_interpolation(getattr(material, "node_tree", None), "LINEAR")
 
 
 def set_object_scale_key(obj, scale, frame: int) -> None:
@@ -454,14 +537,6 @@ def material_alpha_sockets(material):
 		return []
 	socket = node.inputs.get("Alpha")
 	return [socket] if socket else []
-
-
-def set_fcurve_interpolation(owner, interpolation: str) -> None:
-	if not owner or not owner.animation_data or not owner.animation_data.action:
-		return
-	for fcurve in owner.animation_data.action.fcurves:
-		for keyframe in fcurve.keyframe_points:
-			keyframe.interpolation = interpolation
 
 
 def next_section_start_for(section_index: int, section_starts: list[float]) -> float | None:
@@ -537,7 +612,10 @@ def load_group_properties_into_settings(group, settings: CAB87_KineticTextSettin
 	settings.intro_scale = _float_prop(group, "cab87_intro_scale", settings.intro_scale)
 	settings.font_path = group.get("cab87_font_path", settings.font_path)
 	settings.font_size = _float_prop(group, "cab87_font_size", settings.font_size)
-	settings.fill_mode = group.get("cab87_fill_mode", settings.fill_mode)
+	settings.fill_mode = resolve_settings_fill_mode(
+		group.get("cab87_fill_mode", settings.fill_mode),
+		settings.fill_mode,
+	)
 	settings.bevel_depth = _float_prop(group, "cab87_bevel_depth", settings.bevel_depth)
 	settings.bevel_resolution = int(group.get("cab87_bevel_resolution", settings.bevel_resolution))
 	settings.extrude = _float_prop(group, "cab87_extrude", settings.extrude)

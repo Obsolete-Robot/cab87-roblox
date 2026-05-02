@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 
 id = "cab87_kinetic_text_importer"
 name = "Cab87 Kinetic Text Importer"
-version = "0.1.0"
+version = "0.1.4"
 tagline = "Import Cab87 dialogue timing JSON as animated kinetic text"
 maintainer = "Cab87"
 type = "add-on"

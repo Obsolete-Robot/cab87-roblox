@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "cab87_video_plane_tool"
+name = "Cab87 Video Plane Tool"
+version = "0.1.0"
+tagline = "Create aspect-ratio video planes with movie texture materials"
+maintainer = "Cab87"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:MIT"]
+
+tags = ["Import-Export", "Material", "Video"]
