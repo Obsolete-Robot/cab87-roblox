@@ -23,7 +23,7 @@ interface ThreeSceneProps {
   onContextMenu: (e: any) => void;
   isDragging: boolean;
   selectedNode: string | null;
-  selectedEdge: string | null;
+  selectedEdges: string[];
   view: { x: number, y: number, zoom: number };
   setView: React.Dispatch<React.SetStateAction<{ x: number, y: number, zoom: number }>>;
   containerRef: React.RefObject<HTMLDivElement>;
@@ -404,7 +404,7 @@ function ActualMesh({ mesh, showMesh }: { mesh: any, showMesh: boolean }) {
 function SceneContent({ 
   mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, 
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu, 
-  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedEdge, 
+  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedEdges, 
   softSelectionEnabled, softSelectionRadius,
   setView, containerRef 
 }: any) {
@@ -455,7 +455,7 @@ function SceneContent({
                 renderOrder={1000}
               >
                 <sphereGeometry args={[isAnchor ? 8 : 5, 16, 16]} />
-                <meshStandardMaterial color={selectedEdge === edge.id ? "#ef4444" : "#fbbf24"} depthTest={false} depthWrite={false} transparent />
+                <meshStandardMaterial color={selectedEdges.includes(edge.id) ? "#ef4444" : "#fbbf24"} depthTest={false} depthWrite={false} transparent />
               </mesh>
             );
           })
@@ -483,7 +483,7 @@ export default function ThreeScene({
     nodes, edges, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
     setNodes, setEdges, 
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
-    isDragging, draggingPoint, selectedNode, selectedEdge,
+    isDragging, draggingPoint, selectedNode, selectedEdges,
     softSelectionEnabled, softSelectionRadius,
     view, setView, containerRef 
 }: ThreeSceneProps & { draggingPoint: Point | null, laneWidth: number }) {
@@ -526,7 +526,7 @@ export default function ThreeScene({
           isDragging={isDragging}
           draggingPoint={draggingPoint}
           selectedNode={selectedNode}
-          selectedEdge={selectedEdge}
+          selectedEdges={selectedEdges}
           initialCameraParams={initialCameraParams}
           softSelectionEnabled={softSelectionEnabled}
           softSelectionRadius={softSelectionRadius}
