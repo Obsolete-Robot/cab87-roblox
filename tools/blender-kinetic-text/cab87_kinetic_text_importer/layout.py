@@ -27,6 +27,8 @@ class TimingWord:
 	start: float
 	end: float
 	break_after: bool = False
+	color: str | None = None
+	color_override: bool = False
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,8 @@ class TimingDocument:
 	duration: float
 	text: str
 	words: tuple[TimingWord, ...]
+	default_color: str | None = None
+	color_swatches: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,8 @@ class LayoutWord:
 	x: float
 	y: float
 	width: float
+	color: str | None = None
+	color_override: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +103,8 @@ def parse_timing_payload(payload: dict[str, Any]) -> TimingDocument:
 	if not isinstance(source_words, list):
 		source_words = []
 
+	default_color = _read_color(_color_value(payload))
+	imported_swatches = [_read_color(color) for color in _color_list_value(payload)]
 	parsed_words: list[TimingWord] = []
 	for raw_word in source_words:
 		if not isinstance(raw_word, dict):
@@ -113,7 +121,20 @@ def parse_timing_payload(payload: dict[str, Any]) -> TimingDocument:
 			raw_word,
 			("breakAfter", "manualBreakAfter", "captionBreakAfter", "forceBreakAfter", "break_after"),
 		)
-		parsed_words.append(TimingWord(source_index=-1, text=text, start=start, end=end, break_after=break_after))
+		color_value = _color_value(raw_word)
+		color_override = _read_bool(raw_word, ("colorOverride", "hasColorOverride", "color_override"), color_value is not None)
+		color = _read_color(color_value, default_color)
+		parsed_words.append(
+			TimingWord(
+				source_index=-1,
+				text=text,
+				start=start,
+				end=end,
+				break_after=break_after,
+				color=color,
+				color_override=color_override,
+			)
+		)
 
 	parsed_words.sort(key=lambda word: (word.start, word.end, word.text))
 	indexed_words = tuple(
@@ -123,9 +144,12 @@ def parse_timing_payload(payload: dict[str, Any]) -> TimingDocument:
 			start=word.start,
 			end=word.end,
 			break_after=word.break_after and index < len(parsed_words) - 1,
+			color=word.color,
+			color_override=word.color_override,
 		)
 		for index, word in enumerate(parsed_words)
 	)
+	color_swatches = _unique_colors([default_color, *imported_swatches, *(word.color for word in indexed_words)])
 
 	duration = max(
 		_read_float(payload.get("duration"), 0.0),
@@ -138,6 +162,8 @@ def parse_timing_payload(payload: dict[str, Any]) -> TimingDocument:
 		duration=duration,
 		text=_clean_text(payload.get("text", " ".join(word.text for word in indexed_words))),
 		words=indexed_words,
+		default_color=default_color,
+		color_swatches=color_swatches,
 	)
 
 
@@ -232,6 +258,8 @@ def _layout_section_words(section_index: int, words: list[TimingWord], options: 
 					x=x,
 					y=y,
 					width=width,
+					color=word.color,
+					color_override=word.color_override,
 				)
 			)
 			cursor += width + options.word_spacing
@@ -290,7 +318,7 @@ def _read_number(payload: dict[str, Any], keys: tuple[str, ...], fallback: float
 	return fallback
 
 
-def _read_bool(payload: dict[str, Any], keys: tuple[str, ...]) -> bool:
+def _read_bool(payload: dict[str, Any], keys: tuple[str, ...], fallback: bool = False) -> bool:
 	for key in keys:
 		if key not in payload:
 			continue
@@ -300,7 +328,77 @@ def _read_bool(payload: dict[str, Any], keys: tuple[str, ...]) -> bool:
 		if isinstance(value, str):
 			return value.strip().lower() in {"1", "true", "yes", "on"}
 		return bool(value)
-	return False
+	return fallback
+
+
+def _color_value(payload: dict[str, Any]) -> Any:
+	if not isinstance(payload, dict):
+		return None
+	if "defaultColor" in payload:
+		return payload.get("defaultColor")
+	if "textColor" in payload:
+		return payload.get("textColor")
+	if "color" in payload:
+		return payload.get("color")
+	if "fillColor" in payload:
+		return payload.get("fillColor")
+	if "hexColor" in payload:
+		return payload.get("hexColor")
+	colors = payload.get("colors")
+	if isinstance(colors, dict):
+		return colors.get("default") or colors.get("text")
+	return None
+
+
+def _color_list_value(payload: dict[str, Any]) -> list[Any]:
+	if not isinstance(payload, dict):
+		return []
+	if isinstance(payload.get("customColors"), list):
+		return payload.get("customColors")
+	colors = payload.get("colors")
+	if isinstance(colors, dict) and isinstance(colors.get("swatches"), list):
+		return colors.get("swatches")
+	return []
+
+
+def _read_color(value: Any, fallback: str | None = None) -> str | None:
+	if isinstance(value, str):
+		text = value.strip()
+		if len(text) in {3, 6}:
+			text = f"#{text}"
+		if len(text) == 4 and text.startswith("#"):
+			return f"#{text[1] * 2}{text[2] * 2}{text[3] * 2}".lower()
+		if len(text) == 7 and text.startswith("#"):
+			try:
+				int(text[1:], 16)
+			except ValueError:
+				return fallback
+			return text.lower()
+
+	if isinstance(value, (list, tuple)) and len(value) >= 3:
+		channels = []
+		for raw_channel in value[:3]:
+			try:
+				channel = float(raw_channel)
+			except (TypeError, ValueError):
+				return fallback
+			byte = round(channel * 255) if channel <= 1 else round(channel)
+			channels.append(max(0, min(255, byte)))
+		return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+	if isinstance(value, dict):
+		return _read_color(value.get("hex") or value.get("value") or value.get("color"), fallback)
+
+	return fallback
+
+
+def _unique_colors(values: Iterable[str | None]) -> tuple[str, ...]:
+	colors: list[str] = []
+	for value in values:
+		color = _read_color(value)
+		if color and color not in colors:
+			colors.append(color)
+	return tuple(colors)
 
 
 def _read_float(value: Any, fallback: float) -> float:

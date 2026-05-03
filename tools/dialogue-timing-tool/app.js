@@ -1,9 +1,14 @@
+const DEFAULT_TEXT_COLOR = "#ffdb38";
+
 const state = {
 	file: null,
+	audioPath: "",
 	audioUrl: "",
 	audioBuffer: null,
 	duration: 0,
 	result: null,
+	defaultColor: DEFAULT_TEXT_COLOR,
+	customColors: [DEFAULT_TEXT_COLOR],
 	words: [],
 	segments: [],
 	activeIndex: -1,
@@ -23,6 +28,9 @@ const els = {
 	playPauseButton: document.getElementById("playPauseButton"),
 	transcribeButton: document.getElementById("transcribeButton"),
 	autoBreakButton: document.getElementById("autoBreakButton"),
+	defaultColorInput: document.getElementById("defaultColorInput"),
+	defaultColorHexInput: document.getElementById("defaultColorHexInput"),
+	defaultColorPalette: document.getElementById("defaultColorPalette"),
 	sidebarToggleButton: document.getElementById("sidebarToggleButton"),
 	clearButton: document.getElementById("clearButton"),
 	engineInput: document.getElementById("engineInput"),
@@ -125,6 +133,143 @@ function parseClock(value) {
 	return parts[0] || 0;
 }
 
+function normalizeHexColor(value, fallback = DEFAULT_TEXT_COLOR) {
+	const text = String(value || "").trim();
+	const shortMatch = text.match(/^#?([0-9a-fA-F]{3})$/);
+	if (shortMatch) {
+		const [r, g, b] = shortMatch[1].split("");
+		return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+	}
+
+	const longMatch = text.match(/^#?([0-9a-fA-F]{6})$/);
+	if (longMatch) {
+		return `#${longMatch[1]}`.toLowerCase();
+	}
+
+	if (Array.isArray(value) && value.length >= 3) {
+		const channels = value.slice(0, 3).map((channel) => Number(channel));
+		if (channels.every((channel) => Number.isFinite(channel))) {
+			const normalized = channels.map((channel) => {
+				const byte = channel <= 1 ? Math.round(channel * 255) : Math.round(channel);
+				return Math.max(0, Math.min(255, byte)).toString(16).padStart(2, "0");
+			});
+			return `#${normalized.join("")}`;
+		}
+	}
+
+	if (value && typeof value === "object") {
+		return normalizeHexColor(value.hex ?? value.value ?? value.color, fallback);
+	}
+
+	return fallback;
+}
+
+function colorPayloadValue(payload) {
+	if (!payload || typeof payload !== "object") {
+		return null;
+	}
+	if (payload.defaultColor !== undefined) {
+		return payload.defaultColor;
+	}
+	if (payload.textColor !== undefined) {
+		return payload.textColor;
+	}
+	if (payload.color !== undefined) {
+		return payload.color;
+	}
+	if (payload.colors && typeof payload.colors === "object") {
+		return payload.colors.default ?? payload.colors.text ?? null;
+	}
+	return null;
+}
+
+function wordColorValue(word) {
+	return word.color ?? word.textColor ?? word.fillColor ?? word.hexColor ?? null;
+}
+
+function colorListPayloadValue(payload) {
+	if (!payload || typeof payload !== "object") {
+		return [];
+	}
+	if (Array.isArray(payload.customColors)) {
+		return payload.customColors;
+	}
+	if (payload.colors && typeof payload.colors === "object" && Array.isArray(payload.colors.swatches)) {
+		return payload.colors.swatches;
+	}
+	return [];
+}
+
+function readBoolean(value, fallback = false) {
+	if (value === undefined || value === null) {
+		return fallback;
+	}
+	if (typeof value === "boolean") {
+		return value;
+	}
+	if (typeof value === "string") {
+		return value.trim().toLowerCase() === "true";
+	}
+	return Boolean(value);
+}
+
+function effectiveWordColor(word) {
+	return normalizeHexColor(word?.colorOverride ? word.color : state.defaultColor, state.defaultColor);
+}
+
+function rememberCustomColor(value) {
+	const color = normalizeHexColor(value, null);
+	if (!color) {
+		return null;
+	}
+
+	if (!state.customColors.includes(color)) {
+		state.customColors.push(color);
+	}
+	return color;
+}
+
+function colorPalette() {
+	const colors = [state.defaultColor, ...state.customColors];
+	for (const word of state.words) {
+		if (word.colorOverride) {
+			colors.push(word.color);
+		}
+	}
+
+	const normalized = [];
+	for (const color of colors) {
+		const safeColor = normalizeHexColor(color, null);
+		if (safeColor && !normalized.includes(safeColor)) {
+			normalized.push(safeColor);
+		}
+	}
+	return normalized;
+}
+
+function renderColorPalette(container, activeColor, onSelect) {
+	container.textContent = "";
+	for (const color of colorPalette()) {
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = "color-swatch-button";
+		button.style.background = color;
+		button.title = color;
+		button.setAttribute("aria-label", `Use ${color}`);
+		if (color === activeColor) {
+			button.classList.add("active");
+		}
+		button.addEventListener("click", () => onSelect(color));
+		container.append(button);
+	}
+}
+
+function syncDefaultColorControls() {
+	els.defaultColorInput.value = state.defaultColor;
+	els.defaultColorHexInput.value = state.defaultColor;
+	renderColorPalette(els.defaultColorPalette, state.defaultColor, updateDefaultColor);
+}
+
 function setStatus(message, tone = "") {
 	els.statusText.textContent = message;
 	els.statusText.className = `status-text ${tone}`.trim();
@@ -156,8 +301,11 @@ function redrawAfterLayoutChange() {
 function setSidebarCollapsed(isCollapsed) {
 	state.sidebarCollapsed = isCollapsed;
 	document.body.classList.toggle("sidebar-collapsed", isCollapsed);
-	els.sidebarToggleButton.textContent = isCollapsed ? "Show Sidebar" : "Hide Sidebar";
+	const label = isCollapsed ? "Show sidebar" : "Hide sidebar";
+	els.sidebarToggleButton.textContent = isCollapsed ? "Show" : "Hide";
+	els.sidebarToggleButton.setAttribute("aria-label", label);
 	els.sidebarToggleButton.setAttribute("aria-expanded", String(!isCollapsed));
+	els.sidebarToggleButton.title = label;
 	storeSidebarState(isCollapsed);
 	redrawAfterLayoutChange();
 }
@@ -202,6 +350,8 @@ function renumberWords() {
 	state.words.forEach((word, index) => {
 		word.id = index + 1;
 		word.breakAfter = Boolean(word.breakAfter) && index < state.words.length - 1;
+		word.color = normalizeHexColor(word.color, state.defaultColor);
+		word.colorOverride = Boolean(word.colorOverride);
 	});
 }
 
@@ -465,6 +615,7 @@ function renderPreview() {
 			chip.type = "button";
 			chip.className = "word-chip";
 			chip.dataset.wordIndex = String(item.index);
+			chip.style.setProperty("--word-color", effectiveWordColor(item.word));
 			chip.textContent = item.word.word;
 			chip.title = `${secondsToClock(item.word.start)} - ${secondsToClock(item.word.end)}`;
 			chip.addEventListener("click", () => selectWord(item.index));
@@ -484,7 +635,7 @@ function renderTable() {
 	if (!state.words.length) {
 		const row = document.createElement("tr");
 		const cell = document.createElement("td");
-		cell.colSpan = 6;
+		cell.colSpan = 7;
 		cell.className = "empty-cell";
 		cell.textContent = "No transcript loaded.";
 		row.append(cell);
@@ -550,6 +701,8 @@ function renderTable() {
 		timecodeCell.className = "timecode-cell";
 		timecodeCell.textContent = `${secondsToTimecode(word.start, fps)} - ${secondsToTimecode(word.end, fps)}`;
 
+		const colorCell = createWordColorCell(word, index);
+
 		const actionsCell = document.createElement("td");
 		actionsCell.className = "actions-cell";
 		const splitButton = document.createElement("button");
@@ -584,7 +737,7 @@ function renderTable() {
 
 		actionsCell.append(splitButton, breakButton, deleteButton);
 
-		row.append(numberCell, wordCell, startCell, endCell, timecodeCell, actionsCell);
+		row.append(numberCell, wordCell, startCell, endCell, timecodeCell, colorCell, actionsCell);
 		fragment.append(row);
 
 		if (word.breakAfter && index < state.words.length - 1) {
@@ -622,6 +775,9 @@ function createBreakEntryRow(index, fps) {
 	timecodeCell.className = "timecode-cell";
 	timecodeCell.textContent = `${secondsToTimecode(word.end, fps)} - ${secondsToTimecode(nextWord.start, fps)}`;
 
+	const colorCell = document.createElement("td");
+	colorCell.className = "break-entry-color";
+
 	const actionsCell = document.createElement("td");
 	actionsCell.className = "actions-cell";
 	const button = document.createElement("button");
@@ -632,8 +788,108 @@ function createBreakEntryRow(index, fps) {
 	button.addEventListener("click", () => toggleBreakAfter(index));
 	actionsCell.append(button);
 
-	row.append(numberCell, labelCell, startCell, endCell, timecodeCell, actionsCell);
+	row.append(numberCell, labelCell, startCell, endCell, timecodeCell, colorCell, actionsCell);
 	return row;
+}
+
+function createWordColorCell(word, index) {
+	const cell = document.createElement("td");
+	cell.className = "color-cell";
+
+	const control = document.createElement("div");
+	control.className = "word-color-control";
+
+	const inputs = document.createElement("div");
+	inputs.className = "word-color-inputs";
+
+	const overrideLabel = document.createElement("label");
+	overrideLabel.className = "color-override-control";
+
+	const checkbox = document.createElement("input");
+	checkbox.type = "checkbox";
+	checkbox.checked = Boolean(word.colorOverride);
+	checkbox.title = `Use a custom color for "${word.word}"`;
+
+	const text = document.createElement("span");
+	text.textContent = "Override";
+
+	overrideLabel.append(checkbox, text);
+
+	const picker = document.createElement("input");
+	picker.type = "color";
+	picker.className = "word-color-picker";
+	picker.value = normalizeHexColor(word.color, state.defaultColor);
+	picker.disabled = !word.colorOverride;
+	picker.title = `Color for "${word.word}"`;
+
+	const hexInput = document.createElement("input");
+	hexInput.type = "text";
+	hexInput.className = "word-color-hex-input";
+	hexInput.value = normalizeHexColor(word.color, state.defaultColor);
+	hexInput.maxLength = 7;
+	hexInput.spellcheck = false;
+	hexInput.disabled = !word.colorOverride;
+	hexInput.title = `Hex color for "${word.word}"`;
+
+	const swatch = document.createElement("span");
+	swatch.className = "color-swatch";
+	swatch.style.background = effectiveWordColor(word);
+
+	const palette = document.createElement("div");
+	palette.className = "color-palette word-color-palette";
+
+	const applyColor = (value, forceOverride = true) => {
+		const color = rememberCustomColor(value);
+		if (!color) {
+			setStatus("Enter a color as #RRGGBB or #RGB.", "warning");
+			hexInput.value = normalizeHexColor(word.color, state.defaultColor);
+			return;
+		}
+
+		word.color = color;
+		if (forceOverride) {
+			word.colorOverride = true;
+		}
+		checkbox.checked = word.colorOverride;
+		picker.value = color;
+		hexInput.value = color;
+		picker.disabled = !word.colorOverride;
+		hexInput.disabled = !word.colorOverride;
+		swatch.style.background = effectiveWordColor(word);
+		syncDefaultColorControls();
+		renderPreview();
+		renderTable();
+		selectWord(index, false);
+	};
+
+	checkbox.addEventListener("change", () => {
+		word.colorOverride = checkbox.checked;
+		if (word.colorOverride) {
+			applyColor(hexInput.value, true);
+			return;
+		}
+		picker.disabled = !word.colorOverride;
+		hexInput.disabled = !word.colorOverride;
+		swatch.style.background = effectiveWordColor(word);
+		renderPreview();
+		renderTable();
+		selectWord(index, false);
+	});
+
+	picker.addEventListener("input", () => applyColor(picker.value));
+	hexInput.addEventListener("change", () => applyColor(hexInput.value));
+	hexInput.addEventListener("keydown", (event) => {
+		if (event.key === "Enter") {
+			event.preventDefault();
+			applyColor(hexInput.value);
+		}
+	});
+
+	inputs.append(overrideLabel, picker, hexInput, swatch);
+	renderColorPalette(palette, effectiveWordColor(word), (color) => applyColor(color));
+	control.append(inputs, palette);
+	cell.append(control);
+	return cell;
 }
 
 function renderAll(resetSelection = true) {
@@ -688,7 +944,7 @@ async function decodeAudio(file) {
 	drawWaveform();
 }
 
-async function loadAudioFile(file) {
+async function loadAudioFile(file, options = {}) {
 	if (!file) {
 		return;
 	}
@@ -698,6 +954,7 @@ async function loadAudioFile(file) {
 	}
 
 	state.file = file;
+	state.audioPath = String(options.path || audioPathForFile(file) || state.audioPath || "").trim();
 	state.audioUrl = URL.createObjectURL(file);
 	els.audioPlayer.src = state.audioUrl;
 	els.fileMeta.textContent = `${file.name} - ${formatBytes(file.size)}`;
@@ -705,6 +962,17 @@ async function loadAudioFile(file) {
 	updatePlayButton();
 	setStatus("Audio loaded.");
 	await decodeAudio(file);
+}
+
+function audioPathForFile(file) {
+	if (!file) {
+		return "";
+	}
+	return String(file.path || file.webkitRelativePath || file.name || "").trim();
+}
+
+function currentAudioPath() {
+	return state.audioPath || audioPathForFile(state.file) || "";
 }
 
 function formatBytes(bytes) {
@@ -717,61 +985,153 @@ function formatBytes(bytes) {
 	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function readFileAsDataUrl(file) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.addEventListener("load", () => resolve(String(reader.result || "")));
-		reader.addEventListener("error", () => reject(reader.error || new Error("Could not read audio clip.")));
-		reader.readAsDataURL(file);
-	});
-}
-
-async function buildEmbeddedAudio() {
-	if (!state.file) {
-		return null;
+function findAudioReference(payload) {
+	const path =
+		payload?.audioPath ??
+		payload?.audioFilePath ??
+		payload?.sourceAudioPath ??
+		payload?.sourceFilePath ??
+		null;
+	if (typeof path === "string" && path.trim()) {
+		return { path: path.trim() };
 	}
 
-	return {
-		name: state.file.name,
-		type: state.file.type || "application/octet-stream",
-		size: state.file.size,
-		lastModified: state.file.lastModified || null,
-		dataUrl: await readFileAsDataUrl(state.file),
-	};
-}
-
-function findEmbeddedAudio(payload) {
 	const candidate = payload?.audio ?? payload?.audioClip ?? payload?.sourceAudio ?? payload?.embeddedAudio;
 	if (typeof candidate === "string") {
-		return { dataUrl: candidate };
+		const value = candidate.trim();
+		if (value && !value.startsWith("data:")) {
+			return { path: value };
+		}
+		return null;
 	}
 	if (candidate && typeof candidate === "object" && typeof candidate.dataUrl === "string") {
-		return candidate;
+		const candidatePath = audioPathFromReference(candidate);
+		return candidatePath ? { path: candidatePath } : null;
+	}
+	if (candidate && typeof candidate === "object") {
+		const candidatePath = candidate.path ?? candidate.filePath ?? candidate.url ?? candidate.href;
+		if (typeof candidatePath === "string" && candidatePath.trim()) {
+			return {
+				...candidate,
+				path: candidatePath.trim(),
+			};
+		}
 	}
 	return null;
 }
 
-async function loadEmbeddedAudio(payload) {
-	const audio = findEmbeddedAudio(payload);
-	if (!audio) {
+function stripEmbeddedAudioFromPayload(payload) {
+	if (!payload || typeof payload !== "object") {
 		return false;
 	}
 
-	const response = await fetch(audio.dataUrl);
+	let stripped = false;
+	for (const key of ["audio", "audioClip", "sourceAudio", "embeddedAudio"]) {
+		const value = payload[key];
+		if (!hasEmbeddedAudioData(value)) {
+			continue;
+		}
+
+		const audioPath = audioPathFromReference(value);
+		if (audioPath) {
+			payload[key] = { path: audioPath };
+		} else {
+			delete payload[key];
+		}
+		stripped = true;
+	}
+
+	return stripped;
+}
+
+function hasEmbeddedAudioData(value) {
+	if (typeof value === "string") {
+		return value.trim().startsWith("data:");
+	}
+	if (!value || typeof value !== "object") {
+		return false;
+	}
+	return ["dataUrl", "dataURL", "base64", "data", "blob"].some((key) => typeof value[key] === "string" && value[key].length > 0);
+}
+
+function audioPathFromReference(value) {
+	if (!value || typeof value !== "object") {
+		return "";
+	}
+	const candidate = value.path ?? value.filePath ?? value.url ?? value.href;
+	return typeof candidate === "string" && !candidate.trim().startsWith("data:") ? candidate.trim() : "";
+}
+
+function setAudioReferenceOnly(audio) {
+	if (state.audioUrl) {
+		URL.revokeObjectURL(state.audioUrl);
+	}
+
+	state.file = null;
+	state.audioUrl = "";
+	state.audioBuffer = null;
+	state.audioPath = String(audio.path || "").trim();
+	els.audioPlayer.removeAttribute("src");
+	els.audioPlayer.load();
+	els.transcribeButton.disabled = true;
+	els.fileMeta.textContent = `${audio.name || state.audioPath} - referenced path`;
+	updatePlayButton();
+	drawWaveform();
+}
+
+function audioReferenceFetchUrl(audio) {
+	const path = String(audio.path || "").trim();
+	if (!path) {
+		return "";
+	}
+	if (/^https?:\/\//i.test(path)) {
+		return path;
+	}
+	return `/api/audio-file?path=${encodeURIComponent(path)}`;
+}
+
+async function loadReferencedAudio(payload) {
+	const audio = findAudioReference(payload);
+	if (!audio) {
+		return { loaded: false, message: "", tone: "" };
+	}
+
+	const path = String(audio.path || "").trim();
+	if (!path) {
+		return { loaded: false, message: "", tone: "" };
+	}
+
+	let response;
+	try {
+		response = await fetch(audioReferenceFetchUrl(audio));
+	} catch {
+		setAudioReferenceOnly(audio);
+		return {
+			loaded: false,
+			message: " Audio path imported, but the file could not be loaded automatically.",
+			tone: "warning",
+		};
+	}
+
 	if (!response.ok) {
-		throw new Error("Embedded audio could not be decoded.");
+		setAudioReferenceOnly(audio);
+		return {
+			loaded: false,
+			message: " Audio path imported, but the file could not be loaded automatically.",
+			tone: "warning",
+		};
 	}
 
 	const blob = await response.blob();
-	const name = String(audio.name || payload.sourceFile || "dialogue-audio").trim();
+	const name = String(audio.name || path.split(/[\\/]/).pop() || payload.sourceFile || "dialogue-audio").trim();
 	const type = String(audio.type || blob.type || "application/octet-stream").trim();
 	const file = new File([blob], name, {
 		type,
 		lastModified: Number(audio.lastModified) || Date.now(),
 	});
 
-	await loadAudioFile(file);
-	return true;
+	await loadAudioFile(file, { path });
+	return { loaded: true, message: " Audio loaded from path.", tone: "" };
 }
 
 async function transcribe() {
@@ -818,6 +1178,8 @@ function normalizeImportedWords(input) {
 		.map((word, index) => {
 			const start = Number(word.start ?? word.startSeconds ?? word.start_time ?? word.startTime ?? 0);
 			const end = Number(word.end ?? word.endSeconds ?? word.end_time ?? word.endTime ?? start);
+			const importedColor = wordColorValue(word);
+			const hasExplicitOverride = word.colorOverride !== undefined || word.hasColorOverride !== undefined;
 			return {
 				id: Number(word.id || index + 1),
 				word: String(word.word ?? word.text ?? "").trim(),
@@ -828,6 +1190,10 @@ function normalizeImportedWords(input) {
 				breakAfter: Boolean(
 					word.breakAfter ?? word.manualBreakAfter ?? word.captionBreakAfter ?? word.forceBreakAfter,
 				),
+				color: normalizeHexColor(importedColor, state.defaultColor),
+				colorOverride: hasExplicitOverride
+					? readBoolean(word.colorOverride ?? word.hasColorOverride)
+					: importedColor !== null,
 			};
 		})
 		.filter((word) => word.word.length > 0);
@@ -853,10 +1219,22 @@ function normalizeImportedSegments(input) {
 
 function loadResult(payload) {
 	state.result = payload;
+	state.defaultColor = normalizeHexColor(colorPayloadValue(payload), state.defaultColor);
+	state.customColors = [DEFAULT_TEXT_COLOR];
+	for (const color of colorListPayloadValue(payload)) {
+		rememberCustomColor(color);
+	}
+	rememberCustomColor(state.defaultColor);
 	state.words = normalizeImportedWords(payload);
+	for (const word of state.words) {
+		if (word.colorOverride) {
+			rememberCustomColor(word.color);
+		}
+	}
 	state.segments = normalizeImportedSegments(payload);
 	state.duration = Number(payload.duration) || state.duration;
 	renumberWords();
+	syncDefaultColorControls();
 	renderAll();
 }
 
@@ -1043,6 +1421,22 @@ function autoBreakIndices(words) {
 	return breakIndices;
 }
 
+function updateDefaultColor(value) {
+	const color = rememberCustomColor(value);
+	if (!color) {
+		setStatus("Enter the overall color as #RRGGBB or #RGB.", "warning");
+		syncDefaultColorControls();
+		return;
+	}
+	state.defaultColor = color;
+	syncDefaultColorControls();
+	renderPreview();
+	renderTable();
+	if (state.selectedIndex >= 0) {
+		selectWord(state.selectedIndex, false);
+	}
+}
+
 function deleteWord(index) {
 	const removedWord = state.words[index];
 	if (!removedWord) {
@@ -1074,16 +1468,14 @@ async function importJson(file) {
 
 	try {
 		const payload = JSON.parse(await file.text());
-		let restoredAudio = false;
-		let audioWarning = "";
-		try {
-			restoredAudio = await loadEmbeddedAudio(payload);
-		} catch (error) {
-			audioWarning = ` Embedded audio could not be restored: ${error.message}`;
-		}
+		const strippedEmbeddedAudio = stripEmbeddedAudioFromPayload(payload);
 		loadResult(payload);
-		const audioStatus = restoredAudio ? " Embedded audio restored." : audioWarning;
-		setStatus(`Imported ${state.words.length} timed words from JSON.${audioStatus}`, audioWarning ? "warning" : "");
+		const audioStatus = await loadReferencedAudio(payload);
+		const stripStatus = strippedEmbeddedAudio ? " Embedded audio was culled." : "";
+		setStatus(
+			`Imported ${state.words.length} timed words from JSON.${stripStatus}${audioStatus.message}`,
+			audioStatus.tone,
+		);
 	} catch (error) {
 		setStatus(`Could not import JSON: ${error.message}`, "error");
 	}
@@ -1135,12 +1527,15 @@ function buildCaptionCues(words) {
 
 async function exportKineticJson() {
 	const fps = Number(els.fpsInput.value);
+	const audioPath = currentAudioPath();
 	return {
 		schema: "cab87-dialogue-timing",
 		version: 1,
 		fps,
-		sourceFile: state.file?.name || null,
-		audio: await buildEmbeddedAudio(),
+		sourceFile: state.file?.name || audioPath.split(/[\\/]/).pop() || null,
+		audioPath: audioPath || null,
+		defaultColor: state.defaultColor,
+		customColors: colorPalette(),
 		duration: getDuration(),
 		text: state.words.map((word) => word.word).join(" "),
 		words: state.words.map((word, index) => ({
@@ -1153,6 +1548,8 @@ async function exportKineticJson() {
 			timecodeIn: secondsToTimecode(word.start, fps),
 			timecodeOut: secondsToTimecode(word.end, fps),
 			breakAfter: Boolean(word.breakAfter),
+			color: effectiveWordColor(word),
+			colorOverride: Boolean(word.colorOverride),
 		})),
 		cues: buildCaptionCues(state.words).map((cue, index) => ({
 			index: index + 1,
@@ -1178,6 +1575,8 @@ function exportCsv() {
 			"timecode_in",
 			"timecode_out",
 			"break_after",
+			"color",
+			"color_override",
 		],
 	];
 	for (const [index, word] of state.words.entries()) {
@@ -1191,6 +1590,8 @@ function exportCsv() {
 			secondsToTimecode(word.start, fps),
 			secondsToTimecode(word.end, fps),
 			word.breakAfter ? "true" : "false",
+			effectiveWordColor(word),
+			word.colorOverride ? "true" : "false",
 		]);
 	}
 
@@ -1244,11 +1645,11 @@ async function handleExport(kind) {
 		return;
 	}
 
-	const stem = (state.file?.name || "dialogue").replace(/\.[^.]+$/, "");
+	const stem = (state.file?.name || currentAudioPath().split(/[\\/]/).pop() || "dialogue").replace(/\.[^.]+$/, "");
 	if (kind === "json") {
-		setStatus(state.file ? "Preparing kinetic JSON with embedded audio..." : "Preparing kinetic JSON...");
+		setStatus(currentAudioPath() ? "Preparing kinetic JSON with audio path..." : "Preparing kinetic JSON...");
 		downloadText(`${stem}-timing.json`, JSON.stringify(await exportKineticJson(), null, 2), "application/json");
-		setStatus(`Exported kinetic JSON${state.file ? " with embedded audio" : ""}.`);
+		setStatus(`Exported kinetic JSON${currentAudioPath() ? " with audio path" : ""}.`);
 	}
 	if (kind === "csv") {
 		downloadText(`${stem}-timing.csv`, exportCsv(), "text/csv");
@@ -1338,10 +1739,13 @@ function resetTool() {
 	}
 
 	state.file = null;
+	state.audioPath = "";
 	state.audioUrl = "";
 	state.audioBuffer = null;
 	state.duration = 0;
 	state.result = null;
+	state.defaultColor = DEFAULT_TEXT_COLOR;
+	state.customColors = [DEFAULT_TEXT_COLOR];
 	state.words = [];
 	state.segments = [];
 	state.activeIndex = -1;
@@ -1353,6 +1757,7 @@ function resetTool() {
 	els.audioPlayer.removeAttribute("src");
 	els.audioPlayer.load();
 	els.fileMeta.textContent = "mp3, m4a, wav, webm, mp4";
+	syncDefaultColorControls();
 	els.transcribeButton.disabled = true;
 	updatePlayButton();
 	setStatus("Waiting for an audio clip.");
@@ -1383,6 +1788,14 @@ els.dropZone.addEventListener("drop", (event) => {
 
 els.transcribeButton.addEventListener("click", transcribe);
 els.autoBreakButton.addEventListener("click", autoBreakWords);
+els.defaultColorInput.addEventListener("input", () => updateDefaultColor(els.defaultColorInput.value));
+els.defaultColorHexInput.addEventListener("change", () => updateDefaultColor(els.defaultColorHexInput.value));
+els.defaultColorHexInput.addEventListener("keydown", (event) => {
+	if (event.key === "Enter") {
+		event.preventDefault();
+		updateDefaultColor(els.defaultColorHexInput.value);
+	}
+});
 els.playPauseButton.addEventListener("click", () => {
 	togglePlayback().catch((error) => setStatus(`Playback failed: ${error.message}`, "error"));
 });
@@ -1444,4 +1857,5 @@ for (const button of els.borrowButtons) {
 window.addEventListener("resize", drawWaveform);
 
 setSidebarCollapsed(readStoredSidebarState());
+syncDefaultColorControls();
 renderAll();

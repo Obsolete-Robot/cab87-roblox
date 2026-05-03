@@ -23,59 +23,61 @@
 						<option value="60">60</option>
 					</select>
 				</label>
-				<button id="sidebarToggleButton" type="button" class="secondary sidebar-toggle" aria-controls="transcriptionPanel" aria-expanded="true">
-					Hide Sidebar
-				</button>
 				<button id="clearButton" type="button" class="secondary">Clear</button>
 			</div>
 		</header>
 
 		<main class="app-shell">
-			<section id="transcriptionPanel" class="left-panel" aria-label="Transcription setup">
-				<label id="dropZone" class="drop-zone" for="audioInput">
-					<input id="audioInput" type="file" accept="audio/*,video/mp4,video/webm,video/quicktime">
-					<span class="drop-title">Choose audio</span>
-					<span id="fileMeta" class="drop-meta">mp3, m4a, wav, webm, mp4</span>
-				</label>
-
-				<audio id="audioPlayer" class="audio-player" controls></audio>
-
-				<div class="settings-grid">
-					<label class="control-group">
-						<span>Engine</span>
-						<select id="engineInput">
-							<option value="openai-whisper" selected>OpenAI Whisper word timing</option>
-						</select>
+			<div class="sidebar-region">
+				<button id="sidebarToggleButton" type="button" class="sidebar-toggle-tab" aria-controls="transcriptionPanel" aria-expanded="true" aria-label="Hide sidebar" title="Hide sidebar">
+					Hide
+				</button>
+				<section id="transcriptionPanel" class="left-panel" aria-label="Transcription setup">
+					<label id="dropZone" class="drop-zone" for="audioInput">
+						<input id="audioInput" type="file" accept="audio/*,video/mp4,video/webm,video/quicktime">
+						<span class="drop-title">Choose audio</span>
+						<span id="fileMeta" class="drop-meta">mp3, m4a, wav, webm, mp4</span>
 					</label>
-					<label class="control-group">
-						<span>Language</span>
-						<input id="languageInput" type="text" placeholder="optional ISO code">
-					</label>
-				</div>
 
-				<label class="control-group">
-					<span>Prompt</span>
-					<textarea id="promptInput" rows="4" placeholder="Names, slang, or setting context"></textarea>
-				</label>
+					<audio id="audioPlayer" class="audio-player" controls></audio>
 
-				<div class="action-row">
-					<button id="transcribeButton" type="button" class="primary" disabled>Transcribe</button>
-					<button id="importButton" type="button" class="secondary">Import JSON</button>
-					<input id="jsonInput" type="file" accept="application/json,.json">
-				</div>
-
-				<p id="statusText" class="status-text">Waiting for an audio clip.</p>
-
-				<div class="export-panel">
-					<h2>Exports</h2>
-					<div class="export-grid">
-						<button type="button" data-export="json" disabled>Kinetic JSON</button>
-						<button type="button" data-export="csv" disabled>CSV</button>
-						<button type="button" data-export="vtt" disabled>VTT</button>
-						<button type="button" data-export="srt" disabled>SRT</button>
+					<div class="settings-grid">
+						<label class="control-group">
+							<span>Engine</span>
+							<select id="engineInput">
+								<option value="openai-whisper" selected>OpenAI Whisper word timing</option>
+							</select>
+						</label>
+						<label class="control-group">
+							<span>Language</span>
+							<input id="languageInput" type="text" placeholder="optional ISO code">
+						</label>
 					</div>
-				</div>
-			</section>
+
+					<label class="control-group">
+						<span>Prompt</span>
+						<textarea id="promptInput" rows="4" placeholder="Names, slang, or setting context"></textarea>
+					</label>
+
+					<div class="action-row">
+						<button id="transcribeButton" type="button" class="primary" disabled>Transcribe</button>
+						<button id="importButton" type="button" class="secondary">Import JSON</button>
+						<input id="jsonInput" type="file" accept="application/json,.json">
+					</div>
+
+					<p id="statusText" class="status-text">Waiting for an audio clip.</p>
+
+					<div class="export-panel">
+						<h2>Exports</h2>
+						<div class="export-grid">
+							<button type="button" data-export="json" disabled>Kinetic JSON</button>
+							<button type="button" data-export="csv" disabled>CSV</button>
+							<button type="button" data-export="vtt" disabled>VTT</button>
+							<button type="button" data-export="srt" disabled>SRT</button>
+						</div>
+					</div>
+				</section>
+			</div>
 
 			<section class="workspace" aria-label="Timing workspace">
 				<div class="waveform-panel">
@@ -110,6 +112,12 @@
 					<div class="table-toolbar">
 						<h2>Word Timing</h2>
 						<div class="timing-actions">
+							<div class="overall-color-control">
+								<span>Color</span>
+								<input id="defaultColorInput" type="color" value="#ffdb38">
+								<input id="defaultColorHexInput" class="color-hex-input" type="text" value="#ffdb38" maxlength="7" spellcheck="false" aria-label="Overall color hex">
+								<div id="defaultColorPalette" class="color-palette" aria-label="Available colors"></div>
+							</div>
 							<div class="auto-break-action">
 								<button id="autoBreakButton" type="button" class="secondary auto-break-button" disabled>Auto Break</button>
 							</div>
@@ -136,12 +144,13 @@
 									<th>In</th>
 									<th>Out</th>
 									<th>Timecode</th>
+									<th>Color</th>
 									<th>Actions</th>
 								</tr>
 							</thead>
 							<tbody id="wordTableBody">
 								<tr>
-									<td colspan="6" class="empty-cell">No transcript loaded.</td>
+									<td colspan="7" class="empty-cell">No transcript loaded.</td>
 								</tr>
 							</tbody>
 						</table>

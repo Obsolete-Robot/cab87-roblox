@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Kinetic Text Importer",
 	"author": "Cab87",
-	"version": (0, 1, 4),
+	"version": (0, 1, 5),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Kinetic Text",
 	"description": "Import Cab87 dialogue timing JSON and create animated kinetic Text objects.",
@@ -13,7 +13,16 @@ from pathlib import Path
 import re
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import (
+	BoolProperty,
+	CollectionProperty,
+	EnumProperty,
+	FloatProperty,
+	FloatVectorProperty,
+	IntProperty,
+	PointerProperty,
+	StringProperty,
+)
 from bpy.types import Operator, Panel, PropertyGroup
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
@@ -33,6 +42,32 @@ FILL_MODE_ALIASES = {
 	"BOTH": "FULL",
 }
 SETTINGS_FILL_MODES = {"BOTH", "FRONT", "BACK", "NONE"}
+ANIMATION_MODE_ITEMS = (
+	("SCALE_FADE", "Scale + Fade", "Animate both scale and material alpha."),
+	("SCALE", "Scale", "Animate scale only."),
+	("FADE", "Fade", "Animate material alpha only."),
+)
+ANIMATION_MODES = {item[0] for item in ANIMATION_MODE_ITEMS}
+
+
+class CAB87_KineticTextColorRemap(PropertyGroup):
+	source_hex: StringProperty(name="Source HEX", default="")
+	source_color: FloatVectorProperty(
+		name="Source",
+		subtype="COLOR",
+		size=3,
+		min=0.0,
+		max=1.0,
+		default=(1.0, 1.0, 1.0),
+	)
+	target_color: FloatVectorProperty(
+		name="Material",
+		subtype="COLOR",
+		size=3,
+		min=0.0,
+		max=1.0,
+		default=(1.0, 1.0, 1.0),
+	)
 
 
 class CAB87_KineticTextSettings(PropertyGroup):
@@ -77,9 +112,33 @@ class CAB87_KineticTextSettings(PropertyGroup):
 		soft_max=2.0,
 	)
 
+	intro_animation: EnumProperty(name="Start Animation", items=ANIMATION_MODE_ITEMS, default="SCALE_FADE")
+	outro_animation: EnumProperty(name="End Animation", items=ANIMATION_MODE_ITEMS, default="FADE")
 	intro_frames: IntProperty(name="Intro Frames", default=6, min=0, soft_max=60)
 	clear_frames: IntProperty(name="Clear Frames", default=5, min=0, soft_max=60)
-	intro_scale: FloatProperty(name="Intro Scale", default=0.72, min=0.01, soft_max=2.0)
+	intro_scale: FloatProperty(name="Intro Scale", default=0.72, min=0.0, soft_max=2.0)
+	outro_scale: FloatProperty(name="End Scale", default=0.0, min=0.0, soft_max=2.0)
+	intro_overshoot_scale: FloatProperty(
+		name="Overshoot Scale",
+		description="Scale target for start animation overshoot. Set to 1.0 to disable overshoot.",
+		default=1.0,
+		min=1.0,
+		soft_max=2.0,
+	)
+	intro_overshoot_frames: IntProperty(
+		name="Overshoot Frames",
+		description="Frames after the word start frame before hitting the overshoot scale.",
+		default=0,
+		min=0,
+		soft_max=30,
+	)
+	intro_settle_frames: IntProperty(
+		name="Settle Frames",
+		description="Frames after overshoot before settling back to full scale.",
+		default=0,
+		min=0,
+		soft_max=30,
+	)
 
 	font_path: StringProperty(name="Font File", subtype="FILE_PATH")
 	font_size: FloatProperty(name="Font Size", default=1.0, min=0.01, soft_max=20.0)
@@ -91,6 +150,7 @@ class CAB87_KineticTextSettings(PropertyGroup):
 		max=1.0,
 		default=(1.0, 0.86, 0.22, 1.0),
 	)
+	color_remaps: CollectionProperty(type=CAB87_KineticTextColorRemap)
 	bevel_depth: FloatProperty(name="Bevel Depth", default=0.0, min=0.0, soft_max=1.0)
 	bevel_resolution: IntProperty(name="Bevel Resolution", default=0, min=0, soft_max=8)
 	extrude: FloatProperty(name="Extrusion", default=0.0, min=0.0, soft_max=2.0)
@@ -124,6 +184,7 @@ class CAB87_OT_import_kinetic_text(Operator, ImportHelper):
 			document = parse_timing_payload(payload)
 			if not document.words:
 				raise ValueError("The timing JSON has no timed words.")
+			sync_color_remaps_from_document(settings, document)
 
 			if settings.clear_existing:
 				remove_generated_collections()
@@ -162,6 +223,8 @@ class CAB87_OT_apply_kinetic_text_style(Operator):
 			return {"CANCELLED"}
 
 		document = document_from_group(group, word_objects)
+		if len(settings.color_remaps) == 0:
+			sync_color_remaps_from_document(settings, document)
 		fps = resolve_group_fps(context.scene, group, document, settings)
 		layout_document = build_layout(document, layout_options_from_settings(settings))
 		apply_layout_to_existing_group(group, word_objects, layout_document, settings, fps)
@@ -187,6 +250,10 @@ class CAB87_OT_load_kinetic_text_settings(Operator):
 
 		settings = context.scene.cab87_kinetic_text_settings
 		load_group_properties_into_settings(group, settings)
+		if len(settings.color_remaps) == 0:
+			word_objects = collect_word_objects(group)
+			if word_objects:
+				sync_color_remaps_from_document(settings, document_from_group(group, word_objects))
 		context.scene.cab87_kinetic_text_last_group = group.name
 		self.report({"INFO"}, f"Loaded settings from {group.name}.")
 		return {"FINISHED"}
@@ -232,15 +299,33 @@ class CAB87_PT_kinetic_text_panel(Panel):
 
 		box = layout.box()
 		box.label(text="Animation")
+		box.prop(settings, "intro_animation")
 		box.prop(settings, "intro_frames")
+		if animation_uses_scale(settings.intro_animation):
+			box.prop(settings, "intro_scale")
+			box.prop(settings, "intro_overshoot_scale")
+			row = box.row(align=True)
+			row.prop(settings, "intro_overshoot_frames")
+			row.prop(settings, "intro_settle_frames")
+		box.prop(settings, "outro_animation")
 		box.prop(settings, "clear_frames")
-		box.prop(settings, "intro_scale")
+		if animation_uses_scale(settings.outro_animation):
+			box.prop(settings, "outro_scale")
 
 		box = layout.box()
 		box.label(text="Text Style")
 		box.prop(settings, "font_path")
 		box.prop(settings, "font_size")
 		box.prop(settings, "color")
+		if len(settings.color_remaps) > 0:
+			box.label(text="JSON Color Remaps")
+			for remap in settings.color_remaps:
+				row = box.row(align=True)
+				source = row.row(align=True)
+				source.enabled = False
+				source.prop(remap, "source_color", text=remap.source_hex)
+				row.label(text="to")
+				row.prop(remap, "target_color", text="")
 		box.prop(settings, "fill_mode")
 		box.prop(settings, "bevel_depth")
 		box.prop(settings, "bevel_resolution")
@@ -320,7 +405,8 @@ def create_kinetic_text_group(context, layout_document: LayoutDocument, settings
 		obj.location = scaled_location(layout_word, settings)
 		collection.objects.link(obj)
 
-		material = create_word_material(f"{curve.name}_Material", settings)
+		word_color = color_for_layout_word(layout_word, settings)
+		material = create_word_material(f"{curve.name}_Material", settings, word_color)
 		curve.materials.append(material)
 		animate_word_object(obj, material, layout_word, section_starts, settings, fps)
 
@@ -349,7 +435,8 @@ def apply_layout_to_existing_group(group, word_objects, layout_document: LayoutD
 		apply_text_curve_style(obj.data, settings, font)
 		obj.location = scaled_location(layout_word, settings)
 		write_word_properties(obj, layout_word)
-		material = ensure_word_material(obj, settings)
+		word_color = color_for_layout_word(layout_word, settings)
+		material = ensure_word_material(obj, settings, word_color)
 		obj.animation_data_clear()
 		if material:
 			material.animation_data_clear()
@@ -445,24 +532,147 @@ def resolve_settings_fill_mode(fill_mode: str, fallback: str) -> str:
 	return fallback if fallback in SETTINGS_FILL_MODES else "BOTH"
 
 
-def create_word_material(name: str, settings: CAB87_KineticTextSettings):
+def resolve_animation_mode(mode: str, fallback: str) -> str:
+	if mode in ANIMATION_MODES:
+		return mode
+	if mode == "BOTH":
+		return "SCALE_FADE"
+	return fallback if fallback in ANIMATION_MODES else "SCALE_FADE"
+
+
+def animation_uses_scale(mode: str) -> bool:
+	return resolve_animation_mode(mode, "SCALE_FADE") in {"SCALE", "SCALE_FADE"}
+
+
+def animation_uses_fade(mode: str) -> bool:
+	return resolve_animation_mode(mode, "SCALE_FADE") in {"FADE", "SCALE_FADE"}
+
+
+def sync_color_remaps_from_document(settings: CAB87_KineticTextSettings, document: TimingDocument) -> None:
+	sync_color_remaps(settings, document.color_swatches)
+
+
+def sync_color_remaps(settings: CAB87_KineticTextSettings, source_colors, saved_targets=None) -> None:
+	targets = saved_targets if saved_targets is not None else current_color_remap_targets(settings)
+	unique_sources = []
+	seen = set()
+	for raw_color in source_colors or []:
+		source = normalize_hex_color(raw_color)
+		if not source or source in seen:
+			continue
+		unique_sources.append(source)
+		seen.add(source)
+
+	settings.color_remaps.clear()
+	for source in unique_sources:
+		source_rgb = hex_to_rgb(source) or tuple(float(value) for value in settings.color[:3])
+		target_rgb = targets.get(source, source_rgb) if targets else source_rgb
+		remap = settings.color_remaps.add()
+		remap.source_hex = source
+		remap.source_color = source_rgb
+		remap.target_color = sanitize_rgb(target_rgb, source_rgb)
+
+
+def current_color_remap_targets(settings: CAB87_KineticTextSettings) -> dict[str, tuple[float, float, float]]:
+	targets = {}
+	for remap in settings.color_remaps:
+		source = normalize_hex_color(remap.source_hex)
+		if source:
+			targets[source] = sanitize_rgb(remap.target_color, tuple(float(value) for value in settings.color[:3]))
+	return targets
+
+
+def color_remap_lookup(settings: CAB87_KineticTextSettings) -> dict[str, tuple[float, float, float]]:
+	return current_color_remap_targets(settings)
+
+
+def color_for_layout_word(layout_word, settings: CAB87_KineticTextSettings):
+	source = normalize_hex_color(getattr(layout_word, "color", ""))
+	if source:
+		remapped_color = color_remap_lookup(settings).get(source)
+		if remapped_color is not None:
+			return remapped_color
+		color = hex_to_rgb(source)
+		if color is not None:
+			return color
+	return tuple(float(value) for value in settings.color[:3])
+
+
+def normalize_hex_color(value) -> str | None:
+	text = str(value or "").strip()
+	if len(text) in {3, 6}:
+		text = f"#{text}"
+	if len(text) == 4 and text.startswith("#"):
+		text = f"#{text[1] * 2}{text[2] * 2}{text[3] * 2}"
+	if len(text) != 7 or not text.startswith("#"):
+		return None
+	try:
+		int(text[1:], 16)
+	except ValueError:
+		return None
+	return text.lower()
+
+
+def hex_to_rgb(value: str):
+	text = normalize_hex_color(value)
+	if text is None:
+		return None
+	try:
+		return tuple(int(text[index : index + 2], 16) / 255 for index in (1, 3, 5))
+	except ValueError:
+		return None
+
+
+def rgb_from_value(value, fallback=None):
+	if isinstance(value, str):
+		return hex_to_rgb(value) or fallback
+	if isinstance(value, dict):
+		return rgb_from_value(value.get("target") or value.get("targetColor") or value.get("targetRgb"), fallback)
+	if isinstance(value, (list, tuple)) and len(value) >= 3:
+		return sanitize_rgb(value, fallback)
+	return fallback
+
+
+def sanitize_rgb(value, fallback=None):
+	channels = []
+	try:
+		source = list(value)[:3]
+	except TypeError:
+		return fallback
+	if len(source) < 3:
+		return fallback
+	for raw_channel in source:
+		try:
+			channel = float(raw_channel)
+		except (TypeError, ValueError):
+			return fallback
+		channels.append(max(0.0, min(1.0, channel)))
+	return tuple(channels)
+
+
+def rgb_to_hex(value) -> str:
+	rgb = sanitize_rgb(value, (1.0, 1.0, 1.0))
+	return "#" + "".join(f"{round(channel * 255):02x}" for channel in rgb)
+
+
+def create_word_material(name: str, settings: CAB87_KineticTextSettings, color=None):
 	material = bpy.data.materials.new(unique_name(name))
 	material.use_nodes = True
 	if hasattr(material, "blend_method"):
 		material.blend_method = "BLEND"
 	if hasattr(material, "show_transparent_back"):
 		material.show_transparent_back = True
-	set_material_color(material, settings, settings.color[3])
+	set_material_color(material, settings, settings.color[3], color)
 	return material
 
 
-def ensure_word_material(obj, settings: CAB87_KineticTextSettings):
+def ensure_word_material(obj, settings: CAB87_KineticTextSettings, color=None):
 	if obj.data.materials:
 		material = obj.data.materials[0]
 	else:
-		material = create_word_material(f"{obj.name}_Material", settings)
+		material = create_word_material(f"{obj.name}_Material", settings, color)
 		obj.data.materials.append(material)
-	set_material_color(material, settings, settings.color[3])
+	set_material_color(material, settings, settings.color[3], color)
 	return material
 
 
@@ -471,20 +681,28 @@ def animate_word_object(obj, material, layout_word, section_starts: list[float],
 	intro_frame = max(settings.start_frame, start_frame - settings.intro_frames)
 	full_scale = (1.0, 1.0, 1.0)
 	intro_scale = (settings.intro_scale, settings.intro_scale, settings.intro_scale)
+	outro_scale = (settings.outro_scale, settings.outro_scale, settings.outro_scale)
+	word_color = color_for_layout_word(layout_word, settings)
+	intro_animation = resolve_animation_mode(settings.intro_animation, "SCALE_FADE")
+	outro_animation = resolve_animation_mode(settings.outro_animation, "FADE")
 
-	set_object_scale_key(obj, intro_scale, intro_frame)
-	set_material_alpha_key(material, settings, 0.0, intro_frame)
-	set_object_scale_key(obj, full_scale, start_frame)
-	set_material_alpha_key(material, settings, settings.color[3], start_frame)
+	animate_intro(obj, material, settings, intro_animation, intro_frame, start_frame, intro_scale, full_scale, word_color)
 
 	next_section_start = next_section_start_for(layout_word.section_index, section_starts)
 	if next_section_start is not None:
 		clear_end_frame = frame_for_seconds(next_section_start, fps, settings.start_frame)
 		clear_start_frame = max(start_frame, clear_end_frame - settings.clear_frames)
-		set_object_scale_key(obj, full_scale, clear_start_frame)
-		set_material_alpha_key(material, settings, settings.color[3], clear_start_frame)
-		set_object_scale_key(obj, full_scale, clear_end_frame)
-		set_material_alpha_key(material, settings, 0.0, clear_end_frame)
+		animate_outro(
+			obj,
+			material,
+			settings,
+			outro_animation,
+			clear_start_frame,
+			clear_end_frame,
+			full_scale,
+			outro_scale,
+			word_color,
+		)
 
 	set_fcurve_interpolation(obj, "BEZIER")
 	if material:
@@ -492,22 +710,71 @@ def animate_word_object(obj, material, layout_word, section_starts: list[float],
 		set_fcurve_interpolation(getattr(material, "node_tree", None), "LINEAR")
 
 
+def animate_intro(obj, material, settings: CAB87_KineticTextSettings, mode: str, intro_frame: int, start_frame: int, intro_scale, full_scale, word_color) -> None:
+	if animation_uses_scale(mode):
+		set_object_scale_key(obj, intro_scale, intro_frame)
+		set_intro_scale_target_keys(obj, settings, start_frame, full_scale)
+	else:
+		set_object_scale_key(obj, full_scale, start_frame)
+
+	if animation_uses_fade(mode):
+		set_material_alpha_key(material, settings, 0.0, intro_frame, word_color)
+		set_material_alpha_key(material, settings, settings.color[3], start_frame, word_color)
+	else:
+		hidden_frame = max(settings.start_frame, intro_frame - 1)
+		if hidden_frame < intro_frame:
+			set_material_alpha_key(material, settings, 0.0, hidden_frame, word_color)
+		set_material_alpha_key(material, settings, settings.color[3], intro_frame, word_color)
+
+
+def set_intro_scale_target_keys(obj, settings: CAB87_KineticTextSettings, start_frame: int, full_scale) -> None:
+	overshoot_scale = max(1.0, float(settings.intro_overshoot_scale))
+	overshoot_frames = max(0, int(settings.intro_overshoot_frames))
+	settle_frames = max(0, int(settings.intro_settle_frames))
+	if overshoot_scale <= 1.0 or settle_frames <= 0:
+		set_object_scale_key(obj, full_scale, start_frame)
+		return
+
+	overshoot = (overshoot_scale, overshoot_scale, overshoot_scale)
+	overshoot_frame = start_frame + overshoot_frames
+	settle_frame = overshoot_frame + settle_frames
+	if overshoot_frame > start_frame:
+		set_object_scale_key(obj, full_scale, start_frame)
+	set_object_scale_key(obj, overshoot, overshoot_frame)
+	set_object_scale_key(obj, full_scale, settle_frame)
+
+
+def animate_outro(obj, material, settings: CAB87_KineticTextSettings, mode: str, clear_start_frame: int, clear_end_frame: int, full_scale, outro_scale, word_color) -> None:
+	if animation_uses_scale(mode):
+		set_object_scale_key(obj, full_scale, clear_start_frame)
+		set_object_scale_key(obj, outro_scale, clear_end_frame)
+	else:
+		set_object_scale_key(obj, full_scale, clear_start_frame)
+
+	if animation_uses_fade(mode):
+		set_material_alpha_key(material, settings, settings.color[3], clear_start_frame, word_color)
+		set_material_alpha_key(material, settings, 0.0, clear_end_frame, word_color)
+	else:
+		set_material_alpha_key(material, settings, settings.color[3], clear_start_frame, word_color)
+		set_material_alpha_key(material, settings, settings.color[3], clear_end_frame, word_color)
+
+
 def set_object_scale_key(obj, scale, frame: int) -> None:
 	obj.scale = scale
 	obj.keyframe_insert(data_path="scale", frame=frame)
 
 
-def set_material_alpha_key(material, settings: CAB87_KineticTextSettings, alpha: float, frame: int) -> None:
+def set_material_alpha_key(material, settings: CAB87_KineticTextSettings, alpha: float, frame: int, color=None) -> None:
 	if material is None:
 		return
-	set_material_color(material, settings, alpha)
+	set_material_color(material, settings, alpha, color)
 	material.keyframe_insert(data_path="diffuse_color", frame=frame)
 	for input_socket in material_alpha_sockets(material):
 		input_socket.keyframe_insert(data_path="default_value", frame=frame)
 
 
-def set_material_color(material, settings: CAB87_KineticTextSettings, alpha: float) -> None:
-	r, g, b, _ = settings.color
+def set_material_color(material, settings: CAB87_KineticTextSettings, alpha: float, color=None) -> None:
+	r, g, b = color[:3] if color else settings.color[:3]
 	material.diffuse_color = (r, g, b, alpha)
 	for input_socket in material_color_sockets(material):
 		if hasattr(input_socket, "default_value"):
@@ -554,7 +821,13 @@ def scaled_location(layout_word, settings: CAB87_KineticTextSettings):
 
 
 def update_scene_frame_range(scene, layout_document: LayoutDocument, settings: CAB87_KineticTextSettings, fps: float) -> None:
-	end_frame = frame_for_seconds(layout_document.source.duration, fps, settings.start_frame) + max(settings.clear_frames, settings.intro_frames, 12)
+	animation_tail_frames = max(
+		settings.clear_frames,
+		settings.intro_frames,
+		settings.intro_overshoot_frames + settings.intro_settle_frames,
+		12,
+	)
+	end_frame = frame_for_seconds(layout_document.source.duration, fps, settings.start_frame) + animation_tail_frames
 	scene.frame_start = min(scene.frame_start, settings.start_frame)
 	scene.frame_end = max(scene.frame_end, end_frame)
 
@@ -565,6 +838,8 @@ def write_word_properties(obj, layout_word) -> None:
 	obj["cab87_word_start"] = layout_word.start
 	obj["cab87_word_end"] = layout_word.end
 	obj["cab87_break_after"] = layout_word.break_after
+	obj["cab87_word_color"] = layout_word.color or ""
+	obj["cab87_color_override"] = bool(layout_word.color_override)
 	obj["cab87_section_index"] = layout_word.section_index
 	obj["cab87_line_index"] = layout_word.line_index
 
@@ -575,6 +850,9 @@ def write_group_properties(group, settings: CAB87_KineticTextSettings, document:
 	group["cab87_source_schema"] = document.schema or ""
 	group["cab87_source_version"] = document.version or 0
 	group["cab87_source_fps"] = document.fps or 0.0
+	group["cab87_default_color"] = document.default_color or ""
+	group["cab87_color_swatches"] = json.dumps(list(document.color_swatches))
+	group["cab87_color_remaps"] = json.dumps(serialize_color_remaps(settings))
 	group["cab87_timeline_fps"] = fps
 	group["cab87_start_frame"] = settings.start_frame
 	group["cab87_max_words_per_section"] = settings.max_words_per_section
@@ -584,9 +862,15 @@ def write_group_properties(group, settings: CAB87_KineticTextSettings, document:
 	group["cab87_word_spacing"] = settings.word_spacing
 	group["cab87_line_spacing"] = settings.line_spacing
 	group["cab87_character_width"] = settings.character_width
+	group["cab87_intro_animation"] = settings.intro_animation
+	group["cab87_outro_animation"] = settings.outro_animation
 	group["cab87_intro_frames"] = settings.intro_frames
 	group["cab87_clear_frames"] = settings.clear_frames
 	group["cab87_intro_scale"] = settings.intro_scale
+	group["cab87_outro_scale"] = settings.outro_scale
+	group["cab87_intro_overshoot_scale"] = settings.intro_overshoot_scale
+	group["cab87_intro_overshoot_frames"] = settings.intro_overshoot_frames
+	group["cab87_intro_settle_frames"] = settings.intro_settle_frames
 	group["cab87_font_path"] = settings.font_path
 	group["cab87_font_size"] = settings.font_size
 	group["cab87_color"] = [float(value) for value in settings.color]
@@ -595,6 +879,74 @@ def write_group_properties(group, settings: CAB87_KineticTextSettings, document:
 	group["cab87_bevel_resolution"] = settings.bevel_resolution
 	group["cab87_extrude"] = settings.extrude
 	group["cab87_resolution_u"] = settings.resolution_u
+
+
+def serialize_color_remaps(settings: CAB87_KineticTextSettings) -> list[dict[str, object]]:
+	remaps = []
+	for remap in settings.color_remaps:
+		source = normalize_hex_color(remap.source_hex)
+		if not source:
+			continue
+		target = sanitize_rgb(remap.target_color, hex_to_rgb(source) or (1.0, 1.0, 1.0))
+		remaps.append(
+			{
+				"source": source,
+				"target": list(target),
+				"targetHex": rgb_to_hex(target),
+			}
+		)
+	return remaps
+
+
+def load_color_remaps_from_group(group, settings: CAB87_KineticTextSettings) -> None:
+	saved_targets = color_remap_targets_from_group(group)
+	source_colors = color_swatches_from_group(group)
+	if not source_colors:
+		source_colors = list(saved_targets.keys())
+	sync_color_remaps(settings, source_colors, saved_targets)
+
+
+def color_remap_targets_from_group(group) -> dict[str, tuple[float, float, float]]:
+	targets = {}
+	for entry in read_json_list_prop(group, "cab87_color_remaps"):
+		if not isinstance(entry, dict):
+			continue
+		source = normalize_hex_color(entry.get("source") or entry.get("sourceHex") or entry.get("hex"))
+		if not source:
+			continue
+		target = rgb_from_value(
+			entry.get("target") or entry.get("targetColor") or entry.get("targetRgb") or entry.get("targetHex"),
+			hex_to_rgb(source),
+		)
+		if target is not None:
+			targets[source] = target
+	return targets
+
+
+def color_swatches_from_group(group) -> list[str]:
+	swatches = []
+	for raw_color in read_json_list_prop(group, "cab87_color_swatches"):
+		color = normalize_hex_color(raw_color)
+		if color and color not in swatches:
+			swatches.append(color)
+	if swatches:
+		return swatches
+	return list(color_remap_targets_from_group(group).keys())
+
+
+def read_json_list_prop(owner, key: str) -> list:
+	value = owner.get(key)
+	if value is None:
+		return []
+	if isinstance(value, str):
+		try:
+			decoded = json.loads(value)
+		except json.JSONDecodeError:
+			return []
+		return decoded if isinstance(decoded, list) else []
+	if isinstance(value, (list, tuple)):
+		return list(value)
+	return []
 
 
 def load_group_properties_into_settings(group, settings: CAB87_KineticTextSettings) -> None:
@@ -606,9 +958,25 @@ def load_group_properties_into_settings(group, settings: CAB87_KineticTextSettin
 	settings.word_spacing = _float_prop(group, "cab87_word_spacing", settings.word_spacing)
 	settings.line_spacing = _float_prop(group, "cab87_line_spacing", settings.line_spacing)
 	settings.character_width = _float_prop(group, "cab87_character_width", settings.character_width)
+	settings.intro_animation = resolve_animation_mode(
+		group.get("cab87_intro_animation", settings.intro_animation),
+		settings.intro_animation,
+	)
+	settings.outro_animation = resolve_animation_mode(
+		group.get("cab87_outro_animation", settings.outro_animation),
+		settings.outro_animation,
+	)
 	settings.intro_frames = int(group.get("cab87_intro_frames", settings.intro_frames))
 	settings.clear_frames = int(group.get("cab87_clear_frames", settings.clear_frames))
 	settings.intro_scale = _float_prop(group, "cab87_intro_scale", settings.intro_scale)
+	settings.outro_scale = _float_prop(group, "cab87_outro_scale", settings.outro_scale)
+	settings.intro_overshoot_scale = _float_prop(
+		group,
+		"cab87_intro_overshoot_scale",
+		settings.intro_overshoot_scale,
+	)
+	settings.intro_overshoot_frames = int(group.get("cab87_intro_overshoot_frames", settings.intro_overshoot_frames))
+	settings.intro_settle_frames = int(group.get("cab87_intro_settle_frames", settings.intro_settle_frames))
 	settings.font_path = group.get("cab87_font_path", settings.font_path)
 	settings.font_size = _float_prop(group, "cab87_font_size", settings.font_size)
 	settings.fill_mode = resolve_settings_fill_mode(
@@ -622,6 +990,7 @@ def load_group_properties_into_settings(group, settings: CAB87_KineticTextSettin
 	color = group.get("cab87_color")
 	if color and len(color) == 4:
 		settings.color = tuple(float(value) for value in color)
+	load_color_remaps_from_group(group, settings)
 
 
 def document_from_group(group, word_objects) -> TimingDocument:
@@ -633,6 +1002,8 @@ def document_from_group(group, word_objects) -> TimingDocument:
 				"start": _float_prop(obj, "cab87_word_start", 0.0),
 				"end": _float_prop(obj, "cab87_word_end", 0.0),
 				"breakAfter": bool(obj.get("cab87_break_after", False)),
+				"color": obj.get("cab87_word_color", "") or None,
+				"colorOverride": bool(obj.get("cab87_color_override", False)),
 			}
 		)
 	return parse_timing_payload(
@@ -640,6 +1011,8 @@ def document_from_group(group, word_objects) -> TimingDocument:
 			"schema": group.get("cab87_source_schema", "cab87-dialogue-timing"),
 			"version": int(group.get("cab87_source_version", 1)),
 			"fps": _float_prop(group, "cab87_source_fps", 0.0) or None,
+			"defaultColor": group.get("cab87_default_color", "") or None,
+			"customColors": color_swatches_from_group(group),
 			"words": words,
 		}
 	)
@@ -730,6 +1103,7 @@ def _float_prop(owner, key: str, fallback: float) -> float:
 
 
 classes = (
+	CAB87_KineticTextColorRemap,
 	CAB87_KineticTextSettings,
 	CAB87_OT_import_kinetic_text,
 	CAB87_OT_apply_kinetic_text_style,

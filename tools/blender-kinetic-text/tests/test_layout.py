@@ -19,10 +19,12 @@ class LayoutTests(unittest.TestCase):
 				"version": 1,
 				"fps": 30,
 				"duration": 2.0,
+				"defaultColor": "#ffdb38",
+				"customColors": ["#34a0ff", "f04a4a", "#ffdb38"],
 				"text": "cab time",
 				"words": [
 					{"index": 1, "text": "cab", "start": 0.1, "end": 0.4, "breakAfter": True},
-					{"index": 2, "text": "time", "start": 0.5, "end": 0.8},
+					{"index": 2, "text": "time", "start": 0.5, "end": 0.8, "color": "#34a0ff", "colorOverride": True},
 				],
 			}
 		)
@@ -30,8 +32,12 @@ class LayoutTests(unittest.TestCase):
 		self.assertEqual(document.schema, "cab87-dialogue-timing")
 		self.assertEqual(document.version, 1)
 		self.assertEqual(document.fps, 30)
+		self.assertEqual(document.default_color, "#ffdb38")
 		self.assertEqual([word.text for word in document.words], ["cab", "time"])
 		self.assertEqual([word.break_after for word in document.words], [True, False])
+		self.assertEqual([word.color for word in document.words], ["#ffdb38", "#34a0ff"])
+		self.assertEqual([word.color_override for word in document.words], [False, True])
+		self.assertEqual(document.color_swatches, ("#ffdb38", "#34a0ff", "#f04a4a"))
 		self.assertEqual(document.duration, 2.0)
 
 	def test_supports_simple_word_fallback_shape(self):

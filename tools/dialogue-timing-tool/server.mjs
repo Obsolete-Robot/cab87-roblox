@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
-import { dirname, extname, join, normalize } from "node:path";
+import { dirname, extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,13 @@ const MIME_TYPES = {
 	".jpeg": "image/jpeg",
 	".webp": "image/webp",
 	".ico": "image/x-icon",
+	".mp3": "audio/mpeg",
+	".m4a": "audio/mp4",
+	".wav": "audio/wav",
+	".webm": "video/webm",
+	".mp4": "video/mp4",
+	".mov": "video/quicktime",
+	".ogg": "audio/ogg",
 };
 
 function sendJson(res, status, payload) {
@@ -240,6 +247,63 @@ async function handleTranscribe(req, res) {
 	sendJson(res, 200, normalized);
 }
 
+function normalizeAudioFilePath(value) {
+	const rawPath = String(value || "").trim();
+	if (!rawPath) {
+		return "";
+	}
+
+	let localPath = rawPath;
+	if (/^file:\/\//i.test(localPath)) {
+		localPath = fileURLToPath(localPath);
+	}
+
+	const windowsDriveMatch = localPath.match(/^([A-Za-z]):[\\/](.*)$/);
+	if (windowsDriveMatch && process.platform !== "win32") {
+		localPath = `/mnt/${windowsDriveMatch[1].toLowerCase()}/${windowsDriveMatch[2].replace(/[\\]+/g, "/")}`;
+	}
+	const fileUrlDriveMatch = localPath.match(/^\/([A-Za-z]):\/(.*)$/);
+	if (fileUrlDriveMatch && process.platform !== "win32") {
+		localPath = `/mnt/${fileUrlDriveMatch[1].toLowerCase()}/${fileUrlDriveMatch[2]}`;
+	}
+
+	return normalize(isAbsolute(localPath) ? localPath : resolve(ROOT, localPath));
+}
+
+async function handleAudioFile(req, res) {
+	const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+	const targetPath = normalizeAudioFilePath(url.searchParams.get("path"));
+	if (!targetPath) {
+		sendJson(res, 400, { error: "Missing audio file path." });
+		return;
+	}
+
+	const extension = extname(targetPath).toLowerCase();
+	const contentType = MIME_TYPES[extension];
+	if (!contentType || !(contentType.startsWith("audio/") || contentType.startsWith("video/"))) {
+		sendJson(res, 415, { error: "Referenced file must be an audio or video file." });
+		return;
+	}
+
+	try {
+		const fileStat = await stat(targetPath);
+		if (!fileStat.isFile()) {
+			sendJson(res, 404, { error: "Referenced audio path is not a file." });
+			return;
+		}
+
+		const body = await readFile(targetPath);
+		res.writeHead(200, {
+			"Content-Type": contentType,
+			"Content-Length": body.length,
+			"Cache-Control": "no-store",
+		});
+		res.end(body);
+	} catch (error) {
+		sendJson(res, 404, { error: `Referenced audio path could not be loaded: ${error.message}` });
+	}
+}
+
 async function serveStatic(req, res) {
 	const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
 	const requestedPath = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
@@ -272,6 +336,11 @@ async function serveStatic(req, res) {
 const server = createServer((req, res) => {
 	if (req.method === "POST" && req.url?.startsWith("/api/transcribe")) {
 		handleTranscribe(req, res);
+		return;
+	}
+
+	if (req.method === "GET" && req.url?.startsWith("/api/audio-file")) {
+		handleAudioFile(req, res);
 		return;
 	}
 

@@ -50,20 +50,29 @@ The update pass reapplies:
 - word and line spacing.
 - font file and font size.
 - material color and alpha.
+- JSON default color, word color overrides, and color swatch remaps.
 - bevel depth and resolution.
 - extrusion.
 - fill mode and curve resolution.
-- word pop-in and section clear keyframes.
+- start/end animation type, overshoot, and section clear keyframes.
 
 Words keep their timing data as custom properties on the generated Text objects. You can edit a Text object's body in Blender and then run `Apply Layout And Style To Group` to relayout with the edited text.
 
 ## Animation Behavior
 
-Each word starts transparent and scaled down, then pops in at its word start time. Words stay visible inside their current section. When a new section begins, the previous section fades out over the configured clear frames.
+Each word uses the configured `Start Animation` mode when it reaches its word start time. Start animation can fade, scale, or scale and fade. Scale starts can overshoot above full scale, then settle back after the configured overshoot and settle frame counts.
+
+Words stay visible inside their current section. When a new section begins, the previous section uses the configured `End Animation` mode over the clear frame range. End animation can fade, scale, or scale and fade.
 
 Sections are determined only by `breakAfter` break points from the kinetic JSON.
 
 Within each section, lines wrap by max characters per line.
+
+## Color Remapping
+
+When a kinetic JSON file includes `customColors`, `defaultColor`, or per-word color overrides, the add-on imports those swatches into the `Text Style` color section. Each source swatch gets a material color picker so the Blender scene can remap the JSON color breakouts without editing the timing file.
+
+`Apply Layout And Style To Group` reapplies the current remaps to generated word materials and stores the remap table on the parent group.
 
 ## Validation
 

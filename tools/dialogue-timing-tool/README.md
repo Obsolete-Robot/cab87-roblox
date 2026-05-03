@@ -32,15 +32,19 @@ The API key stays on the local Node server. The browser uploads the selected cli
 5. Use **Play** to watch the current word highlight against the clip.
 6. Click **Hide Sidebar** when you want the transcript workspace to fill the page.
 7. Nudge or edit any word start/end values that need tighter kinetic text timing, use **Prev +50/+100** and **Next +50/+100** to borrow timing from adjacent words, or click **Trash** to remove unwanted words.
-8. Click **Auto Break** to insert suggested breaks, or click **Add Break** on a word row to place one yourself. Breaks appear as their own entries in the word timing list and can be removed there.
-9. If a row contains combined words, add a space in the word text and click **Split**. The tool divides the original timing proportionally between the two new word rows.
-10. Export kinetic JSON, CSV, VTT, or SRT.
+8. Set the overall word color in the Word Timing toolbar with the picker, swatches, or HEX input, or enable a word's **Override** color controls for a per-word color.
+9. Click **Auto Break** to insert suggested breaks, or click **Add Break** on a word row to place one yourself. Breaks appear as their own entries in the word timing list and can be removed there.
+10. If a row contains combined words, add a space in the word text and click **Split**. The tool divides the original timing proportionally between the two new word rows.
+11. Export kinetic JSON, CSV, VTT, or SRT.
 
 ## Notes
 
 - OpenAI audio uploads are limited to 25 MB by default. This tool enforces the same default with `MAX_AUDIO_BYTES`.
 - Word timestamps are model-estimated. For frame-critical animation, review the waveform and use the timing editor before final export.
-- Kinetic JSON exports embed the selected audio/video clip so importing that JSON later restores the media player and waveform without retranscribing.
+- Kinetic JSON exports store an `audioPath` reference instead of embedding the audio/video bytes. On import, the local server tries to load that path if the file is still available.
+- Imported JSON with embedded audio data is culled immediately; re-exporting writes the compact path-based format.
+- Standard browser file pickers may expose only the filename, not the full local filesystem path. Imported JSON with a full `audioPath` can preserve and reload that path.
+- Kinetic JSON exports include the overall color plus any word color overrides.
 - Preview sections and caption exports split only at break entries.
 - `Import JSON` accepts OpenAI `verbose_json` responses, this tool's kinetic JSON exports, and simple `{ "words": [{ "word": "...", "start": 0, "end": 1 }] }` timing files from other engines.
 - To change the port, run `PORT=8020 npm run dev`.
