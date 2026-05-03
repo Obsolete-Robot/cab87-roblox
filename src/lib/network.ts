@@ -101,12 +101,12 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
   // Straight line from p0 to cw0
   let cw0 = p0;
   if (len0 > 0.1) {
-    cw0 = { x: p0.x + (d0x/len0)*W0, y: p0.y + (d0y/len0)*W0 };
+    cw0 = { x: p0.x + (d0x/len0)*W0, y: p0.y + (d0y/len0)*W0, z: (p0.z ?? 4) };
   }
   
   res.push(p0);
-  res.push({ x: p0.x + (cw0.x - p0.x)/3, y: p0.y + (cw0.y - p0.y)/3 });
-  res.push({ x: p0.x + 2*(cw0.x - p0.x)/3, y: p0.y + 2*(cw0.y - p0.y)/3 });
+  res.push({ x: p0.x + (cw0.x - p0.x)/3, y: p0.y + (cw0.y - p0.y)/3, z: (p0.z ?? 4) });
+  res.push({ x: p0.x + 2*(cw0.x - p0.x)/3, y: p0.y + 2*(cw0.y - p0.y)/3, z: (p0.z ?? 4) });
   res.push(cw0);
 
   const pN = basePts[basePts.length - 1];
@@ -125,17 +125,17 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
 
   let cwN = pN;
   if (lenN > 0.1) {
-      cwN = { x: pN.x + (dnX/lenN)*WN, y: pN.y + (dnY/lenN)*WN };
+      cwN = { x: pN.x + (dnX/lenN)*WN, y: pN.y + (dnY/lenN)*WN, z: (pN.z ?? 4) };
   }
 
   if (basePts.length === 3) {
       const mid = basePts[1];
-      res.push({ x: cw0.x + 2/3*(mid.x - cw0.x), y: cw0.y + 2/3*(mid.y - cw0.y) });
-      res.push({ x: cwN.x + 2/3*(mid.x - cwN.x), y: cwN.y + 2/3*(mid.y - cwN.y) });
+      res.push({ x: cw0.x + 2/3*(mid.x - cw0.x), y: cw0.y + 2/3*(mid.y - cw0.y), z: (cw0.z ?? 4) + 2/3*((mid.z ?? 4) - (cw0.z ?? 4)) });
+      res.push({ x: cwN.x + 2/3*(mid.x - cwN.x), y: cwN.y + 2/3*(mid.y - cwN.y), z: (cwN.z ?? 4) + 2/3*((mid.z ?? 4) - (cwN.z ?? 4)) });
       res.push(cwN);
       
-      res.push({ x: cwN.x + (pN.x - cwN.x)/3, y: cwN.y + (pN.y - cwN.y)/3 });
-      res.push({ x: cwN.x + 2*(pN.x - cwN.x)/3, y: cwN.y + 2*(pN.y - cwN.y)/3 });
+      res.push({ x: cwN.x + (pN.x - cwN.x)/3, y: cwN.y + (pN.y - cwN.y)/3, z: pN.z ?? 4 });
+      res.push({ x: cwN.x + 2*(pN.x - cwN.x)/3, y: cwN.y + 2*(pN.y - cwN.y)/3, z: pN.z ?? 4 });
       res.push(pN);
   } else if (basePts.length > 2) {
     for (let i = 1; i < basePts.length - 1; i++) {
@@ -143,17 +143,17 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
     }
     
     res.push(cwN);
-    res.push({ x: cwN.x + (pN.x - cwN.x)/3, y: cwN.y + (pN.y - cwN.y)/3 });
-    res.push({ x: cwN.x + 2*(pN.x - cwN.x)/3, y: cwN.y + 2*(pN.y - cwN.y)/3 });
+    res.push({ x: cwN.x + (pN.x - cwN.x)/3, y: cwN.y + (pN.y - cwN.y)/3, z: pN.z ?? 4 });
+    res.push({ x: cwN.x + 2*(pN.x - cwN.x)/3, y: cwN.y + 2*(pN.y - cwN.y)/3, z: pN.z ?? 4 });
     res.push(pN);
   } else {
     // If just [N0, N1], len is 2.
-    res.push({ x: cw0.x + (cwN.x - cw0.x)/3, y: cw0.y + (cwN.y - cw0.y)/3 });
-    res.push({ x: cw0.x + 2*(cwN.x - cw0.x)/3, y: cw0.y + 2*(cwN.y - cw0.y)/3 });
+    res.push({ x: cw0.x + (cwN.x - cw0.x)/3, y: cw0.y + (cwN.y - cw0.y)/3, z: (cw0.z ?? 4) + ((cwN.z ?? 4) - (cw0.z ?? 4))/3 });
+    res.push({ x: cw0.x + 2*(cwN.x - cw0.x)/3, y: cw0.y + 2*(cwN.y - cw0.y)/3, z: (cw0.z ?? 4) + 2*((cwN.z ?? 4) - (cw0.z ?? 4))/3 });
     res.push(cwN);
     
-    res.push({ x: cwN.x + (pN.x - cwN.x)/3, y: cwN.y + (pN.y - cwN.y)/3 });
-    res.push({ x: cwN.x + 2*(pN.x - cwN.x)/3, y: cwN.y + 2*(pN.y - cwN.y)/3 });
+    res.push({ x: cwN.x + (pN.x - cwN.x)/3, y: cwN.y + (pN.y - cwN.y)/3, z: pN.z ?? 4 });
+    res.push({ x: cwN.x + 2*(pN.x - cwN.x)/3, y: cwN.y + 2*(pN.y - cwN.y)/3, z: pN.z ?? 4 });
     res.push(pN);
   }
 

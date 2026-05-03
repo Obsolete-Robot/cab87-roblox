@@ -11,6 +11,8 @@ interface ThreeSceneProps {
   edges: Edge[];
   chamferAngle: number;
   meshResolution: number;
+  showMesh: boolean;
+  showControlPoints: boolean;
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
   onPointerDown: (e: any) => void;
@@ -24,6 +26,8 @@ interface ThreeSceneProps {
   view: { x: number, y: number, zoom: number };
   setView: React.Dispatch<React.SetStateAction<{ x: number, y: number, zoom: number }>>;
   containerRef: React.RefObject<HTMLDivElement>;
+  softSelectionEnabled: boolean;
+  softSelectionRadius: number;
 }
 
 function CameraSync({ setView, containerRef, controlsRef }: any) {
@@ -60,9 +64,11 @@ function CameraSync({ setView, containerRef, controlsRef }: any) {
   return null;
 }
 
-function PointerInterceptor({ onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, isDragging, initialCameraParams, controlsRef }: any) {
+function PointerInterceptor({ 
+   onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, 
+   isDragging, initialCameraParams, controlsRef, draggingPoint, nodes, edges 
+}: any) {
    const { camera, raycaster, gl } = useThree();
-   const plane = useMemo(() => new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 4, 0)), []);
 
    useEffect(() => {
       const getPos = (e: PointerEvent | MouseEvent) => {
@@ -70,9 +76,67 @@ function PointerInterceptor({ onPointerDown, onPointerMove, onPointerUp, onConte
          const xp = ((e.clientX - rect.left) / rect.width) * 2 - 1;
          const yp = -((e.clientY - rect.top) / rect.height) * 2 + 1;
          raycaster.setFromCamera(new THREE.Vector2(xp, yp), camera);
+         
          const target = new THREE.Vector3();
-         raycaster.ray.intersectPlane(plane, target);
-         if (target) return { x: target.x, y: target.z };
+         
+         if (e.shiftKey && isDragging && draggingPoint) {
+            // Vertical dragging: intersect with a plane that faces the camera and passes through the point
+            const cameraDir = new THREE.Vector3();
+            camera.getWorldDirection(cameraDir);
+            cameraDir.y = 0; // look horizontal
+            cameraDir.normalize();
+            
+            const verticalPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+               cameraDir, 
+               new THREE.Vector3(draggingPoint.x, draggingPoint.z ?? 4, draggingPoint.y)
+            );
+            
+            raycaster.ray.intersectPlane(verticalPlane, target);
+            if (target) return { x: draggingPoint.x, y: draggingPoint.y, z: target.y };
+         } else {
+            // Horizontal dragging or interaction
+            let currentY = 4;
+            
+            if (isDragging && draggingPoint) {
+               currentY = draggingPoint.z ?? 4;
+            } else if (nodes && edges) {
+               // Find closest point to snap interaction height
+               let closestPt: THREE.Vector3 | null = null;
+               let minDistSq = 15000; // rough capture radius, increased to handle zoomed-out views
+               
+               const checkPt = (pt: any) => {
+                  if (!pt) return;
+                  const pt3d = new THREE.Vector3(pt.x, pt.z ?? 4, pt.y);
+                  const distSq = raycaster.ray.distanceSqToPoint(pt3d);
+                  if (distSq < minDistSq) {
+                     minDistSq = distSq;
+                     closestPt = pt3d;
+                  }
+               };
+               
+               nodes.forEach((n: any) => checkPt(n.point));
+               edges.forEach((e: any) => {
+                  e.points.forEach((p: any) => checkPt(p));
+               });
+               
+               if (closestPt) currentY = closestPt.y;
+            }
+            
+            const horizontalPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+               new THREE.Vector3(0, 1, 0), 
+               new THREE.Vector3(0, currentY, 0)
+            );
+            
+            raycaster.ray.intersectPlane(horizontalPlane, target);
+            if (target) {
+               // If we are close to a point, actually snap the x and y coordinates returned so that
+               // the 2D picking logic in App.tsx perfectly matches it!
+               // But returning the target on the plane is usually good enough because raycaster intersection 
+               // passing 'near' the point and intersecting the plane at the point's height guarantees the XZ intersection 
+               // matches the point position closely.
+               return { x: target.x, y: target.z, z: currentY };
+            }
+         }
          return null;
       };
 
@@ -103,7 +167,7 @@ function PointerInterceptor({ onPointerDown, onPointerMove, onPointerUp, onConte
          gl.domElement.removeEventListener('contextmenu', ctx);
          gl.domElement.removeEventListener('pointercancel', cancel);
       };
-   }, [camera, raycaster, gl, plane, onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel]);
+   }, [camera, raycaster, gl, onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel]);
 
    return <OrbitControls 
       ref={controlsRef} 
@@ -115,7 +179,7 @@ function PointerInterceptor({ onPointerDown, onPointerMove, onPointerUp, onConte
    />;
 }
 
-function ExtrudedPolygon({ points, color, height, yOffset = 0 }: { points: {x: number, y: number}[], color: string, height: number, yOffset?: number }) {
+function ExtrudedPolygon({ points, color, height, yOffset = 0, wireframe = false }: { points: {x: number, y: number}[], color: string, height: number, yOffset?: number, wireframe?: boolean }) {
   const pointsHash = points.map(p => `${Math.round(p.x * 100)},${Math.round(p.y * 100)}`).join('|');
   const geometry = useMemo(() => {
     if (points.length < 3) return null;
@@ -156,7 +220,11 @@ function ExtrudedPolygon({ points, color, height, yOffset = 0 }: { points: {x: n
 
   return (
     <mesh geometry={geometry}>
-      <meshStandardMaterial color={color} side={THREE.DoubleSide} />
+      {wireframe ? (
+         <meshBasicMaterial color={color} wireframe={true} />
+      ) : (
+         <meshStandardMaterial color={color} side={THREE.DoubleSide} />
+      )}
     </mesh>
   );
 }
@@ -189,18 +257,18 @@ function BezierPaths({ edges, nodes, chamferAngle }: any) {
             const cubicPts = getExtendedEdgeControlPoints(e, nodes, edges, chamferAngle);
             for (let i = 0; i + 3 < cubicPts.length; i += 3) {
                 const curve = new THREE.CubicBezierCurve3(
-                    new THREE.Vector3(cubicPts[i].x, 4, cubicPts[i].y),
-                    new THREE.Vector3(cubicPts[i+1].x, 4, cubicPts[i+1].y),
-                    new THREE.Vector3(cubicPts[i+2].x, 4, cubicPts[i+2].y),
-                    new THREE.Vector3(cubicPts[i+3].x, 4, cubicPts[i+3].y)
+                    new THREE.Vector3(cubicPts[i].x, cubicPts[i].z ?? 4, cubicPts[i].y),
+                    new THREE.Vector3(cubicPts[i+1].x, cubicPts[i+1].z ?? 4, cubicPts[i+1].y),
+                    new THREE.Vector3(cubicPts[i+2].x, cubicPts[i+2].z ?? 4, cubicPts[i+2].y),
+                    new THREE.Vector3(cubicPts[i+3].x, cubicPts[i+3].z ?? 4, cubicPts[i+3].y)
                 );
                 tubesList.push(new THREE.TubeGeometry(curve, 20, 1.5, 8, false));
                 
                 // Add handles 
-                linesPoints.push(new THREE.Vector3(cubicPts[i].x, 4, cubicPts[i].y));
-                linesPoints.push(new THREE.Vector3(cubicPts[i+1].x, 4, cubicPts[i+1].y));
-                linesPoints.push(new THREE.Vector3(cubicPts[i+2].x, 4, cubicPts[i+2].y));
-                linesPoints.push(new THREE.Vector3(cubicPts[i+3].x, 4, cubicPts[i+3].y));
+                linesPoints.push(new THREE.Vector3(cubicPts[i].x, cubicPts[i].z ?? 4, cubicPts[i].y));
+                linesPoints.push(new THREE.Vector3(cubicPts[i+1].x, cubicPts[i+1].z ?? 4, cubicPts[i+1].y));
+                linesPoints.push(new THREE.Vector3(cubicPts[i+2].x, cubicPts[i+2].z ?? 4, cubicPts[i+2].y));
+                linesPoints.push(new THREE.Vector3(cubicPts[i+3].x, cubicPts[i+3].z ?? 4, cubicPts[i+3].y));
             }
         });
         
@@ -211,16 +279,64 @@ function BezierPaths({ edges, nodes, chamferAngle }: any) {
     return (
         <group>
             {tubes.map((geo, i) => (
-                <mesh key={`tube-${i}`} geometry={geo}>
-                    <meshBasicMaterial color="#fcd34d" />
+                <mesh key={`tube-${i}`} geometry={geo} renderOrder={999}>
+                    <meshBasicMaterial color="#fcd34d" depthTest={false} depthWrite={false} transparent />
                 </mesh>
             ))}
-            <primitive object={new THREE.LineSegments(lines, new THREE.LineBasicMaterial({ color: "#94a3b8", linewidth: 2 }))} />
+            <primitive object={new THREE.LineSegments(lines, new THREE.LineBasicMaterial({ color: "#94a3b8", linewidth: 2, depthTest: false, depthWrite: false, transparent: true }))} renderOrder={999} />
         </group>
     );
 }
 
-function SceneContent({ mesh, nodes, edges, chamferAngle, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu, isDragging, initialCameraParams, selectedNode, selectedEdge, setView, containerRef }: any) {
+function ActualMesh({ mesh, showMesh }: { mesh: any, showMesh: boolean }) {
+  const createGeo = (triangles: Point[][]) => {
+    const points: THREE.Vector3[] = [];
+    triangles.forEach(tri => {
+      if (tri.length === 3) {
+        // Render the actual flat mesh triangles
+        const p0 = new THREE.Vector3(tri[0].x, tri[0].z ?? 4, tri[0].y);
+        const p1 = new THREE.Vector3(tri[1].x, tri[1].z ?? 4, tri[1].y);
+        const p2 = new THREE.Vector3(tri[2].x, tri[2].z ?? 4, tri[2].y);
+        points.push(p0, p1, p2);
+      }
+    });
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    geo.computeVertexNormals();
+    return geo;
+  };
+
+  const roadGeo = useMemo(() => createGeo(mesh.roadTriangles || []), [mesh.roadTriangles]);
+  const hubGeo = useMemo(() => createGeo(mesh.hubTriangles || []), [mesh.hubTriangles]);
+  const swGeo = useMemo(() => createGeo(mesh.sidewalkTriangles || []), [mesh.sidewalkTriangles]);
+  const cwGeo = useMemo(() => createGeo(mesh.crosswalkTriangles || []), [mesh.crosswalkTriangles]);
+
+  const wireColor = showMesh ? "#22d3ee" : undefined;
+
+  return (
+    <group>
+      <mesh geometry={roadGeo}>
+        <meshStandardMaterial color={wireColor || "#1e293b"} side={THREE.DoubleSide} wireframe={showMesh} />
+      </mesh>
+      <mesh geometry={hubGeo}>
+        <meshStandardMaterial color={wireColor || "#1e293b"} side={THREE.DoubleSide} wireframe={showMesh} />
+      </mesh>
+      <mesh geometry={swGeo}>
+        <meshStandardMaterial color={wireColor || "#94a3b8"} side={THREE.DoubleSide} wireframe={showMesh} />
+      </mesh>
+      <mesh geometry={cwGeo}>
+        <meshStandardMaterial color={wireColor || "#334155"} side={THREE.DoubleSide} wireframe={showMesh} />
+      </mesh>
+    </group>
+  );
+}
+
+function SceneContent({ 
+  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, 
+  onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu, 
+  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedEdge, 
+  softSelectionEnabled, softSelectionRadius,
+  setView, containerRef 
+}: any) {
   const controlsRef = React.useRef<any>(null);
 
   return (
@@ -238,67 +354,67 @@ function SceneContent({ mesh, nodes, edges, chamferAngle, onPointerDown, onPoint
         onPointerCancel={onPointerCancel}
         onContextMenu={onContextMenu}
         isDragging={isDragging}
+        draggingPoint={draggingPoint}
         initialCameraParams={initialCameraParams}
+        nodes={nodes}
+        edges={edges}
       />
 
       <group>
-        <BezierPaths edges={edges} nodes={nodes} chamferAngle={chamferAngle} />
+        {showControlPoints && <BezierPaths edges={edges} nodes={nodes} chamferAngle={chamferAngle} />}
         {nodes.map((n: Node) => (
           <mesh 
             key={n.id} 
-            position={[n.point.x, 4, n.point.y]}
+            position={[n.point.x, n.point.z ?? 4, n.point.y]}
+            renderOrder={1000}
           >
             <sphereGeometry args={[12, 16, 16]} />
-            <meshStandardMaterial color={selectedNode === n.id ? "#ef4444" : "#60a5fa"} />
+            <meshStandardMaterial color={selectedNode === n.id ? "#ef4444" : "#60a5fa"} depthTest={false} depthWrite={false} transparent />
           </mesh>
         ))}
 
         {edges.flatMap((edge: Edge) => 
-          edge.points.map((pt, i) => (
-            <mesh 
-              key={`edge-${edge.id}-${i}`}
-              position={[pt.x, 4, pt.y]}
-            >
-              <sphereGeometry args={[(i % 3 === 2) ? 8 : 5, 16, 16]} />
-              <meshStandardMaterial color={selectedEdge === edge.id ? "#ef4444" : "#fbbf24"} />
-            </mesh>
-          ))
+          edge.points.map((pt, i) => {
+            const isAnchor = (i % 3 === 2);
+            if (!showControlPoints && !isAnchor) return null;
+            return (
+              <mesh 
+                key={`edge-${edge.id}-${i}`}
+                position={[pt.x, pt.z ?? 4, pt.y]}
+                renderOrder={1000}
+              >
+                <sphereGeometry args={[isAnchor ? 8 : 5, 16, 16]} />
+                <meshStandardMaterial color={selectedEdge === edge.id ? "#ef4444" : "#fbbf24"} depthTest={false} depthWrite={false} transparent />
+              </mesh>
+            );
+          })
         )}
       </group>
 
-      {/* Sidewalks -> slightly taller */}
-      {mesh.sidewalkPolygons.map((poly: any, i: number) => (
-        <ExtrudedPolygon key={`sw-${i}`} points={poly} color="#94a3b8" height={2} yOffset={0} />
-      ))}
-      
-      {/* Road Hubs (intersections) */}
-      {mesh.hubs.map((hub: any, i: number) => (
-        <ExtrudedPolygon key={`hub-${i}`} points={hub.polygon} color="#1e293b" height={1} yOffset={0.2} />
-      ))}
+      <ActualMesh mesh={mesh} showMesh={showMesh} />
+      {!showMesh && <CenterLines lines={mesh.centerLines} />}
 
-      {/* Road Segments */}
-      {mesh.roadPolygons.map((rp: any, i: number) => (
-        <ExtrudedPolygon key={`rp-${i}`} points={rp.polygon} color="#1e293b" height={1} yOffset={0.2} />
-      ))}
-
-      {/* Crosswalks */}
-      {mesh.crosswalks.map((cw: any, i: number) => (
-        <ExtrudedPolygon key={`cw-${i}`} points={cw.polygon} color="#334155" height={1.2} yOffset={0.3} />
-      ))}
-
-      {/* Center lines */}
-      <CenterLines lines={mesh.centerLines} />
+      {softSelectionEnabled && isDragging && draggingPoint && (
+        <mesh 
+          position={[draggingPoint.x, (draggingPoint.z ?? 4) + 0.1, draggingPoint.y]} 
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
+          <ringGeometry args={[softSelectionRadius - 1, softSelectionRadius + 1, 128]} />
+          <meshBasicMaterial color="white" transparent opacity={0.4} />
+        </mesh>
+      )}
     </group>
   );
 }
 
 export default function ThreeScene({ 
-    nodes, edges, chamferAngle, meshResolution, 
+    nodes, edges, chamferAngle, meshResolution, showMesh, showControlPoints,
     setNodes, setEdges, 
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
-    isDragging, selectedNode, selectedEdge,
+    isDragging, draggingPoint, selectedNode, selectedEdge,
+    softSelectionEnabled, softSelectionRadius,
     view, setView, containerRef 
-}: ThreeSceneProps) {
+}: ThreeSceneProps & { draggingPoint: Point | null }) {
   const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution), [nodes, edges, chamferAngle, meshResolution]);
 
   const initialCameraParams = useMemo(() => {
@@ -325,6 +441,8 @@ export default function ThreeScene({
       <Canvas camera={{ position: initialCameraParams.position, fov: initialCameraParams.fov, far: 50000 }} style={{ touchAction: 'none' }}>
         <SceneContent 
           mesh={mesh} 
+          showMesh={showMesh}
+          showControlPoints={showControlPoints}
           nodes={nodes} 
           edges={edges} 
           chamferAngle={chamferAngle}
@@ -334,9 +452,12 @@ export default function ThreeScene({
           onPointerCancel={onPointerCancel}
           onContextMenu={onContextMenu}
           isDragging={isDragging}
+          draggingPoint={draggingPoint}
           selectedNode={selectedNode}
           selectedEdge={selectedEdge}
           initialCameraParams={initialCameraParams}
+          softSelectionEnabled={softSelectionEnabled}
+          softSelectionRadius={softSelectionRadius}
           setView={setView}
           containerRef={containerRef}
         />

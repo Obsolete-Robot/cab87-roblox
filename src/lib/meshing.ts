@@ -15,6 +15,10 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
   const mesh: MeshData = {
     vertices: [],
     triangles: [],
+    roadTriangles: [],
+    hubTriangles: [],
+    sidewalkTriangles: [],
+    crosswalkTriangles: [],
     hubs: [],
     roadPolygons: [],
     crosswalks: [],
@@ -67,14 +71,14 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
             const OW_R = W + sw_right;
             corners.push({
               points: [
-                { x: node.point.x + left.x * W, y: node.point.y + left.y * W },
-                { x: node.point.x + right.x * W, y: node.point.y + right.y * W }
+                { x: node.point.x + left.x * W, y: node.point.y + left.y * W, z: node.point.z },
+                { x: node.point.x + right.x * W, y: node.point.y + right.y * W, z: node.point.z }
               ],
               sidewalkWidth: Math.max(sw_left, sw_right)
             });
             outerCorners.push([
-                { x: node.point.x + left.x * OW_L, y: node.point.y + left.y * OW_L },
-                { x: node.point.x + right.x * OW_R, y: node.point.y + right.y * OW_R }
+                { x: node.point.x + left.x * OW_L, y: node.point.y + left.y * OW_L, z: node.point.z },
+                { x: node.point.x + right.x * OW_R, y: node.point.y + right.y * OW_R, z: node.point.z }
             ]);
         } else {
             const [innerPts, outerPts] = calculateBothCornerPoints(
@@ -120,20 +124,23 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       let maxDist = Math.max(distL, distR, odistL, odistR);
 
       if (N > 1) {
-        const sL = { x: bL.x + dir0.x * (maxDist - distL), y: bL.y + dir0.y * (maxDist - distL) };
-        const sR = { x: bR.x + dir0.x * (maxDist - distR), y: bR.y + dir0.y * (maxDist - distR) };
+        const pz = node.point.z ?? 4;
+        const sL = { x: bL.x + dir0.x * (maxDist - distL), y: bL.y + dir0.y * (maxDist - distL), z: pz };
+        const sR = { x: bR.x + dir0.x * (maxDist - distR), y: bR.y + dir0.y * (maxDist - distR), z: pz };
 
-        const osL = { x: obL.x + dir0.x * (maxDist - odistL), y: obL.y + dir0.y * (maxDist - odistL) };
-        const osR = { x: obR.x + dir0.x * (maxDist - odistR), y: obR.y + dir0.y * (maxDist - odistR) };
+        const osL = { x: obL.x + dir0.x * (maxDist - odistL), y: obL.y + dir0.y * (maxDist - odistL), z: pz };
+        const osR = { x: obR.x + dir0.x * (maxDist - odistR), y: obR.y + dir0.y * (maxDist - odistR), z: pz };
 
         if (distL < maxDist - 0.01) {
           hubPolygon.push(sL);
           mesh.sidewalkPolygons.push([obL, bL, sL, osL]);
+          mesh.sidewalkTriangles.push([bL, sL, osL], [bL, osL, obL]);
           mesh.triangles.push([bL, sL, osL], [bL, osL, obL]);
         }
         if (distR < maxDist - 0.01) {
           hubPolygon.push(sR);
           mesh.sidewalkPolygons.push([osR, sR, bR, obR]);
+          mesh.sidewalkTriangles.push([bR, osR, sR], [bR, obR, osR]);
           mesh.triangles.push([bR, osR, sR], [bR, obR, osR]);
         }
 
@@ -156,6 +163,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     for (let i = 0; i < hubPolygon.length; i++) {
       const p1 = hubPolygon[i];
       const p2 = hubPolygon[(i + 1) % hubPolygon.length];
+      mesh.hubTriangles.push([node.point, p1, p2]);
       mesh.triangles.push([node.point, p1, p2]);
     }
 
@@ -168,6 +176,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       mesh.sidewalkPolygons.push(poly);
       
       for (let j = 0; j < innerPts.length - 1; j++) {
+        mesh.sidewalkTriangles.push([innerPts[j], outerPts[j], outerPts[j+1]]);
+        mesh.sidewalkTriangles.push([innerPts[j], outerPts[j+1], innerPts[j+1]]);
         mesh.triangles.push([innerPts[j], outerPts[j], outerPts[j+1]]);
         mesh.triangles.push([innerPts[j], outerPts[j+1], innerPts[j+1]]);
       }
@@ -242,10 +252,10 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       const OW_L = W + sw_left;
       const OW_R = W + sw_right;
       
-      leftPoints.push({ x: p2.x + left.x * W, y: p2.y + left.y * W });
-      rightPoints.push({ x: p2.x + right.x * W, y: p2.y + right.y * W });
-      outerLeftPoints.push({ x: p2.x + left.x * OW_L, y: p2.y + left.y * OW_L });
-      outerRightPoints.push({ x: p2.x + right.x * OW_R, y: p2.y + right.y * OW_R });
+      leftPoints.push({ x: p2.x + left.x * W, y: p2.y + left.y * W, z: p2.z });
+      rightPoints.push({ x: p2.x + right.x * W, y: p2.y + right.y * W, z: p2.z });
+      outerLeftPoints.push({ x: p2.x + left.x * OW_L, y: p2.y + left.y * OW_L, z: p2.z });
+      outerRightPoints.push({ x: p2.x + right.x * OW_R, y: p2.y + right.y * OW_R, z: p2.z });
     }
 
     const cwWidth = 14;
@@ -256,11 +266,12 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        
        if (isTrueJunction(sourceNode.id, nodes, edges)) {
          const sDir = getDir(spline[0], spline[Math.min(1, spline.length - 1)]);
+         const sz = spline[0].z ?? 4;
          
-         const new_bL = { x: bL.x + sDir.x * cwWidth, y: bL.y + sDir.y * cwWidth };
-         const new_bR = { x: bR.x + sDir.x * cwWidth, y: bR.y + sDir.y * cwWidth };
-         const new_obL = { x: obL.x + sDir.x * cwWidth, y: obL.y + sDir.y * cwWidth };
-         const new_obR = { x: obR.x + sDir.x * cwWidth, y: obR.y + sDir.y * cwWidth };
+         const new_bL = { x: bL.x + sDir.x * cwWidth, y: bL.y + sDir.y * cwWidth, z: sz };
+         const new_bR = { x: bR.x + sDir.x * cwWidth, y: bR.y + sDir.y * cwWidth, z: sz };
+         const new_obL = { x: obL.x + sDir.x * cwWidth, y: obL.y + sDir.y * cwWidth, z: sz };
+         const new_obR = { x: obR.x + sDir.x * cwWidth, y: obR.y + sDir.y * cwWidth, z: sz };
          
          if (hasCrosswalk(edge.id, true, nodes, edges)) {
            mesh.crosswalks.push({ edgeId: edge.id, nodeId: sourceNode.id, polygon: [bL, bR, new_bR, new_bL] });
@@ -268,6 +279,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
          mesh.sidewalkPolygons.push([obL, bL, new_bL, new_obL]);
          mesh.sidewalkPolygons.push([bR, obR, new_obR, new_bR]);
          
+         mesh.crosswalkTriangles.push([bL, bR, new_bR], [bL, new_bR, new_bL]);
+         mesh.sidewalkTriangles.push([obL, bL, new_bL], [obL, new_bL, new_obL]);
+         mesh.sidewalkTriangles.push([bR, obR, new_obR], [bR, new_obR, new_bR]);
          mesh.triangles.push([bL, bR, new_bR], [bL, new_bR, new_bL]);
          mesh.triangles.push([obL, bL, new_bL], [obL, new_bL, new_obL]);
          mesh.triangles.push([bR, obR, new_obR], [bR, new_obR, new_bR]);
@@ -276,7 +290,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
          obL = new_obL; obR = new_obR;
        }
 
-       const clStart = { x: (bL.x + bR.x) / 2, y: (bL.y + bR.y) / 2 };
+       const clStart = { x: (bL.x + bR.x) / 2, y: (bL.y + bR.y) / 2, z: (bL.z ?? 4) };
        const fullCenterLine = [clStart, ...centerLine];
 
        let poly = [bL, bR, ...rightPoints];
@@ -290,11 +304,12 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            
            if (isTrueJunction(targetNode!.id, nodes, edges)) {
              const tDir = getDir(spline[spline.length - 1], spline[Math.max(0, spline.length - 2)]);
+             const tz = spline[spline.length - 1].z ?? 4;
              
-             const new_tbL = { x: tbL.x + tDir.x * cwWidth, y: tbL.y + tDir.y * cwWidth };
-             const new_tbR = { x: tbR.x + tDir.x * cwWidth, y: tbR.y + tDir.y * cwWidth };
-             const new_otbL = { x: otbL.x + tDir.x * cwWidth, y: otbL.y + tDir.y * cwWidth };
-             const new_otbR = { x: otbR.x + tDir.x * cwWidth, y: otbR.y + tDir.y * cwWidth };
+             const new_tbL = { x: tbL.x + tDir.x * cwWidth, y: tbL.y + tDir.y * cwWidth, z: tz };
+             const new_tbR = { x: tbR.x + tDir.x * cwWidth, y: tbR.y + tDir.y * cwWidth, z: tz };
+             const new_otbL = { x: otbL.x + tDir.x * cwWidth, y: otbL.y + tDir.y * cwWidth, z: tz };
+             const new_otbR = { x: otbR.x + tDir.x * cwWidth, y: otbR.y + tDir.y * cwWidth, z: tz };
              
              if (hasCrosswalk(edge.id, false, nodes, edges)) {
                mesh.crosswalks.push({ edgeId: edge.id, nodeId: targetNode!.id, polygon: [tbL, tbR, new_tbR, new_tbL] });
@@ -302,6 +317,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
              mesh.sidewalkPolygons.push([otbL, tbL, new_tbL, new_otbL]);
              mesh.sidewalkPolygons.push([tbR, otbR, new_otbR, new_tbR]);
              
+             mesh.crosswalkTriangles.push([tbL, tbR, new_tbR], [tbL, new_tbR, new_tbL]);
+             mesh.sidewalkTriangles.push([otbL, tbL, new_tbL], [otbL, new_tbL, new_otbL]);
+             mesh.sidewalkTriangles.push([tbR, otbR, new_otbR], [tbR, new_otbR, new_tbR]);
              mesh.triangles.push([tbL, tbR, new_tbR], [tbL, new_tbR, new_tbL]);
              mesh.triangles.push([otbL, tbL, new_tbL], [otbL, new_tbL, new_otbL]);
              mesh.triangles.push([tbR, otbR, new_otbR], [tbR, new_otbR, new_tbR]);
@@ -310,7 +328,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
              otbL = new_otbL; otbR = new_otbR;
            }
 
-           const clEnd = { x: (tbL.x + tbR.x) / 2, y: (tbL.y + tbR.y) / 2 };
+           const clEnd = { x: (tbL.x + tbR.x) / 2, y: (tbL.y + tbR.y) / 2, z: (tbL.z ?? 4) };
            fullCenterLine.push(clEnd);
            
            poly.push(tbR, tbL);
@@ -323,17 +341,17 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                const sw_right = edge.sidewalkRight ?? edge.sidewalk ?? 12;
                const OW_L = W + sw_left;
                const OW_R = W + sw_right;
-               leftPoints.push({ x: p2.x + dir.y * W, y: p2.y + -dir.x * W });
-               rightPoints.push({ x: p2.x + -dir.y * W, y: p2.y + dir.x * W });
-               outerLeftPoints.push({ x: p2.x + dir.y * OW_L, y: p2.y + -dir.x * OW_L });
-               outerRightPoints.push({ x: p2.x + -dir.y * OW_R, y: p2.y + dir.x * OW_R });
+               leftPoints.push({ x: p2.x + dir.y * W, y: p2.y + -dir.x * W, z: p2.z });
+               rightPoints.push({ x: p2.x + -dir.y * W, y: p2.y + dir.x * W, z: p2.z });
+               outerLeftPoints.push({ x: p2.x + dir.y * OW_L, y: p2.y + -dir.x * OW_L, z: p2.z });
+               outerRightPoints.push({ x: p2.x + -dir.y * OW_R, y: p2.y + dir.x * OW_R, z: p2.z });
                poly = [bL, bR, ...rightPoints];
                outerPoly = [obL, obR, ...outerRightPoints];
                fullCenterLine.push(p2);
            } else {
                const lL = leftPoints[leftPoints.length - 1];
                const lR = rightPoints[rightPoints.length - 1];
-               fullCenterLine.push({ x: (lL.x + lR.x) / 2, y: (lL.y + lR.y) / 2 });
+               fullCenterLine.push({ x: (lL.x + lR.x) / 2, y: (lL.y + lR.y) / 2, z: (lL.z ?? 4) });
            }
        }
        poly.push(...[...leftPoints].reverse());
@@ -373,12 +391,18 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
          const nextOL = outerLeftPoints[j];
          const nextOR = outerRightPoints[j];
    
+         mesh.roadTriangles.push([currL, currR, nextR]);
+         mesh.roadTriangles.push([currL, nextR, nextL]);
          mesh.triangles.push([currL, currR, nextR]);
          mesh.triangles.push([currL, nextR, nextL]);
          
+         mesh.sidewalkTriangles.push([currOL, currL, nextL]);
+         mesh.sidewalkTriangles.push([currOL, nextL, nextOL]);
          mesh.triangles.push([currOL, currL, nextL]);
          mesh.triangles.push([currOL, nextL, nextOL]);
          
+         mesh.sidewalkTriangles.push([currR, currOR, nextOR]);
+         mesh.sidewalkTriangles.push([currR, nextOR, nextR]);
          mesh.triangles.push([currR, currOR, nextOR]);
          mesh.triangles.push([currR, nextOR, nextR]);
          
@@ -389,12 +413,18 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        }
 
        if (tbL && tbR && otbL && otbR) {
+          mesh.roadTriangles.push([currL, currR, tbR]);
+          mesh.roadTriangles.push([currL, tbR, tbL]);
           mesh.triangles.push([currL, currR, tbR]);
           mesh.triangles.push([currL, tbR, tbL]);
           
+          mesh.sidewalkTriangles.push([currOL, currL, tbL]);
+          mesh.sidewalkTriangles.push([currOL, tbL, otbL]);
           mesh.triangles.push([currOL, currL, tbL]);
           mesh.triangles.push([currOL, tbL, otbL]);
           
+          mesh.sidewalkTriangles.push([currR, currOR, otbR]);
+          mesh.sidewalkTriangles.push([currR, otbR, tbR]);
           mesh.triangles.push([currR, currOR, otbR]);
           mesh.triangles.push([currR, otbR, tbR]);
        }

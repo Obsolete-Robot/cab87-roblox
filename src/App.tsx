@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Settings2, Trash2, Plus, Bug, Menu, X, Layers, Download, Upload, Box } from 'lucide-react';
 import { Point, Node, Edge, MeshData } from './lib/types';
 import { getEdgeControlPoints, getExtendedEdgeControlPoints, sampleEdgeSpline } from './lib/network';
@@ -40,18 +40,31 @@ export default function App() {
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [isConnectMode, setIsConnectMode] = useState(false);
+  
+  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan'; id: string; pointId?: number } | null>(null);
+
+  const draggingPoint = useMemo(() => {
+    if (!dragging) return null;
+    if (dragging.type === 'node') return nodes.find(n => n.id === dragging.id)?.point || null;
+    if (dragging.type === 'edge') {
+        const edge = edges.find(e => e.id === dragging.id);
+        return edge ? edge.points[dragging.pointId!] : null;
+    }
+    return null;
+  }, [dragging, nodes, edges]);
+
   const [isMergeMode, setIsMergeMode] = useState(false);
   const [showMesh, setShowMesh] = useState(false);
   const [showControlPoints, setShowControlPoints] = useState(true);
-  const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
-  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan'; id: string; pointId?: number } | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [editingEdgeName, setEditingEdgeName] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState("");
   const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
   const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
   const [is3DMode, setIs3DMode] = useState(false);
+  const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
+  const [softSelectionRadius, setSoftSelectionRadius] = useState(200);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -267,11 +280,11 @@ export default function App() {
     ctx.save();
     ctx.translate(view.x, view.y);
     ctx.scale(view.zoom, view.zoom);
-    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle, meshResolution);
+    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle, meshResolution, softSelectionEnabled, softSelectionRadius, draggingPoint);
     ctx.restore();
-  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution]);
+  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, softSelectionEnabled, softSelectionRadius, draggingPoint]);
 
-  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number, meshResolution: number) => {
+  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number, meshResolution: number, softSelectionEnabled: boolean, softSelectionRadius: number, draggingPoint: Point | null) => {
     ctx.clearRect(0, 0, size.w, size.h);
 
     if (nodes.length === 0 || edges.length === 0) return;
@@ -386,6 +399,17 @@ export default function App() {
       ctx.setLineDash([]);
     }
 
+    // Soft selection radius
+    if (softSelectionEnabled && draggingPoint) {
+      ctx.beginPath();
+      ctx.arc(draggingPoint.x, draggingPoint.y, softSelectionRadius, 0, Math.PI * 2);
+      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     // Nodes and control points
     nodes.forEach(n => {
         ctx.beginPath();
@@ -492,8 +516,8 @@ export default function App() {
                     source: selectedNode,
                     target: n.id,
                     points: [
-                      { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, linear: true },
-                      { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, linear: true }
+                      { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
+                      { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
                     ],
                     width: 60,
                     sidewalk: 12,
@@ -523,8 +547,8 @@ export default function App() {
             if (Math.hypot(pos.x - edge.points[j].x, pos.y - edge.points[j].y) < 25) {
                 const newNodeId = Math.random().toString(36).substring(2, 9);
                 const newNode: Node = { id: newNodeId, point: edge.points[j] };
-                const edge1: Edge = { ...edge, target: newNodeId, points: edge.points.slice(0, j).map(p => ({ ...p, linear: true })) };
-                const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: edge.points.slice(j + 1).map(p => ({ ...p, linear: true })) };
+                const edge1: Edge = { ...edge, target: newNodeId, points: edge.points.slice(0, j) };
+                const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: edge.points.slice(j + 1) };
                 
                 const newEdges = [edge1];
                 if (edge2.points.length > 0 || edge2.target) newEdges.push(edge2);
@@ -591,11 +615,11 @@ export default function App() {
             const leftPoints = originalPoints.slice(0, userCurveIndex * 3);
             const rightPoints = originalPoints.slice(userCurveIndex * 3 + 2);
             
-            leftPoints.push({ ...p01, linear: true }, { ...p012, linear: true });
-            rightPoints.unshift({ ...p123, linear: true }, { ...p23, linear: true });
+            leftPoints.push(hp01, hp012);
+            rightPoints.unshift(hp123, hp23);
 
-            const edge1: Edge = { ...edge, target: newNodeId, points: leftPoints.map(p => ({ ...p, linear: true })) };
-            const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: rightPoints.map(p => ({ ...p, linear: true })) };
+            const edge1: Edge = { ...edge, target: newNodeId, points: leftPoints };
+            const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: rightPoints };
             
             const newEdges = [edge1, edge2];
 
@@ -615,8 +639,8 @@ export default function App() {
             const newEdgeId = Math.random().toString(36).substring(2, 9);
             const newEdge: Edge = {
                 id: newEdgeId, source: selectedNode, target: newNodeId, points: [
-                  { x: sn.point.x + (pos.x - sn.point.x)/3, y: sn.point.y + (pos.y - sn.point.y)/3, linear: true },
-                  { x: sn.point.x + 2*(pos.x - sn.point.x)/3, y: sn.point.y + 2*(pos.y - sn.point.y)/3, linear: true }
+                  { x: sn.point.x + (pos.x - sn.point.x)/3, y: sn.point.y + (pos.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
+                  { x: sn.point.x + 2*(pos.x - sn.point.x)/3, y: sn.point.y + 2*(pos.y - sn.point.y)/3, z: pos.z ?? 4, linear: true }
                 ], width: 60, sidewalk: 12, color: COLORS[edges.length % COLORS.length]
             };
             setEdges(prev => [...prev, newEdge]);
@@ -677,7 +701,7 @@ export default function App() {
                         const targetNode = edge.target ? nodes.find(tn => tn.id === edge.target) : null;
                         const targetAnchor = newPts.length >= 3 ? newPts[2] : (targetNode ? targetNode.point : newPts[1]);
                         if (targetAnchor) {
-                            newPts[0] = { ...newPts[0], x: n.point.x + (targetAnchor.x - n.point.x) / 3, y: n.point.y + (targetAnchor.y - n.point.y) / 3, linear: !newPts[0].linear };
+                            newPts[0] = { ...newPts[0], x: n.point.x + (targetAnchor.x - n.point.x) / 3, y: n.point.y + (targetAnchor.y - n.point.y) / 3, z: !newPts[0].linear ? n.point.z ?? 4 : newPts[0].z, linear: !newPts[0].linear };
                             changed = true;
                         }
                     }
@@ -685,7 +709,7 @@ export default function App() {
                         const sourceNode = nodes.find(sn => sn.id === edge.source);
                         const prevAnchor = newPts.length >= 3 ? newPts[newPts.length - 3] : (sourceNode ? sourceNode.point : newPts[0]);
                         if (prevAnchor) {
-                            newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: n.point.x + (prevAnchor.x - n.point.x) / 3, y: n.point.y + (prevAnchor.y - n.point.y) / 3, linear: !newPts[newPts.length - 1].linear };
+                            newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: n.point.x + (prevAnchor.x - n.point.x) / 3, y: n.point.y + (prevAnchor.y - n.point.y) / 3, z: !newPts[newPts.length - 1].linear ? n.point.z ?? 4 : newPts[newPts.length - 1].z, linear: !newPts[newPts.length - 1].linear };
                             changed = true;
                         }
                     }
@@ -710,8 +734,8 @@ export default function App() {
                         source: selectedNode,
                         target: n.id,
                         points: [
-                          { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, linear: true },
-                          { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, linear: true }
+                          { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
+                          { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
                         ],
                         width: 60,
                         sidewalk: 12,
@@ -797,9 +821,22 @@ export default function App() {
               if (j % 3 === 2) {
                 const prevAnchor = j === 2 ? sourceNode.point : newPts[j - 3];
                 const nextAnchor = j + 3 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 3];
-                newPts[j - 1] = { ...newPts[j - 1], x: newPts[j].x + (prevAnchor.x - newPts[j].x) / 3, y: newPts[j].y + (prevAnchor.y - newPts[j].y) / 3, linear: !newPts[j - 1].linear };
+                newPts[j - 1] = { 
+                    ...newPts[j - 1], 
+                    x: newPts[j].x + (prevAnchor.x - newPts[j].x) / 3, 
+                    y: newPts[j].y + (prevAnchor.y - newPts[j].y) / 3, 
+                    z: !newPts[j - 1].linear ? newPts[j].z ?? 4 : newPts[j - 1].z,
+                    linear: !newPts[j - 1].linear 
+                };
+                  newPts[j] = { ...newPts[j], linked: false };
                 if (targetNode || j + 3 < newPts.length) {
-                    newPts[j + 1] = { ...newPts[j + 1], x: newPts[j].x + (nextAnchor.x - newPts[j].x) / 3, y: newPts[j].y + (nextAnchor.y - newPts[j].y) / 3, linear: !newPts[j + 1].linear };
+                    newPts[j + 1] = { 
+                        ...newPts[j + 1], 
+                        x: newPts[j].x + (nextAnchor.x - newPts[j].x) / 3, 
+                        y: newPts[j].y + (nextAnchor.y - newPts[j].y) / 3, 
+                        z: !newPts[j + 1].linear ? newPts[j].z ?? 4 : newPts[j + 1].z,
+                        linear: !newPts[j + 1].linear 
+                    };
                 }
               } else if (j % 3 === 0) {
                 if (newPts[j].linear) {
@@ -807,16 +844,18 @@ export default function App() {
                 } else {
                     const anchorA = j === 0 ? sourceNode.point : newPts[j - 1];
                     const anchorB = j + 2 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 2];
-                    newPts[j] = { x: anchorA.x + (anchorB.x - anchorA.x) / 3, y: anchorA.y + (anchorB.y - anchorA.y) / 3, linear: true };
+                    newPts[j] = { x: anchorA.x + (anchorB.x - anchorA.x) / 3, y: anchorA.y + (anchorB.y - anchorA.y) / 3, z: anchorA.z ?? 4, linear: true };
                 }
+                if (j > 0 && newPts[j - 1]) newPts[j - 1] = { ...newPts[j - 1], linked: false };
               } else if (j % 3 === 1) {
                 if (newPts[j].linear) {
                     newPts[j] = { ...newPts[j], linear: false };
                 } else {
                     const anchorB = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
                     const anchorA = j === 1 ? sourceNode.point : newPts[j - 2];
-                    newPts[j] = { x: anchorB.x + (anchorA.x - anchorB.x) / 3, y: anchorB.y + (anchorA.y - anchorB.y) / 3, linear: true };
+                    newPts[j] = { x: anchorB.x + (anchorA.x - anchorB.x) / 3, y: anchorB.y + (anchorA.y - anchorB.y) / 3, z: anchorB.z ?? 4, linear: true };
                 }
+                if (j + 1 < newPts.length && newPts[j + 1]) newPts[j + 1] = { ...newPts[j + 1], linked: false };
               }
               return { ...edge, points: newPts };
             }));
@@ -843,8 +882,8 @@ export default function App() {
                     const angle = Math.atan2(h2.y - h1.y, h2.x - h1.x);
                     const d1 = Math.hypot(h1.x - anchor.x, h1.y - anchor.y);
                     const d2 = Math.hypot(h2.x - anchor.x, h2.y - anchor.y);
-                    newPts[j - 1] = { x: anchor.x - Math.cos(angle) * d1, y: anchor.y - Math.sin(angle) * d1 };
-                    newPts[j + 1] = { x: anchor.x + Math.cos(angle) * d2, y: anchor.y + Math.sin(angle) * d2 };
+                    newPts[j - 1] = { ...h1, x: anchor.x - Math.cos(angle) * d1, y: anchor.y - Math.sin(angle) * d1, linear: false };
+                    newPts[j + 1] = { ...h2, x: anchor.x + Math.cos(angle) * d2, y: anchor.y + Math.sin(angle) * d2, linear: false };
                     newPts[j] = { ...anchor, linked: true };
                 }
               } else if (j % 3 === 0 || j % 3 === 1) {
@@ -862,7 +901,7 @@ export default function App() {
                         const angle = Math.atan2(h1.y - anchor.y, h1.x - anchor.x);
                         const d2 = Math.hypot(h2.x - anchor.x, h2.y - anchor.y);
                         const oppAngle = angle + Math.PI;
-                        newPts[oppositeIdx] = { x: anchor.x + Math.cos(oppAngle) * d2, y: anchor.y + Math.sin(oppAngle) * d2 };
+                        newPts[oppositeIdx] = { ...h2, x: anchor.x + Math.cos(oppAngle) * d2, y: anchor.y + Math.sin(oppAngle) * d2 };
                         newPts[anchorIdx] = { ...anchor, linked: true };
                     }
                 }
@@ -933,13 +972,19 @@ export default function App() {
           const { p01, p12, p23, p012, p123, pMid } = splitBezier(p0, p1, p2, p3, t);
 
           const newPoints = [...e.points];
+          const isLinear = newPoints.length >= 2 ? !!newPoints[userCurveIndex * 3]?.linear : true;
+
+          const hp01 = { ...p01, linear: isLinear };
+          const hp012 = { ...p012, linear: isLinear };
+          const hp123 = { ...p123, linear: isLinear };
+          const hp23 = { ...p23, linear: isLinear };
           
           if (newPoints.length < 2) {
               // Note: our logic requires at least 2 points for the user curve
-              return { ...e, points: [p01, p012, pMid, p123, p23] };
+              return { ...e, points: [hp01, hp012, pMid, hp123, hp23] };
           } else {
               const spliceIdx = userCurveIndex * 3; 
-              newPoints.splice(spliceIdx, 2, p01, p012, pMid, p123, p23);
+              newPoints.splice(spliceIdx, 2, hp01, hp012, pMid, hp123, hp23);
               return { ...e, points: newPoints };
           }
         }));
@@ -973,18 +1018,19 @@ export default function App() {
       for (let j = 0; j < newPts.length; j++) {
           const handle = newPts[j];
           if (!handle.linear) continue;
-          if (j % 3 === 0) {
+        if (j % 3 === 0) {
               const anchorA = j === 0 ? sourceNode?.point : newPts[j - 1];
               const anchorB = j + 2 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 2];
               if (!anchorA || !anchorB) continue;
               const dx = anchorB.x - anchorA.x;
               const dy = anchorB.y - anchorA.y;
-              const distAB = Math.hypot(dx, dy);
-              if (distAB > 0.001) {
-                  const dirX = dx / distAB;
-                  const dirY = dy / distAB;
-                  const hDist = Math.hypot(handle.x - anchorA.x, handle.y - anchorA.y);
-                  newPts[j] = { ...handle, x: anchorA.x + dirX * hDist, y: anchorA.y + dirY * hDist };
+              const lenSq = dx * dx + dy * dy;
+              if (lenSq > 0.0001) {
+                  const hx = handle.x - anchorA.x;
+                  const hy = handle.y - anchorA.y;
+                  let t = (hx * dx + hy * dy) / lenSq;
+                  t = Math.max(0, t);
+                  newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
                   changed = true;
               }
           } else if (j % 3 === 1) {
@@ -993,12 +1039,13 @@ export default function App() {
               if (!anchorA || !anchorB) continue;
               const dx = anchorB.x - anchorA.x;
               const dy = anchorB.y - anchorA.y;
-              const distAB = Math.hypot(dx, dy);
-              if (distAB > 0.001) {
-                  const dirX = dx / distAB;
-                  const dirY = dy / distAB;
-                  const hDist = Math.hypot(handle.x - anchorA.x, handle.y - anchorA.y);
-                  newPts[j] = { ...handle, x: anchorA.x + dirX * hDist, y: anchorA.y + dirY * hDist };
+              const lenSq = dx * dx + dy * dy;
+              if (lenSq > 0.0001) {
+                  const hx = handle.x - anchorA.x;
+                  const hy = handle.y - anchorA.y;
+                  let t = (hx * dx + hy * dy) / lenSq;
+                  t = Math.max(0, t);
+                  newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
                   changed = true;
               }
           }
@@ -1007,115 +1054,201 @@ export default function App() {
   };
 
   const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan'; id: string; pointId?: number }, pos: Point) => {
+    const taper = (dist: number, radius: number) => Math.max(0, 1 - Math.pow(dist / radius, 2));
+
     if (dragState.type === 'node') {
         const draggingNode = nodes.find(n => n.id === dragState.id);
         if (draggingNode) {
             const dx = pos.x - draggingNode.point.x;
             const dy = pos.y - draggingNode.point.y;
-            const newNodes = nodes.map(n => n.id === dragState.id ? { ...n, point: pos } : n);
+            const dz = pos.z !== undefined ? pos.z - (draggingNode.point.z ?? 4) : 0;
+
+            const originPoint = draggingNode.point;
+            
+            const newNodes = nodes.map(n => {
+                if (n.id === draggingNode.id) return { ...n, point: { ...pos, z: pos.z ?? originPoint.z } };
+                if (!softSelectionEnabled) return n;
+                const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
+                const w = taper(d, softSelectionRadius);
+                if (w <= 0) return n;
+                return {
+                    ...n,
+                    point: {
+                        x: n.point.x + dx * w,
+                        y: n.point.y + dy * w,
+                        z: (n.point.z ?? 4) + dz * w
+                    }
+                };
+            });
             
             setNodes(newNodes);
-            
-            // Move only the explicitly connected control points (handles) with the node
             setEdges(edges.map(edge => {
-                if (edge.source === dragState.id || edge.target === dragState.id) {
-                    const newPoints = [...edge.points];
-                    if (edge.source === dragState.id && newPoints.length > 0) {
-                        newPoints[0] = { ...newPoints[0], x: newPoints[0].x + dx, y: newPoints[0].y + dy };
+                let newPoints = [...edge.points];
+                let changed = false;
+
+                if (edge.source === draggingNode.id || edge.target === draggingNode.id) {
+                    if (edge.source === draggingNode.id && newPoints.length > 0) {
+                        newPoints[0] = { ...newPoints[0], x: newPoints[0].x + dx, y: newPoints[0].y + dy, z: (newPoints[0].z ?? 4) + dz };
+                        if (newPoints.length > 1 && !softSelectionEnabled) {
+                            newPoints[1] = { ...newPoints[1], x: newPoints[1].x + dx, y: newPoints[1].y + dy, z: (newPoints[1].z ?? 4) + dz };
+                        }
+                        changed = true;
                     }
-                    if (edge.target === dragState.id && newPoints.length > 1) {
+                    if (edge.target === draggingNode.id && newPoints.length > 1) {
                         newPoints[newPoints.length - 1] = { 
                             ...newPoints[newPoints.length - 1],
                             x: newPoints[newPoints.length - 1].x + dx, 
-                            y: newPoints[newPoints.length - 1].y + dy 
+                            y: newPoints[newPoints.length - 1].y + dy,
+                            z: (newPoints[newPoints.length - 1].z ?? 4) + dz
                         };
+                        if (newPoints.length > 2 && !softSelectionEnabled) {
+                            newPoints[newPoints.length - 2] = { 
+                                ...newPoints[newPoints.length - 2],
+                                x: newPoints[newPoints.length - 2].x + dx, 
+                                y: newPoints[newPoints.length - 2].y + dy,
+                                z: (newPoints[newPoints.length - 2].z ?? 4) + dz
+                            };
+                        }
+                        changed = true;
                     }
-                    return enforceLinear({ ...edge, points: newPoints }, newNodes);
                 }
-                return edge;
+
+                if (softSelectionEnabled) {
+                    newPoints = newPoints.map((pt, idx) => {
+                        if (edge.source === draggingNode.id && idx === 0) return pt;
+                        if (edge.target === draggingNode.id && idx === newPoints.length - 1) return pt;
+                        
+                        const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
+                        const w = taper(d, softSelectionRadius);
+                        if (w <= 0) return pt;
+                        changed = true;
+                        return {
+                            ...pt,
+                            x: pt.x + dx * w,
+                            y: pt.y + dy * w,
+                            z: (pt.z ?? 4) + dz * w
+                        };
+                    });
+                }
+
+                return changed ? enforceLinear({ ...edge, points: newPoints }, newNodes) : edge;
             }));
         }
     } else if (dragState.type === 'edge' && dragState.pointId !== undefined) {
-      setEdges((prev) => prev.map((edge) => {
-        if (edge.id === dragState.id) {
-          const newPoints = [...edge.points];
-          const pid = dragState.pointId!;
-          const oldPos = newPoints[pid];
-          const dx = pos.x - oldPos.x;
-          const dy = pos.y - oldPos.y;
-          
-          if (pid % 3 === 2) {
-             // moving an anchor point, move its connected handles
-             newPoints[pid] = { ...oldPos, x: pos.x, y: pos.y };
-             if (pid - 1 >= 0) {
-                 newPoints[pid - 1] = { ...newPoints[pid - 1], x: newPoints[pid - 1].x + dx, y: newPoints[pid - 1].y + dy };
-             }
-             if (pid + 1 < newPoints.length) {
-                 newPoints[pid + 1] = { ...newPoints[pid + 1], x: newPoints[pid + 1].x + dx, y: newPoints[pid + 1].y + dy };
-             }
-          } else if (pid % 3 === 0 || pid % 3 === 1) {
-             // moving a handle, check if its linear
-             const handle = newPoints[pid];
-             let effectivePos = pos;
-             
-             if (handle.linear) {
-                 const sourceNode = nodes.find(n => n.id === edge.source);
-                 const targetNode = edge.target ? nodes.find(n => n.id === edge.target) : null;
-                 
-                 let anchorA, anchorB;
-                 if (pid % 3 === 0) {
-                     anchorA = pid === 0 ? sourceNode?.point : newPoints[pid - 1];
-                     anchorB = pid + 2 >= newPoints.length ? (targetNode ? targetNode.point : newPoints[pid]) : newPoints[pid + 2];
-                 } else {
-                     anchorA = pid + 1 >= newPoints.length ? (targetNode ? targetNode.point : newPoints[pid]) : newPoints[pid + 1];
-                     anchorB = pid === 1 ? sourceNode?.point : newPoints[pid - 2];
-                 }
-                 
-                 if (anchorA && anchorB) {
-                     const dxL = anchorB.x - anchorA.x;
-                     const dyL = anchorB.y - anchorA.y;
-                     const distAB = Math.hypot(dxL, dyL);
-                     if (distAB > 0.001) {
-                         const dirX = dxL / distAB;
-                         const dirY = dyL / distAB;
-                         const vX = pos.x - anchorA.x;
-                         const vY = pos.y - anchorA.y;
-                         const dot = vX * dirX + vY * dirY;
-                         // don't allow negative distance if we want it to stay between them or pointing the right way
-                         const clampedDot = Math.max(0, dot);
-                         effectivePos = { x: anchorA.x + dirX * clampedDot, y: anchorA.y + dirY * clampedDot };
-                     }
-                 }
-             }
+      const pid = dragState.pointId;
+      const draggingEdge = edges.find(e => e.id === dragState.id);
+      if (!draggingEdge) return;
+      const originPoint = draggingEdge.points[pid];
+      const dx = pos.x - originPoint.x;
+      const dy = pos.y - originPoint.y;
+      const dz = pos.z !== undefined ? pos.z - (originPoint.z ?? 4) : 0;
 
-             newPoints[pid] = { ...handle, ...effectivePos };
+      let newNodes = nodes;
+      if (softSelectionEnabled) {
+          newNodes = nodes.map(n => {
+              const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
+              const w = taper(d, softSelectionRadius);
+              if (w <= 0) return n;
+              return {
+                  ...n,
+                  point: {
+                      x: n.point.x + dx * w,
+                      y: n.point.y + dy * w,
+                      z: (n.point.z ?? 4) + dz * w
+                  }
+              };
+          });
+          setNodes(newNodes);
+      }
+      
+      setEdges((prev) => prev.map((e) => {
+        if (e.id !== draggingEdge.id && !softSelectionEnabled) return e;
+        
+        let newPoints = [...e.points];
+        let changed = false;
+
+        if (e.id === draggingEdge.id) {
+            const oldTarget = newPoints[pid];
+            const ddx = pos.x - oldTarget.x;
+            const ddy = pos.y - oldTarget.y;
+            const ddz = pos.z !== undefined ? pos.z - (oldTarget.z ?? 4) : 0;
+
+            if (pid % 3 === 2) {
+               newPoints[pid] = { ...oldTarget, x: pos.x, y: pos.y, z: pos.z ?? oldTarget.z ?? 4 };
+               if (pid - 1 >= 0) {
+                   newPoints[pid - 1] = { ...newPoints[pid - 1], x: newPoints[pid - 1].x + ddx, y: newPoints[pid - 1].y + ddy, z: (newPoints[pid - 1].z ?? 4) + ddz };
+               }
+               if (pid + 1 < newPoints.length) {
+                   newPoints[pid + 1] = { ...newPoints[pid + 1], x: newPoints[pid + 1].x + ddx, y: newPoints[pid + 1].y + ddy, z: (newPoints[pid + 1].z ?? 4) + ddz };
+               }
+            } else if (pid % 3 === 0 || pid % 3 === 1) {
+                const handle = newPoints[pid];
+                let effectivePos = { x: pos.x, y: pos.y, z: pos.z ?? oldTarget.z ?? 4 };
+
+                newPoints[pid] = { ...handle, ...effectivePos };
              
-             // Check if anchor is linked
-             const isIncoming = pid % 3 === 1;
-             const anchorIdx = isIncoming ? pid + 1 : pid - 1;
-             const oppositeIdx = isIncoming ? pid + 2 : pid - 2;
+                // Check if anchor is linked
+                const isIncoming = pid % 3 === 1;
+                const anchorIdx = isIncoming ? pid + 1 : pid - 1;
+                const oppositeIdx = isIncoming ? pid + 2 : pid - 2;
              
-             if (anchorIdx >= 0 && anchorIdx < newPoints.length && oppositeIdx >= 0 && oppositeIdx < newPoints.length) {
-                 const anchor = newPoints[anchorIdx];
-                 if (anchor.linked) {
-                     const dxAngle = effectivePos.x - anchor.x;
-                     const dyAngle = effectivePos.y - anchor.y;
-                     const angle = Math.atan2(dyAngle, dxAngle);
-                     const oppPos = newPoints[oppositeIdx];
-                     const oppDist = Math.hypot(oppPos.x - anchor.x, oppPos.y - anchor.y);
-                     const oppAngle = angle + Math.PI;
-                     newPoints[oppositeIdx] = {
-                         ...oppPos,
-                         x: anchor.x + Math.cos(oppAngle) * oppDist,
-                         y: anchor.y + Math.sin(oppAngle) * oppDist
-                     };
-                 }
-             }
-          }
-          
-          return enforceLinear({ ...edge, points: newPoints }, nodes);
+                if (anchorIdx >= 0 && anchorIdx < newPoints.length && oppositeIdx >= 0 && oppositeIdx < newPoints.length) {
+                    const anchor = newPoints[anchorIdx];
+                    if (anchor.linked) {
+                        const dxAngle = effectivePos.x - anchor.x;
+                        const dyAngle = effectivePos.y - anchor.y;
+                        const oppPos = newPoints[oppositeIdx];
+                        
+                        const curDist = Math.hypot(dxAngle, dyAngle);
+                        const oppDist = curDist;
+                        
+                        if (curDist > 0.001) {
+                            const oppDirX = -dxAngle / curDist;
+                            const oppDirY = -dyAngle / curDist;
+                            
+                            newPoints[oppositeIdx] = {
+                                ...oppPos,
+                                x: anchor.x + oppDirX * oppDist,
+                                y: anchor.y + oppDirY * oppDist,
+                                linear: false
+                            };
+                        }
+                    }
+                }
+            }
+            changed = true;
+
+            if (softSelectionEnabled) {
+                newPoints = newPoints.map((pt, idx) => {
+                    if (idx === pid) return pt;
+                    if (pid % 3 === 2 && (idx === pid - 1 || idx === pid + 1)) return pt;
+                    const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
+                    const w = taper(d, softSelectionRadius);
+                    if (w <= 0) return pt;
+                    return {
+                        ...pt,
+                        x: pt.x + dx * w,
+                        y: pt.y + dy * w,
+                        z: (pt.z ?? 4) + dz * w
+                    };
+                });
+            }
+        } else if (softSelectionEnabled) {
+            newPoints = newPoints.map((pt, idx) => {
+                const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
+                const w = taper(d, softSelectionRadius);
+                if (w <= 0) return pt;
+                changed = true;
+                return {
+                    ...pt,
+                    x: pt.x + dx * w,
+                    y: pt.y + dy * w,
+                    z: (pt.z ?? 4) + dz * w
+                };
+            });
         }
-        return edge;
+
+        return changed ? enforceLinear({ ...e, points: newPoints }, newNodes) : e;
       }));
     }
   };
@@ -1222,8 +1355,8 @@ export default function App() {
           source: srcNode.id,
           target: tgtId,
           points: [
-              { x: srcNode.point.x, y: srcNode.point.y + 33, linear: true },
-              { x: srcNode.point.x, y: srcNode.point.y + 66, linear: true }
+              { x: srcNode.point.x, y: srcNode.point.y + 33, z: srcNode.point.z ?? 4, linear: true },
+              { x: srcNode.point.x, y: srcNode.point.y + 66, z: srcNode.point.z ?? 4, linear: true }
           ],
           width: 60,
           sidewalk: 12,
@@ -1318,6 +1451,7 @@ export default function App() {
               edges={edges} 
               chamferAngle={chamferAngle} 
               meshResolution={meshResolution} 
+              showMesh={showMesh}
               setNodes={setNodes} 
               setEdges={setEdges} 
               view={view}
@@ -1329,6 +1463,9 @@ export default function App() {
               onPointerCancel={onPointerCancel}
               onContextMenu={onContextMenu}
               isDragging={dragging !== null && dragging.type !== 'pan'}
+              draggingPoint={draggingPoint}
+              softSelectionEnabled={softSelectionEnabled}
+              softSelectionRadius={softSelectionRadius}
               selectedNode={selectedNode}
               selectedEdge={selectedEdge}
             />
@@ -1391,6 +1528,37 @@ export default function App() {
             <div className="flex gap-2 mb-4">
                 <button onClick={addNode} className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-semibold flex justify-center items-center gap-2">Add Node</button>
                 <button onClick={addEdge} className="flex-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-semibold flex justify-center items-center gap-2">Add Road</button>
+            </div>
+          </section>
+
+          <section className="mb-6">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Selection</h3>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-slate-300">Soft Selection</span>
+                <button 
+                  onClick={() => setSoftSelectionEnabled(!softSelectionEnabled)}
+                  className={`px-3 py-1 rounded text-xs font-medium transition-colors ${softSelectionEnabled ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}
+                >
+                  {softSelectionEnabled ? 'ENABLED' : 'DISABLED'}
+                </button>
+              </div>
+              {softSelectionEnabled && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1">
+                    Radius ({softSelectionRadius}px)
+                  </label>
+                  <input
+                    type="range"
+                    min="10"
+                    max="1000"
+                    step="10"
+                    value={softSelectionRadius}
+                    onChange={(e) => setSoftSelectionRadius(parseInt(e.target.value))}
+                    className="w-full accent-blue-500 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
+              )}
             </div>
           </section>
 
