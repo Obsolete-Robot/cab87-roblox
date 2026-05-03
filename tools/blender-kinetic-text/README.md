@@ -52,7 +52,7 @@ The update pass reapplies:
 - font file and font size.
 - material color and alpha.
 - JSON default color, word color overrides, and color swatch remaps.
-- optional backing text stroke objects.
+- optional generated mesh stroke objects.
 - bevel depth and resolution.
 - extrusion.
 - fill mode and curve resolution.
@@ -80,7 +80,7 @@ When a kinetic JSON file includes `customColors`, `defaultColor`, or per-word co
 
 ## Stroke
 
-Enable `Stroke` in `Text Style` to create same-size backing Text copies around each generated word. This avoids Blender text curve offset artifacts while keeping the fill geometry unchanged. The stroke can be styled with color, alpha, width, copy count, and local Z offset.
+Enable `Stroke` in `Text Style` to create a generated mesh outline behind each word. The add-on evaluates a temporary flat version of the word, extracts its boundary loops, and builds one stroke mesh per word with bounded rounded joins so sharp or noisy font points cannot create long miter spikes. The fill Text geometry stays unchanged. The stroke can be styled with color, alpha, width, and local Z offset.
 
 The reapply pass clears generated word object, curve, material, and material node-tree animation before rebuilding keys so stale scale or alpha keys do not accumulate.
 

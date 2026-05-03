@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Kinetic Text Importer",
 	"author": "Cab87",
-	"version": (0, 1, 12),
+	"version": (0, 1, 14),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Kinetic Text",
 	"description": "Import Cab87 dialogue timing JSON and create animated kinetic Text objects.",
@@ -9,7 +9,7 @@ bl_info = {
 }
 
 import json
-from math import cos, pi, sin
+from math import atan2, ceil, cos, pi, sin, sqrt
 from pathlib import Path
 import re
 
@@ -165,7 +165,7 @@ class CAB87_KineticTextSettings(PropertyGroup):
 	color_remaps: CollectionProperty(type=CAB87_KineticTextColorRemap)
 	stroke_enabled: BoolProperty(
 		name="Stroke",
-		description="Create a larger backing text object behind each word for an outline-like stroke.",
+		description="Create a generated mesh outline behind each word.",
 		default=False,
 	)
 	stroke_color: FloatVectorProperty(
@@ -178,17 +178,10 @@ class CAB87_KineticTextSettings(PropertyGroup):
 	)
 	stroke_width: FloatProperty(
 		name="Stroke Width",
-		description="Offset distance for backing stroke copies, scaled by font size.",
+		description="Outline width, scaled by font size.",
 		default=0.06,
 		min=0.0,
 		soft_max=1.0,
-	)
-	stroke_copies: IntProperty(
-		name="Stroke Copies",
-		description="Number of same-size backing copies arranged around each fill word.",
-		default=8,
-		min=4,
-		soft_max=24,
 	)
 	stroke_z_offset: FloatProperty(
 		name="Stroke Z Offset",
@@ -377,7 +370,6 @@ class CAB87_PT_kinetic_text_panel(Panel):
 		if settings.stroke_enabled:
 			box.prop(settings, "stroke_color")
 			box.prop(settings, "stroke_width")
-			box.prop(settings, "stroke_copies")
 			box.prop(settings, "stroke_z_offset")
 		box.prop(settings, "fill_mode")
 		box.prop(settings, "bevel_depth")
@@ -447,24 +439,24 @@ def create_kinetic_text_group(context, layout_document: LayoutDocument, settings
 
 	font = load_font(settings.font_path)
 	section_starts = [section.start for section in layout_document.sections]
-	active_stroke_offsets = stroke_offsets(settings) if settings.stroke_enabled else ()
 	for layout_word in layout_document.words:
-		for stroke_layer_index, stroke_offset in enumerate(active_stroke_offsets):
-			stroke_obj = create_stroke_object(layout_word, settings, font, stroke_layer_index, stroke_offset)
-			stroke_obj.parent = group
-			collection.objects.link(stroke_obj)
-			stroke_material = create_word_material(f"{stroke_obj.name}_Material", settings, stroke_rgb(settings), stroke_alpha(settings))
-			stroke_obj.data.materials.append(stroke_material)
-			animate_word_object(
-				stroke_obj,
-				stroke_material,
-				layout_word,
-				section_starts,
-				settings,
-				fps,
-				stroke_rgb(settings),
-				stroke_alpha(settings),
-			)
+		if settings.stroke_enabled:
+			stroke_obj = create_stroke_object(layout_word, settings, font)
+			if stroke_obj:
+				stroke_obj.parent = group
+				collection.objects.link(stroke_obj)
+				stroke_material = create_word_material(f"{stroke_obj.name}_Material", settings, stroke_rgb(settings), stroke_alpha(settings))
+				stroke_obj.data.materials.append(stroke_material)
+				animate_word_object(
+					stroke_obj,
+					stroke_material,
+					layout_word,
+					section_starts,
+					settings,
+					fps,
+					stroke_rgb(settings),
+					stroke_alpha(settings),
+				)
 
 		curve = bpy.data.curves.new(unique_name(f"Cab87Word_{layout_word.source_index + 1:03d}_{slug(layout_word.text)}"), "FONT")
 		curve.body = layout_word.text
@@ -507,12 +499,7 @@ def apply_layout_to_existing_group(group, word_objects, layout_document: LayoutD
 			duplicate_stroke_objects.append(obj)
 		else:
 			stroke_objects_by_key[key] = obj
-	active_stroke_offsets = stroke_offsets(settings) if settings.stroke_enabled else ()
-	expected_stroke_keys = {
-		(layout_word.source_index, stroke_layer_index)
-		for layout_word in layout_document.words
-		for stroke_layer_index, _stroke_offset in enumerate(active_stroke_offsets)
-	}
+	expected_stroke_keys = {(layout_word.source_index, 0) for layout_word in layout_document.words} if settings.stroke_enabled else set()
 
 	for obj in word_objects:
 		clear_generated_word_animation(obj)
@@ -535,31 +522,34 @@ def apply_layout_to_existing_group(group, word_objects, layout_document: LayoutD
 		obj = objects_by_index.get(layout_word.source_index)
 		if obj is None or obj.type != "FONT":
 			continue
-		for stroke_layer_index, stroke_offset in enumerate(active_stroke_offsets):
-			stroke_key = (layout_word.source_index, stroke_layer_index)
+		if settings.stroke_enabled:
+			stroke_key = (layout_word.source_index, 0)
 			stroke_obj = stroke_objects_by_key.get(stroke_key)
+			if stroke_obj is not None and stroke_obj.type != "MESH":
+				remove_object_data(stroke_obj)
+				stroke_obj = None
 			if stroke_obj is None:
-				stroke_obj = create_stroke_object(layout_word, settings, font, stroke_layer_index, stroke_offset)
-				stroke_obj.parent = group
-				target_collection = collection_for_generated_object(obj, group)
-				target_collection.objects.link(stroke_obj)
-			else:
-				stroke_obj.data.body = layout_word.text
-				apply_stroke_text_curve_style(stroke_obj.data, settings, font)
-				stroke_obj.location = stroke_location(layout_word, settings, stroke_offset)
-				write_stroke_properties(stroke_obj, layout_word, stroke_layer_index)
-			stroke_material = ensure_word_material(stroke_obj, settings, stroke_rgb(settings), stroke_alpha(settings))
-			clear_material_animation(stroke_material)
-			animate_word_object(
-				stroke_obj,
-				stroke_material,
-				layout_word,
-				section_starts,
-				settings,
-				fps,
-				stroke_rgb(settings),
-				stroke_alpha(settings),
-			)
+				stroke_obj = create_stroke_object(layout_word, settings, font)
+				if stroke_obj:
+					stroke_obj.parent = group
+					target_collection = collection_for_generated_object(obj, group)
+					target_collection.objects.link(stroke_obj)
+			elif not update_stroke_object(stroke_obj, layout_word, settings, font):
+				remove_object_data(stroke_obj)
+				stroke_obj = None
+			if stroke_obj:
+				stroke_material = ensure_word_material(stroke_obj, settings, stroke_rgb(settings), stroke_alpha(settings))
+				clear_material_animation(stroke_material)
+				animate_word_object(
+					stroke_obj,
+					stroke_material,
+					layout_word,
+					section_starts,
+					settings,
+					fps,
+					stroke_rgb(settings),
+					stroke_alpha(settings),
+				)
 		obj.data.body = layout_word.text
 		apply_text_curve_style(obj.data, settings, font)
 		obj.location = scaled_location(layout_word, settings)
@@ -605,22 +595,249 @@ def apply_text_curve_style(curve, settings: CAB87_KineticTextSettings, font) -> 
 
 def apply_stroke_text_curve_style(curve, settings: CAB87_KineticTextSettings, font) -> None:
 	apply_text_curve_style(curve, settings, font)
+	curve.bevel_depth = 0.0
+	curve.bevel_resolution = 0
+	curve.extrude = 0.0
 	if hasattr(curve, "offset"):
 		curve.offset = 0.0
+	if hasattr(curve, "fill_mode"):
+		set_curve_fill_mode(curve, "BOTH")
 
 
-def create_stroke_object(layout_word, settings: CAB87_KineticTextSettings, font, stroke_layer_index: int, stroke_offset):
-	curve = bpy.data.curves.new(
-		unique_name(f"Cab87Stroke_{layout_word.source_index + 1:03d}_{stroke_layer_index + 1:02d}_{slug(layout_word.text)}"),
-		"FONT",
-	)
+def create_stroke_object(layout_word, settings: CAB87_KineticTextSettings, font):
+	mesh = create_stroke_mesh(layout_word, settings, font)
+	if mesh is None:
+		return None
+
+	obj = bpy.data.objects.new(unique_name(f"Cab87Stroke_{layout_word.source_index + 1:03d}_{slug(layout_word.text)}"), mesh)
+	write_stroke_properties(obj, layout_word)
+	obj.location = stroke_location(layout_word, settings)
+	return obj
+
+
+def update_stroke_object(stroke_obj, layout_word, settings: CAB87_KineticTextSettings, font) -> bool:
+	mesh = create_stroke_mesh(layout_word, settings, font)
+	if mesh is None:
+		return False
+
+	old_data = stroke_obj.data
+	material = old_data.materials[0] if old_data and old_data.materials else None
+	stroke_obj.data = mesh
+	if material is not None:
+		mesh.materials.append(material)
+	remove_unused_object_data(old_data)
+	write_stroke_properties(stroke_obj, layout_word)
+	stroke_obj.location = stroke_location(layout_word, settings)
+	return True
+
+
+def create_stroke_mesh(layout_word, settings: CAB87_KineticTextSettings, font):
+	width = stroke_mesh_width(settings)
+	if width <= 0.0:
+		return None
+
+	curve = bpy.data.curves.new(unique_name(f"_Cab87StrokeSource_{layout_word.source_index + 1:03d}_{slug(layout_word.text)}"), "FONT")
 	curve.body = layout_word.text
 	apply_stroke_text_curve_style(curve, settings, font)
 
-	obj = bpy.data.objects.new(curve.name, curve)
-	write_stroke_properties(obj, layout_word, stroke_layer_index)
-	obj.location = stroke_location(layout_word, settings, stroke_offset)
-	return obj
+	temp_obj = bpy.data.objects.new(curve.name, curve)
+	bpy.context.scene.collection.objects.link(temp_obj)
+	try:
+		bpy.context.view_layer.update()
+		depsgraph = bpy.context.evaluated_depsgraph_get()
+		evaluated_obj = temp_obj.evaluated_get(depsgraph)
+		source_mesh = evaluated_obj.to_mesh()
+		if source_mesh is None:
+			return None
+		try:
+			mesh_name = unique_name(f"Cab87StrokeMesh_{layout_word.source_index + 1:03d}_{slug(layout_word.text)}")
+			return stroke_mesh_from_text_mesh(source_mesh, mesh_name, width)
+		finally:
+			evaluated_obj.to_mesh_clear()
+	finally:
+		bpy.data.objects.remove(temp_obj, do_unlink=True)
+		remove_unused_object_data(curve)
+
+
+def stroke_mesh_width(settings: CAB87_KineticTextSettings) -> float:
+	return max(0.0, float(settings.stroke_width)) * max(0.01, float(settings.font_size))
+
+
+def stroke_mesh_from_text_mesh(source_mesh, name: str, width: float):
+	vertices = []
+	faces = []
+	for loop in boundary_loops_from_mesh(source_mesh):
+		points = clean_loop_points(
+			[(source_mesh.vertices[index].co.x, source_mesh.vertices[index].co.y) for index in loop],
+			max(0.000001, width * 0.02),
+		)
+		if len(points) < 3:
+			continue
+
+		area = signed_area_xy(points)
+		if abs(area) <= 0.000001:
+			continue
+
+		normals = outward_edge_normals(points, area)
+		for index, point in enumerate(points):
+			next_index = (index + 1) % len(points)
+			add_stroke_segment_faces(vertices, faces, point, points[next_index], normals[index], width)
+			add_stroke_join_faces(vertices, faces, point, normals[index - 1], normals[index], width)
+
+	if not faces:
+		return None
+
+	mesh = bpy.data.meshes.new(name)
+	mesh.from_pydata(vertices, [], faces)
+	mesh.validate()
+	mesh.update(calc_edges=True)
+	return mesh
+
+
+def outward_edge_normals(points: list[tuple[float, float]], area: float) -> list[tuple[float, float]]:
+	normals = []
+	for index, point in enumerate(points):
+		next_point = points[(index + 1) % len(points)]
+		dx = next_point[0] - point[0]
+		dy = next_point[1] - point[1]
+		length = sqrt((dx * dx) + (dy * dy))
+		if length <= 0.000001:
+			normals.append((0.0, 0.0))
+		elif area >= 0.0:
+			normals.append((dy / length, -dx / length))
+		else:
+			normals.append((-dy / length, dx / length))
+	return normals
+
+
+def add_stroke_segment_faces(vertices: list[tuple[float, float, float]], faces: list[tuple[int, ...]], first, second, normal, width: float) -> None:
+	if point_distance(first, second) <= 0.000001 or normal_length(normal) <= 0.000001:
+		return
+
+	outer_first = offset_point(first, normal, width)
+	outer_second = offset_point(second, normal, width)
+	append_oriented_face(vertices, faces, (first, outer_first, outer_second, second))
+
+
+def add_stroke_join_faces(vertices: list[tuple[float, float, float]], faces: list[tuple[int, ...]], point, previous_normal, current_normal, width: float) -> None:
+	if normal_length(previous_normal) <= 0.000001 or normal_length(current_normal) <= 0.000001:
+		return
+
+	arc_points = stroke_join_arc_points(point, previous_normal, current_normal, width)
+	for index in range(len(arc_points) - 1):
+		if point_distance(arc_points[index], arc_points[index + 1]) > 0.000001:
+			append_oriented_face(vertices, faces, (point, arc_points[index], arc_points[index + 1]))
+
+
+def stroke_join_arc_points(point, previous_normal, current_normal, width: float) -> list[tuple[float, float]]:
+	previous_angle = atan2(previous_normal[1], previous_normal[0])
+	current_angle = atan2(current_normal[1], current_normal[0])
+	delta = shortest_angle_delta(previous_angle, current_angle)
+	step_count = max(1, min(8, int(ceil(abs(delta) / (pi / 8)))))
+	return [
+		(
+			point[0] + (cos(previous_angle + (delta * step / step_count)) * width),
+			point[1] + (sin(previous_angle + (delta * step / step_count)) * width),
+		)
+		for step in range(step_count + 1)
+	]
+
+
+def shortest_angle_delta(start_angle: float, end_angle: float) -> float:
+	delta = (end_angle - start_angle + pi) % (2.0 * pi) - pi
+	if delta <= -pi:
+		return pi
+	return delta
+
+
+def append_oriented_face(vertices: list[tuple[float, float, float]], faces: list[tuple[int, ...]], points: tuple[tuple[float, float], ...]) -> None:
+	face_area = signed_area_xy([points[index] for index in range(len(points))])
+	if abs(face_area) <= 0.000001:
+		return
+
+	start_index = len(vertices)
+	vertices.extend((point[0], point[1], 0.0) for point in points)
+	face = tuple(range(start_index, start_index + len(points)))
+	if face_area < 0.0:
+		face = tuple(reversed(face))
+	faces.append(face)
+
+
+def offset_point(point, normal, width: float) -> tuple[float, float]:
+	return (point[0] + (normal[0] * width), point[1] + (normal[1] * width))
+
+
+def normal_length(normal) -> float:
+	return sqrt((normal[0] * normal[0]) + (normal[1] * normal[1]))
+
+
+def boundary_loops_from_mesh(mesh) -> list[list[int]]:
+	edge_counts = {}
+	edge_directions = {}
+	for polygon in mesh.polygons:
+		polygon_vertices = list(polygon.vertices)
+		for index, vertex_index in enumerate(polygon_vertices):
+			next_vertex_index = polygon_vertices[(index + 1) % len(polygon_vertices)]
+			key = tuple(sorted((vertex_index, next_vertex_index)))
+			edge_counts[key] = edge_counts.get(key, 0) + 1
+			edge_directions.setdefault(key, (vertex_index, next_vertex_index))
+
+	adjoining_vertices = {}
+	for key, count in edge_counts.items():
+		if count != 1:
+			continue
+		start_index, end_index = edge_directions[key]
+		adjoining_vertices.setdefault(start_index, []).append(end_index)
+
+	loops = []
+	while adjoining_vertices:
+		start_index = next(iter(adjoining_vertices))
+		current_index = start_index
+		loop = []
+		seen = set()
+		while current_index not in seen:
+			seen.add(current_index)
+			loop.append(current_index)
+			next_indices = adjoining_vertices.get(current_index)
+			if not next_indices:
+				break
+			next_index = next_indices.pop(0)
+			if not next_indices:
+				adjoining_vertices.pop(current_index, None)
+			current_index = next_index
+			if current_index == start_index:
+				break
+
+		if current_index == start_index and len(loop) >= 3:
+			loops.append(loop)
+		else:
+			for index in loop:
+				adjoining_vertices.pop(index, None)
+	return loops
+
+
+def clean_loop_points(points: list[tuple[float, float]], tolerance: float = 0.000001) -> list[tuple[float, float]]:
+	cleaned = []
+	for point in points:
+		if not cleaned or point_distance(cleaned[-1], point) > tolerance:
+			cleaned.append(point)
+	if len(cleaned) > 1 and point_distance(cleaned[0], cleaned[-1]) <= tolerance:
+		cleaned.pop()
+	return cleaned
+
+
+def signed_area_xy(points: list[tuple[float, float]]) -> float:
+	area = 0.0
+	for index, point in enumerate(points):
+		next_point = points[(index + 1) % len(points)]
+		area += (point[0] * next_point[1]) - (next_point[0] * point[1])
+	return area * 0.5
+
+
+def point_distance(first: tuple[float, float], second: tuple[float, float]) -> float:
+	dx = first[0] - second[0]
+	dy = first[1] - second[1]
+	return sqrt((dx * dx) + (dy * dy))
 
 
 def collection_for_generated_object(obj, group):
@@ -840,24 +1057,6 @@ def stroke_alpha(settings: CAB87_KineticTextSettings) -> float:
 		return 1.0
 
 
-def stroke_copy_count(settings: CAB87_KineticTextSettings) -> int:
-	return max(4, int(settings.stroke_copies or 8))
-
-
-def stroke_offsets(settings: CAB87_KineticTextSettings) -> tuple[tuple[float, float], ...]:
-	radius = max(0.0, float(settings.stroke_width)) * max(0.01, float(settings.font_size))
-	if radius <= 0:
-		return ()
-	count = stroke_copy_count(settings)
-	return tuple(
-		(
-			cos((2 * pi * index) / count) * radius,
-			sin((2 * pi * index) / count) * radius,
-		)
-		for index in range(count)
-	)
-
-
 def create_word_material(name: str, settings: CAB87_KineticTextSettings, color=None, alpha=None):
 	material = bpy.data.materials.new(unique_name(name))
 	material.use_nodes = True
@@ -1064,10 +1263,9 @@ def scaled_location(layout_word, settings: CAB87_KineticTextSettings):
 	return (layout_word.x * scale, layout_word.y * scale, 0.0)
 
 
-def stroke_location(layout_word, settings: CAB87_KineticTextSettings, stroke_offset):
+def stroke_location(layout_word, settings: CAB87_KineticTextSettings):
 	x, y, _z = scaled_location(layout_word, settings)
-	offset_x, offset_y = stroke_offset
-	return (x + offset_x, y + offset_y, settings.stroke_z_offset)
+	return (x, y, settings.stroke_z_offset)
 
 
 def update_scene_frame_range(scene, layout_document: LayoutDocument, settings: CAB87_KineticTextSettings, fps: float) -> None:
@@ -1094,9 +1292,9 @@ def write_word_properties(obj, layout_word) -> None:
 	obj["cab87_line_index"] = layout_word.line_index
 
 
-def write_stroke_properties(obj, layout_word, stroke_layer_index: int) -> None:
+def write_stroke_properties(obj, layout_word) -> None:
 	obj[STROKE_PROP] = True
-	obj[STROKE_LAYER_PROP] = int(stroke_layer_index)
+	obj[STROKE_LAYER_PROP] = 0
 	write_word_properties(obj, layout_word)
 
 
@@ -1134,7 +1332,8 @@ def write_group_properties(group, settings: CAB87_KineticTextSettings, document:
 	group["cab87_stroke_enabled"] = bool(settings.stroke_enabled)
 	group["cab87_stroke_color"] = [float(value) for value in settings.stroke_color]
 	group["cab87_stroke_width"] = settings.stroke_width
-	group["cab87_stroke_copies"] = settings.stroke_copies
+	if "cab87_stroke_copies" in group:
+		del group["cab87_stroke_copies"]
 	group["cab87_stroke_z_offset"] = settings.stroke_z_offset
 	group["cab87_fill_mode"] = settings.fill_mode
 	group["cab87_bevel_depth"] = settings.bevel_depth
@@ -1258,7 +1457,6 @@ def load_group_properties_into_settings(group, settings: CAB87_KineticTextSettin
 	if stroke_color and len(stroke_color) == 4:
 		settings.stroke_color = tuple(float(value) for value in stroke_color)
 	settings.stroke_width = _float_prop(group, "cab87_stroke_width", settings.stroke_width)
-	settings.stroke_copies = int(group.get("cab87_stroke_copies", settings.stroke_copies))
 	settings.stroke_z_offset = _float_prop(group, "cab87_stroke_z_offset", settings.stroke_z_offset)
 	load_color_remaps_from_group(group, settings)
 
@@ -1297,7 +1495,7 @@ def collect_word_objects(group):
 
 def collect_stroke_objects(group):
 	return sorted(
-		(obj for obj in group.children if obj.get(STROKE_PROP) and obj.type == "FONT"),
+		(obj for obj in group.children if obj.get(STROKE_PROP) and obj.type in {"FONT", "MESH"}),
 		key=lambda obj: stroke_object_key(obj),
 	)
 
@@ -1337,8 +1535,16 @@ def remove_object_data(obj) -> None:
 		if material and material.users <= 1:
 			bpy.data.materials.remove(material)
 	bpy.data.objects.remove(obj, do_unlink=True)
-	if data and data.users == 0:
+	remove_unused_object_data(data)
+
+
+def remove_unused_object_data(data) -> None:
+	if data is None or data.users != 0:
+		return
+	if hasattr(bpy.data, "curves") and bpy.data.curves.get(data.name) == data:
 		bpy.data.curves.remove(data)
+	elif hasattr(bpy.data, "meshes") and bpy.data.meshes.get(data.name) == data:
+		bpy.data.meshes.remove(data)
 
 
 def load_font(path: str):
@@ -1355,7 +1561,7 @@ def load_font(path: str):
 
 def unique_name(base: str) -> str:
 	name = base or "Cab87KineticText"
-	existing = bpy.data.objects.get(name) or bpy.data.collections.get(name) or bpy.data.curves.get(name) or bpy.data.materials.get(name)
+	existing = bpy.data.objects.get(name) or bpy.data.collections.get(name) or bpy.data.curves.get(name) or bpy.data.meshes.get(name) or bpy.data.materials.get(name)
 	if existing is None:
 		return name
 	index = 1
@@ -1365,6 +1571,7 @@ def unique_name(base: str) -> str:
 			bpy.data.objects.get(candidate)
 			or bpy.data.collections.get(candidate)
 			or bpy.data.curves.get(candidate)
+			or bpy.data.meshes.get(candidate)
 			or bpy.data.materials.get(candidate)
 		):
 			return candidate
