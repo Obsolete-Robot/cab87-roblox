@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Kinetic Text Importer",
 	"author": "Cab87",
-	"version": (0, 1, 14),
+	"version": (0, 1, 15),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Kinetic Text",
 	"description": "Import Cab87 dialogue timing JSON and create animated kinetic Text objects.",
@@ -190,6 +190,13 @@ class CAB87_KineticTextSettings(PropertyGroup):
 		soft_min=-1.0,
 		soft_max=1.0,
 	)
+	stroke_extrude: FloatProperty(
+		name="Stroke Extrusion",
+		description="Depth for the generated stroke mesh. Positive values extrude behind the stroke face.",
+		default=0.0,
+		min=0.0,
+		soft_max=2.0,
+	)
 	bevel_depth: FloatProperty(name="Bevel Depth", default=0.0, min=0.0, soft_max=1.0)
 	bevel_resolution: IntProperty(name="Bevel Resolution", default=0, min=0, soft_max=8)
 	extrude: FloatProperty(name="Extrusion", default=0.0, min=0.0, soft_max=2.0)
@@ -371,6 +378,7 @@ class CAB87_PT_kinetic_text_panel(Panel):
 			box.prop(settings, "stroke_color")
 			box.prop(settings, "stroke_width")
 			box.prop(settings, "stroke_z_offset")
+			box.prop(settings, "stroke_extrude")
 		box.prop(settings, "fill_mode")
 		box.prop(settings, "bevel_depth")
 		box.prop(settings, "bevel_resolution")
@@ -651,7 +659,7 @@ def create_stroke_mesh(layout_word, settings: CAB87_KineticTextSettings, font):
 			return None
 		try:
 			mesh_name = unique_name(f"Cab87StrokeMesh_{layout_word.source_index + 1:03d}_{slug(layout_word.text)}")
-			return stroke_mesh_from_text_mesh(source_mesh, mesh_name, width)
+			return stroke_mesh_from_text_mesh(source_mesh, mesh_name, width, stroke_mesh_depth(settings))
 		finally:
 			evaluated_obj.to_mesh_clear()
 	finally:
@@ -663,35 +671,109 @@ def stroke_mesh_width(settings: CAB87_KineticTextSettings) -> float:
 	return max(0.0, float(settings.stroke_width)) * max(0.01, float(settings.font_size))
 
 
-def stroke_mesh_from_text_mesh(source_mesh, name: str, width: float):
-	vertices = []
-	faces = []
+def stroke_mesh_depth(settings: CAB87_KineticTextSettings) -> float:
+	return max(0.0, float(settings.stroke_extrude))
+
+
+def stroke_mesh_from_text_mesh(source_mesh, name: str, width: float, depth: float):
+	face_points = source_mesh_face_points(source_mesh)
+	side_edges = []
+	loop_infos = []
 	for loop in boundary_loops_from_mesh(source_mesh):
-		points = clean_loop_points(
-			[(source_mesh.vertices[index].co.x, source_mesh.vertices[index].co.y) for index in loop],
-			max(0.000001, width * 0.02),
-		)
-		if len(points) < 3:
+		raw_points = clean_loop_points([(source_mesh.vertices[index].co.x, source_mesh.vertices[index].co.y) for index in loop])
+		if len(raw_points) < 3:
 			continue
 
-		area = signed_area_xy(points)
+		area = signed_area_xy(raw_points)
 		if abs(area) <= 0.000001:
 			continue
 
+		stroke_points = clean_loop_points(raw_points, max(0.000001, width * 0.02))
+		if len(stroke_points) < 3:
+			stroke_points = raw_points
+		loop_infos.append(
+			{
+				"raw_points": raw_points,
+				"stroke_points": stroke_points,
+				"area": area,
+				"depth": 0,
+			}
+		)
+
+	assign_loop_depths(loop_infos)
+	for loop_info in loop_infos:
+		if loop_info["depth"] % 2 == 1:
+			add_filled_loop_faces(face_points, loop_info["raw_points"])
+
+	for loop_info in loop_infos:
+		if loop_info["depth"] != 0:
+			continue
+		points = loop_info["stroke_points"]
+		area = signed_area_xy(points)
+		if abs(area) <= 0.000001:
+			continue
 		normals = outward_edge_normals(points, area)
 		for index, point in enumerate(points):
 			next_index = (index + 1) % len(points)
-			add_stroke_segment_faces(vertices, faces, point, points[next_index], normals[index], width)
-			add_stroke_join_faces(vertices, faces, point, normals[index - 1], normals[index], width)
+			add_stroke_segment_faces(face_points, side_edges, point, points[next_index], normals[index], width)
+			add_stroke_join_faces(face_points, side_edges, point, normals[index - 1], normals[index], width)
 
-	if not faces:
+	if not face_points:
 		return None
 
-	mesh = bpy.data.meshes.new(name)
-	mesh.from_pydata(vertices, [], faces)
-	mesh.validate()
-	mesh.update(calc_edges=True)
-	return mesh
+	return create_mesh_from_2d_faces(name, face_points, depth, side_edges)
+
+
+def source_mesh_face_points(source_mesh) -> list[tuple[tuple[float, float], ...]]:
+	face_points = []
+	for polygon in source_mesh.polygons:
+		points = tuple((source_mesh.vertices[index].co.x, source_mesh.vertices[index].co.y) for index in polygon.vertices)
+		if len(points) >= 3 and abs(signed_area_xy(list(points))) > 0.000001:
+			face_points.append(points)
+	return face_points
+
+
+def assign_loop_depths(loop_infos: list[dict]) -> None:
+	for loop_info in loop_infos:
+		sample_point = loop_sample_point(loop_info["raw_points"])
+		depth = 0
+		for other_loop_info in loop_infos:
+			if other_loop_info is loop_info:
+				continue
+			if abs(other_loop_info["area"]) <= abs(loop_info["area"]):
+				continue
+			if point_in_polygon(sample_point, other_loop_info["raw_points"]):
+				depth += 1
+		loop_info["depth"] = depth
+
+
+def loop_sample_point(points: list[tuple[float, float]]) -> tuple[float, float]:
+	return (
+		sum(point[0] for point in points) / len(points),
+		sum(point[1] for point in points) / len(points),
+	)
+
+
+def point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
+	x, y = point
+	inside = False
+	j = len(polygon) - 1
+	for i in range(len(polygon)):
+		xi, yi = polygon[i]
+		xj, yj = polygon[j]
+		intersects = ((yi > y) != (yj > y)) and (x < ((xj - xi) * (y - yi) / (yj - yi)) + xi)
+		if intersects:
+			inside = not inside
+		j = i
+	return inside
+
+
+def add_filled_loop_faces(face_points: list[tuple[tuple[float, float], ...]], points: list[tuple[float, float]]) -> None:
+	center = loop_sample_point(points)
+	for index, point in enumerate(points):
+		next_point = points[(index + 1) % len(points)]
+		if point_distance(point, next_point) > 0.000001:
+			face_points.append((center, point, next_point))
 
 
 def outward_edge_normals(points: list[tuple[float, float]], area: float) -> list[tuple[float, float]]:
@@ -710,23 +792,25 @@ def outward_edge_normals(points: list[tuple[float, float]], area: float) -> list
 	return normals
 
 
-def add_stroke_segment_faces(vertices: list[tuple[float, float, float]], faces: list[tuple[int, ...]], first, second, normal, width: float) -> None:
+def add_stroke_segment_faces(face_points: list[tuple[tuple[float, float], ...]], side_edges: list[tuple[tuple[float, float], tuple[float, float]]], first, second, normal, width: float) -> None:
 	if point_distance(first, second) <= 0.000001 or normal_length(normal) <= 0.000001:
 		return
 
 	outer_first = offset_point(first, normal, width)
 	outer_second = offset_point(second, normal, width)
-	append_oriented_face(vertices, faces, (first, outer_first, outer_second, second))
+	append_oriented_face(face_points, (first, outer_first, outer_second, second))
+	side_edges.append((outer_first, outer_second))
 
 
-def add_stroke_join_faces(vertices: list[tuple[float, float, float]], faces: list[tuple[int, ...]], point, previous_normal, current_normal, width: float) -> None:
+def add_stroke_join_faces(face_points: list[tuple[tuple[float, float], ...]], side_edges: list[tuple[tuple[float, float], tuple[float, float]]], point, previous_normal, current_normal, width: float) -> None:
 	if normal_length(previous_normal) <= 0.000001 or normal_length(current_normal) <= 0.000001:
 		return
 
 	arc_points = stroke_join_arc_points(point, previous_normal, current_normal, width)
 	for index in range(len(arc_points) - 1):
 		if point_distance(arc_points[index], arc_points[index + 1]) > 0.000001:
-			append_oriented_face(vertices, faces, (point, arc_points[index], arc_points[index + 1]))
+			append_oriented_face(face_points, (point, arc_points[index], arc_points[index + 1]))
+			side_edges.append((arc_points[index], arc_points[index + 1]))
 
 
 def stroke_join_arc_points(point, previous_normal, current_normal, width: float) -> list[tuple[float, float]]:
@@ -750,17 +834,108 @@ def shortest_angle_delta(start_angle: float, end_angle: float) -> float:
 	return delta
 
 
-def append_oriented_face(vertices: list[tuple[float, float, float]], faces: list[tuple[int, ...]], points: tuple[tuple[float, float], ...]) -> None:
+def append_oriented_face(face_points: list[tuple[tuple[float, float], ...]], points: tuple[tuple[float, float], ...]) -> None:
 	face_area = signed_area_xy([points[index] for index in range(len(points))])
 	if abs(face_area) <= 0.000001:
 		return
 
-	start_index = len(vertices)
-	vertices.extend((point[0], point[1], 0.0) for point in points)
-	face = tuple(range(start_index, start_index + len(points)))
 	if face_area < 0.0:
-		face = tuple(reversed(face))
-	faces.append(face)
+		points = tuple(reversed(points))
+	face_points.append(points)
+
+
+def create_mesh_from_2d_faces(name: str, face_points: list[tuple[tuple[float, float], ...]], depth: float, side_edges=None):
+	vertices_2d = []
+	vertex_lookup = {}
+	faces = []
+	for points in face_points:
+		face = tuple(vertex_index_for_point(point, vertices_2d, vertex_lookup) for point in points)
+		if len(set(face)) < 3:
+			continue
+		if face_area_for_indices(face, vertices_2d) < 0.0:
+			face = tuple(reversed(face))
+		faces.append(face)
+
+	if not faces:
+		return None
+
+	side_edge_indices = [
+		(vertex_index_for_point(first, vertices_2d, vertex_lookup), vertex_index_for_point(second, vertices_2d, vertex_lookup))
+		for first, second in (side_edges or [])
+		if point_distance(first, second) > 0.000001
+	]
+	mesh = bpy.data.meshes.new(name)
+	if depth <= 0.000001:
+		vertices = [(point[0], point[1], 0.0) for point in vertices_2d]
+		mesh.from_pydata(vertices, [], faces)
+	else:
+		vertices, extruded_faces = extruded_mesh_data(vertices_2d, faces, depth, side_edge_indices)
+		mesh.from_pydata(vertices, [], extruded_faces)
+	mesh.validate()
+	mesh.update(calc_edges=True)
+	return mesh
+
+
+def vertex_index_for_point(point: tuple[float, float], vertices_2d: list[tuple[float, float]], vertex_lookup: dict[tuple[int, int], int]) -> int:
+	key = (round(point[0], 6), round(point[1], 6))
+	if key in vertex_lookup:
+		return vertex_lookup[key]
+	vertex_lookup[key] = len(vertices_2d)
+	vertices_2d.append(point)
+	return vertex_lookup[key]
+
+
+def face_area_for_indices(face: tuple[int, ...], vertices_2d: list[tuple[float, float]]) -> float:
+	return signed_area_xy([vertices_2d[index] for index in face])
+
+
+def extruded_mesh_data(vertices_2d: list[tuple[float, float]], faces: list[tuple[int, ...]], depth: float, side_edge_indices: list[tuple[int, int]] | None = None):
+	front_vertices = [(point[0], point[1], 0.0) for point in vertices_2d]
+	back_vertices = [(point[0], point[1], -depth) for point in vertices_2d]
+	back_offset = len(front_vertices)
+	extruded_faces = list(faces)
+	extruded_faces.extend(tuple(reversed([index + back_offset for index in face])) for face in faces)
+	side_edges = dedupe_side_edges(side_edge_indices or [])
+	extruded_faces.extend(side_faces_from_edges(side_edges, back_offset) if side_edges else side_faces_for_boundary_edges(faces, back_offset))
+	return front_vertices + back_vertices, extruded_faces
+
+
+def dedupe_side_edges(side_edge_indices: list[tuple[int, int]]) -> list[tuple[int, int]]:
+	edges = []
+	seen = set()
+	for start_index, end_index in side_edge_indices:
+		if start_index == end_index:
+			continue
+		key = tuple(sorted((start_index, end_index)))
+		if key in seen:
+			continue
+		seen.add(key)
+		edges.append((start_index, end_index))
+	return edges
+
+
+def side_faces_from_edges(side_edges: list[tuple[int, int]], back_offset: int) -> list[tuple[int, int, int, int]]:
+	return [
+		(start_index, end_index, end_index + back_offset, start_index + back_offset)
+		for start_index, end_index in side_edges
+	]
+
+
+def side_faces_for_boundary_edges(faces: list[tuple[int, ...]], back_offset: int) -> list[tuple[int, int, int, int]]:
+	edge_counts = {}
+	edge_directions = {}
+	for face in faces:
+		for index, vertex_index in enumerate(face):
+			next_vertex_index = face[(index + 1) % len(face)]
+			key = tuple(sorted((vertex_index, next_vertex_index)))
+			edge_counts[key] = edge_counts.get(key, 0) + 1
+			edge_directions.setdefault(key, (vertex_index, next_vertex_index))
+	return [
+		(start_index, end_index, end_index + back_offset, start_index + back_offset)
+		for key, count in edge_counts.items()
+		if count == 1
+		for start_index, end_index in (edge_directions[key],)
+	]
 
 
 def offset_point(point, normal, width: float) -> tuple[float, float]:
@@ -1335,6 +1510,7 @@ def write_group_properties(group, settings: CAB87_KineticTextSettings, document:
 	if "cab87_stroke_copies" in group:
 		del group["cab87_stroke_copies"]
 	group["cab87_stroke_z_offset"] = settings.stroke_z_offset
+	group["cab87_stroke_extrude"] = settings.stroke_extrude
 	group["cab87_fill_mode"] = settings.fill_mode
 	group["cab87_bevel_depth"] = settings.bevel_depth
 	group["cab87_bevel_resolution"] = settings.bevel_resolution
@@ -1458,6 +1634,7 @@ def load_group_properties_into_settings(group, settings: CAB87_KineticTextSettin
 		settings.stroke_color = tuple(float(value) for value in stroke_color)
 	settings.stroke_width = _float_prop(group, "cab87_stroke_width", settings.stroke_width)
 	settings.stroke_z_offset = _float_prop(group, "cab87_stroke_z_offset", settings.stroke_z_offset)
+	settings.stroke_extrude = _float_prop(group, "cab87_stroke_extrude", settings.stroke_extrude)
 	load_color_remaps_from_group(group, settings)
 
 
