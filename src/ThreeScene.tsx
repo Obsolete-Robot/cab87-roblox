@@ -11,6 +11,7 @@ interface ThreeSceneProps {
   edges: Edge[];
   chamferAngle: number;
   meshResolution: number;
+  laneWidth?: number;
   showMesh: boolean;
   showControlPoints: boolean;
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
@@ -229,20 +230,90 @@ function ExtrudedPolygon({ points, color, height, yOffset = 0, wireframe = false
   );
 }
 
-function CenterLines({ lines }: { lines: {x: number, y: number}[][] }) {
+function LaneArrows({ arrows }: { arrows: { position: Point, dir: Point }[] }) {
+  const instancedMeshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  
+  const geometry = useMemo(() => {
+    const geo = new THREE.ConeGeometry(2, 6, 3);
+    geo.rotateX(-Math.PI / 2); // Point forward along -Z
+    return geo;
+  }, []);
+
+  useEffect(() => {
+    if (instancedMeshRef.current) {
+      arrows.forEach((arrow, i) => {
+        dummy.position.set(arrow.position.x, (arrow.position.z ?? 4) + 0.5, arrow.position.y);
+        
+        // dir x,y corresponds to 3D x,z
+        // Math.atan2(z, x) is the angle around Y
+        const angle = Math.atan2(-arrow.dir.y, arrow.dir.x);
+        dummy.rotation.set(0, angle - Math.PI / 2, 0);
+        
+        dummy.updateMatrix();
+        instancedMeshRef.current!.setMatrixAt(i, dummy.matrix);
+      });
+      instancedMeshRef.current.instanceMatrix.needsUpdate = true;
+    }
+  }, [arrows, dummy]);
+
+  if (!arrows || arrows.length === 0) return null;
+
+  return (
+    <instancedMesh ref={instancedMeshRef} args={[geometry, undefined, arrows.length]}>
+      <meshBasicMaterial color="#ffffff" opacity={0.6} transparent depthWrite={false} />
+    </instancedMesh>
+  );
+}
+
+function LaneLines({ dashedLines, solidYellowLines }: { dashedLines: Point[][], solidYellowLines: Point[][] }) {
   const lineGeometries = useMemo(() => {
-    return lines.map(line => {
+    const dashed = dashedLines.map(line => {
       if (line.length < 2) return null;
-      const points = line.map(p => new THREE.Vector3(p.x, 0.5, p.y));
+      const points = line.map(p => new THREE.Vector3(p.x, (p.z ?? 4) + 0.1, p.y));
       const geo = new THREE.BufferGeometry().setFromPoints(points);
-      return geo;
+      // required for LineDashedMaterial to work
+      const tempLine = new THREE.Line(geo, new THREE.LineBasicMaterial());
+      tempLine.computeLineDistances();
+      return tempLine.geometry;
     }).filter(Boolean) as THREE.BufferGeometry[];
-  }, [lines]);
+
+    const solid = solidYellowLines.map(line => {
+      if (line.length < 2) return null;
+      // create double yellow line points
+      const points1: THREE.Vector3[] = [];
+      const points2: THREE.Vector3[] = [];
+      for (let i = 0; i < line.length; i++) {
+          const p = line[i];
+          let dir = new THREE.Vector2();
+          if (i < line.length - 1) {
+              dir.set(line[i+1].x - p.x, line[i+1].y - p.y).normalize();
+          } else if (i > 0) {
+              dir.set(p.x - line[i-1].x, p.y - line[i-1].y).normalize();
+          } else {
+              dir.set(1, 0);
+          }
+          // offset by 2 units on each side
+          const right = new THREE.Vector2(-dir.y, dir.x).multiplyScalar(2);
+          points1.push(new THREE.Vector3(p.x + right.x, (p.z ?? 4) + 0.1, p.y + right.y));
+          points2.push(new THREE.Vector3(p.x - right.x, (p.z ?? 4) + 0.1, p.y - right.y));
+      }
+      return [
+        new THREE.BufferGeometry().setFromPoints(points1),
+        new THREE.BufferGeometry().setFromPoints(points2)
+      ];
+    }).filter(Boolean).flat() as THREE.BufferGeometry[];
+
+    return { dashed, solid };
+  }, [dashedLines, solidYellowLines]);
 
   return (
     <group>
-      {lineGeometries.map((geo, i) => (
-        <primitive key={i} object={new THREE.Line(geo, new THREE.LineDashedMaterial({ color: "white", dashSize: 10, gapSize: 10, linewidth: 2 }))} />
+      {lineGeometries.dashed.map((geo, i) => (
+        <primitive key={`dashed-${i}`} object={new THREE.Line(geo, new THREE.LineDashedMaterial({ color: "#cccccc", dashSize: 6, gapSize: 6, linewidth: 2 }))} />
+      ))}
+      {lineGeometries.solid.map((geo, i) => (
+        <primitive key={`solid-${i}`} object={new THREE.Line(geo, new THREE.LineBasicMaterial({ color: "#eab308", linewidth: 3 }))} />
       ))}
     </group>
   );
@@ -392,7 +463,8 @@ function SceneContent({
       </group>
 
       <ActualMesh mesh={mesh} showMesh={showMesh} />
-      {!showMesh && <CenterLines lines={mesh.centerLines} />}
+      {!showMesh && <LaneLines dashedLines={mesh.dashedLines} solidYellowLines={mesh.solidYellowLines} />}
+      {!showMesh && <LaneArrows arrows={mesh.laneArrows} />}
 
       {softSelectionEnabled && isDragging && draggingPoint && (
         <mesh 
@@ -408,14 +480,14 @@ function SceneContent({
 }
 
 export default function ThreeScene({ 
-    nodes, edges, chamferAngle, meshResolution, showMesh, showControlPoints,
+    nodes, edges, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
     setNodes, setEdges, 
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
     isDragging, draggingPoint, selectedNode, selectedEdge,
     softSelectionEnabled, softSelectionRadius,
     view, setView, containerRef 
-}: ThreeSceneProps & { draggingPoint: Point | null }) {
-  const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution), [nodes, edges, chamferAngle, meshResolution]);
+}: ThreeSceneProps & { draggingPoint: Point | null, laneWidth: number }) {
+  const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth), [nodes, edges, chamferAngle, meshResolution, laneWidth]);
 
   const initialCameraParams = useMemo(() => {
     const cW = containerRef.current?.clientWidth || 800;

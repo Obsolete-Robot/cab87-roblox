@@ -11,7 +11,7 @@ export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource:
   return [bases[0], bases[1]];
 }
 
-export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20): MeshData {
+export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20, laneWidth: number = 30): MeshData {
   const mesh: MeshData = {
     vertices: [],
     triangles: [],
@@ -23,7 +23,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     roadPolygons: [],
     crosswalks: [],
     sidewalkPolygons: [],
-    centerLines: []
+    dashedLines: [],
+    solidYellowLines: [],
+    laneArrows: []
   };
 
   const edgeSplines = new Map<string, Point[]>();
@@ -211,7 +213,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     const outerLeftPoints: Point[] = [];
     const outerRightPoints: Point[] = [];
 
-    const centerLine: Point[] = [];
+    const centerLine: { p: Point, dir: Point }[] = [];
 
     const controlPoints = getEdgeControlPoints(edge, nodes);
     const srcDir = getDir(controlPoints[0], controlPoints[1]);
@@ -239,12 +241,12 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
           }
       }
 
-      centerLine.push(p2);
-
       let dir = getDir(p1, p2);
       if (j < spline.length - 1) {
         dir = getDir(spline[j-1], spline[j+1]); 
       }
+      
+      centerLine.push({ p: p2, dir });
       const left = { x: dir.y, y: -dir.x };
       const right = { x: -dir.y, y: dir.x };
       const sw_left = edge.sidewalkLeft ?? edge.sidewalk ?? 12;
@@ -291,7 +293,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        }
 
        const clStart = { x: (bL.x + bR.x) / 2, y: (bL.y + bR.y) / 2, z: (bL.z ?? 4) };
-       const fullCenterLine = [clStart, ...centerLine];
+       const startDir = getDir(spline[0], spline[Math.min(1, spline.length - 1)]);
+       const fullCenterLine: { p: Point, dir: Point }[] = [{ p: clStart, dir: startDir }, ...centerLine];
 
        let poly = [bL, bR, ...rightPoints];
        let outerPoly = [obL, obR, ...outerRightPoints];
@@ -329,7 +332,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            }
 
            const clEnd = { x: (tbL.x + tbR.x) / 2, y: (tbL.y + tbR.y) / 2, z: (tbL.z ?? 4) };
-           fullCenterLine.push(clEnd);
+           const endDirForDashes = getDir(spline[Math.max(0, spline.length - 2)], spline[spline.length - 1]);
+           fullCenterLine.push({ p: clEnd, dir: endDirForDashes });
            
            poly.push(tbR, tbL);
            outerPoly.push(otbR, otbL);
@@ -347,16 +351,88 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                outerRightPoints.push({ x: p2.x + -dir.y * OW_R, y: p2.y + dir.x * OW_R, z: p2.z });
                poly = [bL, bR, ...rightPoints];
                outerPoly = [obL, obR, ...outerRightPoints];
-               fullCenterLine.push(p2);
+               fullCenterLine.push({ p: p2, dir });
            } else {
                const lL = leftPoints[leftPoints.length - 1];
                const lR = rightPoints[rightPoints.length - 1];
-               fullCenterLine.push({ x: (lL.x + lR.x) / 2, y: (lL.y + lR.y) / 2, z: (lL.z ?? 4) });
+               const endDirForDashes = getDir(spline[Math.max(0, spline.length - 2)], spline[spline.length - 1]);
+               fullCenterLine.push({ p: { x: (lL.x + lR.x) / 2, y: (lL.y + lR.y) / 2, z: (lL.z ?? 4) }, dir: endDirForDashes });
            }
        }
        poly.push(...[...leftPoints].reverse());
        outerPoly.push(...[...outerLeftPoints].reverse());
-       mesh.centerLines.push(fullCenterLine);
+       
+       let numLanesForward = 0;
+       let numLanesBackward = 0;
+       const isOneWay = !!edge.oneWay;
+
+       if (isOneWay) {
+           numLanesForward = Math.max(1, Math.floor(edge.width / laneWidth));
+           numLanesBackward = 0;
+       } else {
+           numLanesForward = Math.max(1, Math.floor((edge.width / 2) / laneWidth));
+           numLanesBackward = Math.max(1, Math.floor((edge.width / 2) / laneWidth));
+       }
+
+       const laneCenters: { offset: number, dir: number }[] = [];
+       const laneDividers: { offset: number, type: 'dashed' | 'double_yellow' }[] = [];
+
+       if (isOneWay) {
+           const N = numLanesForward;
+           const startOffset = - (N - 1) * laneWidth / 2;
+           for (let i = 0; i < N; i++) {
+               laneCenters.push({ offset: startOffset + i * laneWidth, dir: 1 });
+           }
+           for (let i = 0; i < N - 1; i++) {
+               laneDividers.push({ offset: startOffset + i * laneWidth + laneWidth / 2, type: 'dashed' });
+           }
+       } else {
+           const N = numLanesForward;
+           for (let i = 0; i < N; i++) {
+               laneCenters.push({ offset: laneWidth / 2 + i * laneWidth, dir: 1 });
+               laneCenters.push({ offset: - (laneWidth / 2 + i * laneWidth), dir: -1 });
+           }
+           laneDividers.push({ offset: 0, type: 'double_yellow' });
+           for (let i = 1; i < N; i++) {
+               laneDividers.push({ offset: i * laneWidth, type: 'dashed' });
+               laneDividers.push({ offset: - i * laneWidth, type: 'dashed' });
+           }
+       }
+       
+       // Generate points along the full length for each divider
+       for (const divider of laneDividers) {
+           const linePoints: Point[] = [];
+           for (let j = 0; j < fullCenterLine.length; j++) {
+               const pt = fullCenterLine[j];
+               const p = pt.p;
+               const right = { x: -pt.dir.y, y: pt.dir.x };
+               linePoints.push({ x: p.x + right.x * divider.offset, y: p.y + right.y * divider.offset, z: p.z });
+           }
+           if (divider.type === 'dashed') {
+               mesh.dashedLines.push(linePoints);
+           } else {
+               mesh.solidYellowLines.push(linePoints);
+           }
+       }
+
+       let currentLen = 0;
+       for (let j = 1; j < fullCenterLine.length; j++) {
+           const pt1 = fullCenterLine[j-1];
+           const pt2 = fullCenterLine[j];
+           const p1 = pt1.p;
+           const p2 = pt2.p;
+           const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+           currentLen += dist;
+           if (currentLen > 100) { 
+               currentLen = currentLen % 100;
+               const dir = pt2.dir;
+               const right = { x: -dir.y, y: dir.x };
+               for (const center of laneCenters) {
+                   const pos = { x: p2.x + right.x * center.offset, y: p2.y + right.y * center.offset, z: p2.z };
+                   mesh.laneArrows.push({ position: pos, dir: center.dir === 1 ? dir : { x: -dir.x, y: -dir.y } });
+               }
+           }
+       }
        
        const leftSidewalkPoly = [obL, bL, ...leftPoints];
        if (tbL) leftSidewalkPoly.push(tbL);

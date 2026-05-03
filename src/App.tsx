@@ -62,6 +62,7 @@ export default function App() {
   const [editingNameValue, setEditingNameValue] = useState("");
   const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
   const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
+  const [laneWidth, setLaneWidth] = useState(30);
   const [is3DMode, setIs3DMode] = useState(false);
   const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
   const [softSelectionRadius, setSoftSelectionRadius] = useState(200);
@@ -78,6 +79,7 @@ export default function App() {
       settings: {
         chamferAngleDeg: chamferAngle,
         meshResolution,
+        laneWidth,
       },
       nodes,
       edges,
@@ -117,6 +119,11 @@ export default function App() {
             setMeshResolution(sanitizeMeshResolution(importedMeshResolution));
           } else {
             setMeshResolution(DEFAULT_MESH_RESOLUTION);
+          }
+          if (typeof data.settings?.laneWidth === 'number') {
+            setLaneWidth(data.settings.laneWidth);
+          } else {
+            setLaneWidth(30);
           }
           setSelectedEdge(null);
           setSelectedNode(null);
@@ -283,16 +290,16 @@ export default function App() {
     ctx.save();
     ctx.translate(view.x, view.y);
     ctx.scale(view.zoom, view.zoom);
-    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle, meshResolution, softSelectionEnabled, softSelectionRadius, draggingPoint);
+    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint);
     ctx.restore();
-  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, softSelectionEnabled, softSelectionRadius, draggingPoint]);
+  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
 
-  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number, meshResolution: number, softSelectionEnabled: boolean, softSelectionRadius: number, draggingPoint: Point | null) => {
+  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number, meshResolution: number, laneWidth: number, softSelectionEnabled: boolean, softSelectionRadius: number, draggingPoint: Point | null) => {
     ctx.clearRect(0, 0, size.w, size.h);
 
     if (nodes.length === 0 || edges.length === 0) return;
 
-    const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution);
+    const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth);
 
     if (showMesh) {
       mesh.triangles.forEach((tri, idx) => {
@@ -496,24 +503,88 @@ export default function App() {
          });
       });
       
-      mesh.centerLines.forEach(cl => {
+      mesh.dashedLines.forEach(cl => {
           if (cl.length > 0) {
-              renderables.push({
-                  z: getAvgZ(cl),
-                  priority: 4,
-                  paths: cl,
-                  draw: () => {
-                      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-                      ctx.lineWidth = 2;
-                      ctx.setLineDash([15, 15]);
-                      ctx.beginPath();
-                      ctx.moveTo(cl[0].x, cl[0].y);
-                      for (let i = 1; i < cl.length; i++) ctx.lineTo(cl[i].x, cl[i].y);
-                      ctx.stroke();
-                      ctx.setLineDash([]);
-                  }
-              });
+              let currentDist = 0;
+              for (let i = 0; i < cl.length - 1; i++) {
+                  const p1 = cl[i];
+                  const p2 = cl[i+1];
+                  const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                  const startOffset = currentDist;
+                  currentDist += segLen;
+
+                  renderables.push({
+                      z: getAvgZ([p1, p2]),
+                      priority: 4,
+                      paths: [p1, p2],
+                      draw: () => {
+                          ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                          ctx.lineWidth = 2;
+                          ctx.setLineDash([15, 15]);
+                          ctx.lineDashOffset = -startOffset;
+                          ctx.beginPath();
+                          ctx.moveTo(p1.x, p1.y);
+                          ctx.lineTo(p2.x, p2.y);
+                          ctx.stroke();
+                          ctx.setLineDash([]);
+                          ctx.lineDashOffset = 0;
+                      }
+                  });
+              }
           }
+      });
+
+      mesh.solidYellowLines.forEach(cl => {
+          if (cl.length > 0) {
+              for (let j = 0; j < cl.length - 1; j++) {
+                  const p1 = cl[j];
+                  const p2 = cl[j+1];
+                  renderables.push({
+                      z: getAvgZ([p1, p2]),
+                      priority: 4,
+                      paths: [p1, p2],
+                      draw: () => {
+                          ctx.strokeStyle = '#eab308';
+                          ctx.lineWidth = 2;
+                          
+                          const dx = p2.x - p1.x;
+                          const dy = p2.y - p1.y;
+                          const len = Math.hypot(dx, dy);
+                          if (len === 0) return;
+                          const nx = -dy / len * 2;
+                          const ny = dx / len * 2;
+                          
+                          ctx.beginPath();
+                          ctx.moveTo(p1.x + nx, p1.y + ny);
+                          ctx.lineTo(p2.x + nx, p2.y + ny);
+                          ctx.stroke();
+
+                          ctx.beginPath();
+                          ctx.moveTo(p1.x - nx, p1.y - ny);
+                          ctx.lineTo(p2.x - nx, p2.y - ny);
+                          ctx.stroke();
+                      }
+                  });
+              }
+          }
+      });
+      
+      mesh.laneArrows.forEach(arrow => {
+          renderables.push({
+              z: arrow.position.z ?? 4,
+              priority: 5,
+              paths: [arrow.position],
+              draw: () => {
+                  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                  ctx.beginPath();
+                  ctx.moveTo(arrow.position.x + arrow.dir.x * 6, arrow.position.y + arrow.dir.y * 6);
+                  const right = { x: -arrow.dir.y, y: arrow.dir.x };
+                  ctx.lineTo(arrow.position.x - arrow.dir.x * 4 + right.x * 4, arrow.position.y - arrow.dir.y * 4 + right.y * 4);
+                  ctx.lineTo(arrow.position.x - arrow.dir.x * 4 - right.x * 4, arrow.position.y - arrow.dir.y * 4 - right.y * 4);
+                  ctx.closePath();
+                  ctx.fill();
+              }
+          });
       });
 
       renderables.sort((a, b) => {
@@ -1514,6 +1585,21 @@ export default function App() {
       }]);
   }
 
+  const handleFlipEdge = (id: string) => {
+    setEdges(prev => prev.map(e => {
+      if (e.id !== id) return e;
+      if (!e.target) return e;
+      return {
+        ...e,
+        source: e.target,
+        target: e.source,
+        points: [...e.points].reverse(),
+        sidewalkLeft: e.sidewalkRight,
+        sidewalkRight: e.sidewalkLeft
+      };
+    }));
+  };
+
   return (
     <div className="w-full h-screen bg-slate-950 text-slate-300 font-sans flex flex-col overflow-hidden">
       <header className="h-14 lg:h-16 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-4 lg:px-6 shrink-0 relative z-30">
@@ -1601,6 +1687,7 @@ export default function App() {
               edges={edges} 
               chamferAngle={chamferAngle} 
               meshResolution={meshResolution} 
+              laneWidth={laneWidth}
               showMesh={showMesh}
               showControlPoints={showControlPoints}
               setNodes={setNodes} 
@@ -1777,6 +1864,29 @@ export default function App() {
                     />
                   </div>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1">
+                    Lane Width ({laneWidth}px)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="range"
+                      min="10"
+                      max="100"
+                      value={laneWidth}
+                      onChange={(e) => setLaneWidth(parseInt(e.target.value))}
+                      className="flex-grow min-w-0"
+                    />
+                    <input
+                      type="number"
+                      min="10"
+                      max="100"
+                      value={laneWidth}
+                      onChange={(e) => setLaneWidth(parseInt(e.target.value) || 30)}
+                      className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                    />
+                  </div>
+                </div>
               </div>
             )}
           </section>
@@ -1942,6 +2052,27 @@ export default function App() {
                             }
                             className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
                           />
+                        </div>
+                        <div className="flex items-center gap-2 mt-2">
+                          <input
+                            type="checkbox"
+                            checked={e.oneWay || false}
+                            onChange={(evt) =>
+                              setEdges((prev) =>
+                                prev.map((pr) => (pr.id === e.id ? { ...pr, oneWay: evt.target.checked } : pr))
+                              )
+                            }
+                            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <span className="text-xs text-slate-400">One Way Road</span>
+                        </div>
+                        <div className="mt-2 flex justify-end">
+                          <button
+                            onClick={() => handleFlipEdge(e.id)}
+                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                          >
+                            Flip Direction
+                          </button>
                         </div>
                       </div>
                     </div>

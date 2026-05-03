@@ -27,6 +27,7 @@ export type Edge = {
   transitionSmoothness?: number;
   color: string;
   name?: string;
+  oneWay?: boolean;
 };
 
 export type MeshData = {
@@ -40,5 +41,7 @@ export type MeshData = {
   roadPolygons: { id: string; polygon: Point[]; leftCurve: Point[]; rightCurve: Point[]; outerPolygon: Point[]; outerLeftCurve: Point[]; outerRightCurve: Point[]; sidewalkWidth: number }[];
   crosswalks: { edgeId: string; nodeId: string; polygon: Point[] }[];
   sidewalkPolygons: Point[][];
-  centerLines: Point[][];
+  dashedLines: Point[][];
+  solidYellowLines: Point[][];
+  laneArrows: { position: Point; dir: Point }[];
 };
