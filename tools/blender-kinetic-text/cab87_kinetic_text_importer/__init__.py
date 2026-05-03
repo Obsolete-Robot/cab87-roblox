@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Kinetic Text Importer",
 	"author": "Cab87",
-	"version": (0, 1, 7),
+	"version": (0, 1, 9),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Kinetic Text",
 	"description": "Import Cab87 dialogue timing JSON and create animated kinetic Text objects.",
@@ -27,7 +27,7 @@ from bpy.types import Operator, Panel, PropertyGroup
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
-from .animation import set_fcurve_interpolation
+from .animation import intro_keyframe_allowed, intro_scale_frame_plan, outro_frame_range, section_clear_end_frame, set_fcurve_interpolation
 from .layout import LayoutDocument, LayoutOptions, TimingDocument, build_layout, parse_timing_payload
 from .utils.version_gate import run_version_gate
 
@@ -717,12 +717,28 @@ def animate_word_object(obj, material, layout_word, section_starts: list[float],
 	intro_animation = resolve_animation_mode(settings.intro_animation, "SCALE_FADE")
 	outro_animation = resolve_animation_mode(settings.outro_animation, "FADE")
 
-	animate_intro(obj, material, settings, intro_animation, intro_frame, start_frame, intro_scale, full_scale, word_color)
-
 	next_section_start = next_section_start_for(layout_word.section_index, section_starts)
+	clear_start_frame = None
+	clear_end_frame = None
 	if next_section_start is not None:
-		clear_end_frame = frame_for_seconds(next_section_start, fps, settings.start_frame)
-		clear_start_frame = max(start_frame, clear_end_frame - settings.clear_frames)
+		next_section_start_frame = frame_for_seconds(next_section_start, fps, settings.start_frame)
+		clear_end_frame = section_clear_end_frame(next_section_start_frame, settings.intro_frames, settings.start_frame)
+		clear_start_frame, clear_end_frame = outro_frame_range(start_frame, clear_end_frame, settings.clear_frames)
+
+	animate_intro(
+		obj,
+		material,
+		settings,
+		intro_animation,
+		intro_frame,
+		start_frame,
+		intro_scale,
+		full_scale,
+		word_color,
+		clear_start_frame,
+	)
+
+	if clear_start_frame is not None and clear_end_frame is not None:
 		animate_outro(
 			obj,
 			material,
@@ -741,38 +757,50 @@ def animate_word_object(obj, material, layout_word, section_starts: list[float],
 		set_fcurve_interpolation(getattr(material, "node_tree", None), "LINEAR")
 
 
-def animate_intro(obj, material, settings: CAB87_KineticTextSettings, mode: str, intro_frame: int, start_frame: int, intro_scale, full_scale, word_color) -> None:
+def animate_intro(
+	obj,
+	material,
+	settings: CAB87_KineticTextSettings,
+	mode: str,
+	intro_frame: int,
+	start_frame: int,
+	intro_scale,
+	full_scale,
+	word_color,
+	outro_start_frame: int | None = None,
+) -> None:
 	if animation_uses_scale(mode):
-		set_object_scale_key(obj, intro_scale, intro_frame)
-		set_intro_scale_target_keys(obj, settings, start_frame, full_scale)
+		if intro_keyframe_allowed(intro_frame, outro_start_frame):
+			set_object_scale_key(obj, intro_scale, intro_frame)
+		set_intro_scale_target_keys(obj, settings, start_frame, full_scale, outro_start_frame)
 	else:
-		set_object_scale_key(obj, full_scale, start_frame)
+		if intro_keyframe_allowed(start_frame, outro_start_frame):
+			set_object_scale_key(obj, full_scale, start_frame)
 
 	if animation_uses_fade(mode):
-		set_material_alpha_key(material, settings, 0.0, intro_frame, word_color)
-		set_material_alpha_key(material, settings, settings.color[3], start_frame, word_color)
+		if intro_keyframe_allowed(intro_frame, outro_start_frame):
+			set_material_alpha_key(material, settings, 0.0, intro_frame, word_color)
+		if intro_keyframe_allowed(start_frame, outro_start_frame):
+			set_material_alpha_key(material, settings, settings.color[3], start_frame, word_color)
 	else:
 		hidden_frame = max(settings.start_frame, intro_frame - 1)
-		if hidden_frame < intro_frame:
+		if hidden_frame < intro_frame and intro_keyframe_allowed(hidden_frame, outro_start_frame):
 			set_material_alpha_key(material, settings, 0.0, hidden_frame, word_color)
-		set_material_alpha_key(material, settings, settings.color[3], intro_frame, word_color)
+		if intro_keyframe_allowed(intro_frame, outro_start_frame):
+			set_material_alpha_key(material, settings, settings.color[3], intro_frame, word_color)
 
 
-def set_intro_scale_target_keys(obj, settings: CAB87_KineticTextSettings, start_frame: int, full_scale) -> None:
+def set_intro_scale_target_keys(obj, settings: CAB87_KineticTextSettings, start_frame: int, full_scale, outro_start_frame: int | None = None) -> None:
 	overshoot_scale = max(1.0, float(settings.intro_overshoot_scale))
-	overshoot_frames = max(0, int(settings.intro_overshoot_frames))
-	settle_frames = max(0, int(settings.intro_settle_frames))
-	if overshoot_scale <= 1.0 or settle_frames <= 0:
-		set_object_scale_key(obj, full_scale, start_frame)
-		return
-
 	overshoot = (overshoot_scale, overshoot_scale, overshoot_scale)
-	overshoot_frame = start_frame + overshoot_frames
-	settle_frame = overshoot_frame + settle_frames
-	if overshoot_frame > start_frame:
-		set_object_scale_key(obj, full_scale, start_frame)
-	set_object_scale_key(obj, overshoot, overshoot_frame)
-	set_object_scale_key(obj, full_scale, settle_frame)
+	for frame, target in intro_scale_frame_plan(
+		start_frame,
+		settings.intro_overshoot_scale,
+		settings.intro_overshoot_frames,
+		settings.intro_settle_frames,
+		outro_start_frame,
+	):
+		set_object_scale_key(obj, overshoot if target == "overshoot" else full_scale, frame)
 
 
 def animate_outro(obj, material, settings: CAB87_KineticTextSettings, mode: str, clear_start_frame: int, clear_end_frame: int, full_scale, outro_scale, word_color) -> None:

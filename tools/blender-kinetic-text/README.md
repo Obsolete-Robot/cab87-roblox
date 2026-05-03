@@ -65,6 +65,8 @@ Each word uses the configured `Start Animation` mode when it reaches its word st
 
 Words stay visible inside their current section. When a new section begins, the previous section uses the configured `End Animation` mode over the clear frame range. End animation can fade, scale, or scale and fade.
 
+When a new section begins entering after a break point, the previous section is cleared by that incoming intro frame. If an intro animation would overlap the clear range, the add-on suppresses intro keys at or after the end animation start frame so the end animation remains the final keyframe sequence.
+
 Sections are determined only by `breakAfter` break points from the kinetic JSON.
 
 Within each section, lines wrap by max characters per line.

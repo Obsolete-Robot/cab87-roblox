@@ -3,6 +3,51 @@
 from __future__ import annotations
 
 
+def intro_keyframe_allowed(frame: int, outro_start_frame: int | None = None) -> bool:
+	return outro_start_frame is None or frame < outro_start_frame
+
+
+def section_clear_end_frame(next_section_start_frame: int, intro_frames: int, scene_start_frame: int) -> int:
+	return max(int(scene_start_frame), int(next_section_start_frame) - max(0, int(intro_frames)))
+
+
+def outro_frame_range(word_start_frame: int, clear_end_frame: int, clear_frames: int) -> tuple[int, int]:
+	clear_end_frame = int(clear_end_frame)
+	clear_start_frame = max(int(word_start_frame), clear_end_frame - max(0, int(clear_frames)))
+	if clear_start_frame > clear_end_frame:
+		clear_start_frame = clear_end_frame
+	return clear_start_frame, clear_end_frame
+
+
+def intro_scale_frame_plan(
+	start_frame: int,
+	overshoot_scale: float,
+	overshoot_frames: int,
+	settle_frames: int,
+	outro_start_frame: int | None = None,
+) -> tuple[tuple[int, str], ...]:
+	overshoot_scale = max(1.0, float(overshoot_scale))
+	overshoot_frames = max(0, int(overshoot_frames))
+	settle_frames = max(0, int(settle_frames))
+	frames: list[tuple[int, str]] = []
+
+	def add_frame(frame: int, target: str) -> None:
+		if intro_keyframe_allowed(frame, outro_start_frame):
+			frames.append((frame, target))
+
+	if overshoot_scale <= 1.0 or settle_frames <= 0:
+		add_frame(start_frame, "full")
+		return tuple(frames)
+
+	overshoot_frame = start_frame + overshoot_frames
+	settle_frame = overshoot_frame + settle_frames
+	if overshoot_frame > start_frame:
+		add_frame(start_frame, "full")
+	add_frame(overshoot_frame, "overshoot")
+	add_frame(settle_frame, "full")
+	return tuple(frames)
+
+
 def set_fcurve_interpolation(owner, interpolation: str) -> None:
 	if not owner:
 		return

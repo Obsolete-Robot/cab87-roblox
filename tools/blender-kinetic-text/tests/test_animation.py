@@ -18,6 +18,33 @@ class ActionWithoutLegacyFcurves:
 
 
 class AnimationTests(unittest.TestCase):
+	def test_intro_scale_plan_skips_keys_at_or_after_outro_start(self):
+		self.assertEqual(
+			animation.intro_scale_frame_plan(10, 1.25, 2, 3),
+			((10, "full"), (12, "overshoot"), (15, "full")),
+		)
+		self.assertEqual(
+			animation.intro_scale_frame_plan(10, 1.25, 2, 3, outro_start_frame=13),
+			((10, "full"), (12, "overshoot")),
+		)
+		self.assertEqual(
+			animation.intro_scale_frame_plan(10, 1.25, 2, 3, outro_start_frame=12),
+			((10, "full"),),
+		)
+		self.assertEqual(
+			animation.intro_scale_frame_plan(10, 1.0, 0, 0, outro_start_frame=10),
+			(),
+		)
+
+	def test_section_clear_targets_next_section_intro_frame(self):
+		self.assertEqual(animation.section_clear_end_frame(50, 6, 1), 44)
+		self.assertEqual(animation.section_clear_end_frame(4, 6, 1), 1)
+
+	def test_outro_frame_range_never_extends_after_clear_end(self):
+		self.assertEqual(animation.outro_frame_range(20, 44, 5), (39, 44))
+		self.assertEqual(animation.outro_frame_range(48, 44, 5), (44, 44))
+		self.assertEqual(animation.outro_frame_range(20, 44, 0), (44, 44))
+
 	def test_sets_legacy_action_fcurve_interpolation(self):
 		keyframe = SimpleNamespace(interpolation="BEZIER")
 		fcurve = SimpleNamespace(keyframe_points=[keyframe])
