@@ -308,95 +308,221 @@ export default function App() {
     }
 
     if (!showMesh) {
-      // Background polygons
-      ctx.fillStyle = '#1e293b'; 
+      const getAvgZ = (paths: Point[]) => {
+        let sum = 0;
+        for (const p of paths) sum += (p.z ?? 4);
+        return sum / (paths.length || 1);
+      };
+
+      const getZColor = (paths: Point[], type: 'road' | 'sidewalk' | 'crosswalk' | 'hub') => {
+        const z = getAvgZ(paths);
+        const zDiff = (z - 4);
+        if (type === 'road' || type === 'hub') {
+            const l = Math.max(5, Math.min(80, 17 + zDiff * 0.06));
+            return `hsl(217, 33%, ${l}%)`;
+        } else if (type === 'sidewalk') {
+            const l = Math.max(30, Math.min(95, 65 + zDiff * 0.06));
+            return `hsl(215, 25%, ${l}%)`;
+        } else if (type === 'crosswalk') {
+            const l = Math.max(10, Math.min(85, 27 + zDiff * 0.06));
+            return `hsl(215, 25%, ${l}%)`;
+        }
+        return '#000';
+      };
+
       ctx.shadowColor = 'rgba(0,0,0,0.5)';
       ctx.shadowBlur = 15;
       ctx.shadowOffsetY = 4;
       
-      // Draw outer polygons (sidewalks)
-      ctx.fillStyle = '#94a3b8';
+      const renderables: { z: number, priority: number, paths: Point[], draw: () => void }[] = [];
 
       mesh.roadPolygons.forEach(rp => {
-        if (rp.outerPolygon && rp.outerPolygon.length > 0) {
-            ctx.beginPath();
-            ctx.moveTo(rp.outerPolygon[0].x, rp.outerPolygon[0].y);
-            rp.outerPolygon.forEach(p => ctx.lineTo(p.x, p.y));
-            ctx.closePath();
-            ctx.fill();
+        if (rp.outerLeftCurve && rp.outerRightCurve && rp.outerLeftCurve.length === rp.outerRightCurve.length && rp.outerLeftCurve.length > 0) {
+            for (let i = 0; i < rp.outerLeftCurve.length - 1; i++) {
+                const p0 = rp.outerLeftCurve[i];
+                const p1 = rp.outerRightCurve[i];
+                const p2 = rp.outerRightCurve[i+1];
+                const p3 = rp.outerLeftCurve[i+1];
+                const poly = [p0, p1, p2, p3];
+                renderables.push({
+                    z: getAvgZ(poly),
+                    priority: 0,
+                    paths: poly,
+                    draw: () => {
+                        ctx.fillStyle = getZColor(poly, 'sidewalk');
+                        ctx.beginPath();
+                        ctx.moveTo(p0.x, p0.y);
+                        ctx.lineTo(p1.x, p1.y);
+                        ctx.lineTo(p2.x, p2.y);
+                        ctx.lineTo(p3.x, p3.y);
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.strokeStyle = ctx.fillStyle;
+                        ctx.lineWidth = 0.5;
+                        ctx.stroke();
+                    }
+                });
+            }
+        } else if (rp.outerPolygon && rp.outerPolygon.length > 0) {
+            renderables.push({
+                z: getAvgZ(rp.outerPolygon),
+                priority: 0,
+                paths: rp.outerPolygon,
+                draw: () => {
+                    ctx.fillStyle = getZColor(rp.outerPolygon, 'sidewalk');
+                    ctx.beginPath();
+                    ctx.moveTo(rp.outerPolygon[0].x, rp.outerPolygon[0].y);
+                    rp.outerPolygon.forEach(p => ctx.lineTo(p.x, p.y));
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            });
         }
       });
+      
       mesh.sidewalkPolygons.forEach(poly => {
         if (poly.length === 0) return;
-        ctx.beginPath();
-        ctx.moveTo(poly[0].x, poly[0].y);
-        poly.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fill();
+        renderables.push({
+            z: getAvgZ(poly),
+            priority: 0,
+            paths: poly,
+            draw: () => {
+                ctx.fillStyle = getZColor(poly, 'sidewalk');
+                ctx.beginPath();
+                ctx.moveTo(poly[0].x, poly[0].y);
+                poly.forEach(p => ctx.lineTo(p.x, p.y));
+                ctx.closePath();
+                ctx.fill();
+            }
+        });
       });
-      ctx.shadowColor = 'transparent';
 
-      // Draw inner polygons (road surface)
-      ctx.fillStyle = '#1e293b';
       mesh.hubs.forEach(hub => {
         if (hub.polygon.length === 0) return;
-        ctx.beginPath();
-        ctx.moveTo(hub.polygon[0].x, hub.polygon[0].y);
-        hub.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fill();
+        renderables.push({
+            z: getAvgZ(hub.polygon),
+            priority: 1,
+            paths: hub.polygon,
+            draw: () => {
+                ctx.fillStyle = getZColor(hub.polygon, 'hub');
+                ctx.beginPath();
+                ctx.moveTo(hub.polygon[0].x, hub.polygon[0].y);
+                hub.polygon.forEach(p => ctx.lineTo(p.x, p.y));
+                ctx.closePath();
+                ctx.fill();
+            }
+        });
       });
 
       mesh.roadPolygons.forEach(rp => {
-        if (rp.polygon.length === 0) return;
-        ctx.beginPath();
-        ctx.moveTo(rp.polygon[0].x, rp.polygon[0].y);
-        rp.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fill();
+        if (rp.leftCurve && rp.rightCurve && rp.leftCurve.length === rp.rightCurve.length && rp.leftCurve.length > 0) {
+            for (let i = 0; i < rp.leftCurve.length - 1; i++) {
+                const p0 = rp.leftCurve[i];
+                const p1 = rp.rightCurve[i];
+                const p2 = rp.rightCurve[i+1];
+                const p3 = rp.leftCurve[i+1];
+                const poly = [p0, p1, p2, p3];
+                renderables.push({
+                    z: getAvgZ(poly),
+                    priority: 2,
+                    paths: poly,
+                    draw: () => {
+                        ctx.fillStyle = getZColor(poly, 'road');
+                        ctx.beginPath();
+                        ctx.moveTo(p0.x, p0.y);
+                        ctx.lineTo(p1.x, p1.y);
+                        ctx.lineTo(p2.x, p2.y);
+                        ctx.lineTo(p3.x, p3.y);
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.strokeStyle = ctx.fillStyle;
+                        ctx.lineWidth = 0.5;
+                        ctx.stroke();
+                    }
+                });
+            }
+        } else if (rp.polygon && rp.polygon.length > 0) {
+            renderables.push({
+                z: getAvgZ(rp.polygon),
+                priority: 2,
+                paths: rp.polygon,
+                draw: () => {
+                    ctx.fillStyle = getZColor(rp.polygon, 'road');
+                    ctx.beginPath();
+                    ctx.moveTo(rp.polygon[0].x, rp.polygon[0].y);
+                    rp.polygon.forEach(p => ctx.lineTo(p.x, p.y));
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            });
+        }
       });
 
-      // Crosswalks
-      ctx.fillStyle = '#334155'; // crosswalk background color
       mesh.crosswalks.forEach(cw => {
          if (cw.polygon.length === 0) return;
-         ctx.beginPath();
-         ctx.moveTo(cw.polygon[0].x, cw.polygon[0].y);
-         cw.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-         ctx.closePath();
-         ctx.fill();
+         renderables.push({
+             z: getAvgZ(cw.polygon),
+             priority: 3,
+             paths: cw.polygon,
+             draw: () => {
+                 ctx.fillStyle = getZColor(cw.polygon, 'crosswalk');
+                 ctx.beginPath();
+                 ctx.moveTo(cw.polygon[0].x, cw.polygon[0].y);
+                 cw.polygon.forEach(p => ctx.lineTo(p.x, p.y));
+                 ctx.closePath();
+                 ctx.fill();
+                 
+                 if (cw.polygon.length === 4) {
+                     const p0 = cw.polygon[0];
+                     const p1 = cw.polygon[1];
+                     const p2 = cw.polygon[2];
+                     const p3 = cw.polygon[3];
+                     const midLeft = { x: (p0.x + p3.x)/2, y: (p0.y + p3.y)/2 };
+                     const midRight = { x: (p1.x + p2.x)/2, y: (p1.y + p2.y)/2 };
+                     
+                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                     ctx.lineWidth = 10;
+                     ctx.setLineDash([4, 6]);
+                     ctx.beginPath();
+                     ctx.moveTo(midLeft.x, midLeft.y);
+                     ctx.lineTo(midRight.x, midRight.y);
+                     ctx.stroke();
+                     ctx.setLineDash([]);
+                 }
+             }
+         });
       });
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.lineWidth = 10;
-      ctx.setLineDash([4, 6]); 
-      ctx.beginPath();
-      mesh.crosswalks.forEach(cw => {
-         if (cw.polygon.length < 4) return;
-         const p0 = cw.polygon[0]; // bL
-         const p1 = cw.polygon[1]; // bR
-         const p2 = cw.polygon[2]; // new_bR
-         const p3 = cw.polygon[3]; // new_bL
-         const midLeft = { x: (p0.x + p3.x)/2, y: (p0.y + p3.y)/2 };
-         const midRight = { x: (p1.x + p2.x)/2, y: (p1.y + p2.y)/2 };
-         ctx.moveTo(midLeft.x, midLeft.y);
-         ctx.lineTo(midRight.x, midRight.y);
-      });
-      ctx.stroke();
-
-      // Dashed CenterLines
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([15, 15]);
-      ctx.beginPath();
+      
       mesh.centerLines.forEach(cl => {
           if (cl.length > 0) {
-            ctx.moveTo(cl[0].x, cl[0].y);
-            for (let i = 1; i < cl.length; i++) ctx.lineTo(cl[i].x, cl[i].y);
+              renderables.push({
+                  z: getAvgZ(cl),
+                  priority: 4,
+                  paths: cl,
+                  draw: () => {
+                      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                      ctx.lineWidth = 2;
+                      ctx.setLineDash([15, 15]);
+                      ctx.beginPath();
+                      ctx.moveTo(cl[0].x, cl[0].y);
+                      for (let i = 1; i < cl.length; i++) ctx.lineTo(cl[i].x, cl[i].y);
+                      ctx.stroke();
+                      ctx.setLineDash([]);
+                  }
+              });
           }
       });
-      ctx.stroke();
-      ctx.setLineDash([]);
+
+      renderables.sort((a, b) => {
+          if (Math.abs(a.z - b.z) > 0.05) return a.z - b.z;
+          return a.priority - b.priority;
+      });
+
+      renderables.forEach(r => {
+          if (r.priority > 0) ctx.shadowColor = 'transparent';
+          r.draw();
+      });
+      
     }
 
     // Soft selection radius
@@ -615,6 +741,13 @@ export default function App() {
             const leftPoints = originalPoints.slice(0, userCurveIndex * 3);
             const rightPoints = originalPoints.slice(userCurveIndex * 3 + 2);
             
+            const isLinear = originalPoints.length >= 2 ? !!originalPoints[userCurveIndex * 3]?.linear : true;
+
+            const hp01 = { ...p01, linear: isLinear };
+            const hp012 = { ...p012, linear: isLinear };
+            const hp123 = { ...p123, linear: isLinear };
+            const hp23 = { ...p23, linear: isLinear };
+
             leftPoints.push(hp01, hp012);
             rightPoints.unshift(hp123, hp23);
 
@@ -1009,26 +1142,42 @@ export default function App() {
     setIsMergeMode(false);
   };
 
-  const enforceLinear = (edge: Edge, currentNodes: Node[]) => {
+  const enforceLinear = (edge: Edge, currentNodes: Node[], oldEdge?: Edge, oldNodes?: Node[]) => {
       const newPts = [...edge.points];
       let changed = false;
       const sourceNode = currentNodes.find(n => n.id === edge.source);
       const targetNode = edge.target ? currentNodes.find(n => n.id === edge.target) : null;
       
+      const oldSourceNode = oldNodes ? oldNodes.find(n => n.id === edge.source) : sourceNode;
+      const oldTargetNode = oldNodes && edge.target ? oldNodes.find(n => n.id === edge.target) : targetNode;
+      const oldPts = oldEdge ? oldEdge.points : newPts;
+
       for (let j = 0; j < newPts.length; j++) {
           const handle = newPts[j];
           if (!handle.linear) continue;
-        if (j % 3 === 0) {
+          
+          const oldHandle = oldPts[j] || handle;
+
+          if (j % 3 === 0) {
               const anchorA = j === 0 ? sourceNode?.point : newPts[j - 1];
               const anchorB = j + 2 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 2];
-              if (!anchorA || !anchorB) continue;
+              
+              const oldAnchorA = j === 0 ? oldSourceNode?.point : oldPts[j - 1];
+              const oldAnchorB = j + 2 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 2];
+
+              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
+              
               const dx = anchorB.x - anchorA.x;
               const dy = anchorB.y - anchorA.y;
-              const lenSq = dx * dx + dy * dy;
-              if (lenSq > 0.0001) {
-                  const hx = handle.x - anchorA.x;
-                  const hy = handle.y - anchorA.y;
-                  let t = (hx * dx + hy * dy) / lenSq;
+              
+              const oldDx = oldAnchorB.x - oldAnchorA.x;
+              const oldDy = oldAnchorB.y - oldAnchorA.y;
+              const oldLenSq = oldDx * oldDx + oldDy * oldDy;
+              
+              if (oldLenSq > 0.0001) {
+                  const hx = oldHandle.x - oldAnchorA.x;
+                  const hy = oldHandle.y - oldAnchorA.y;
+                  let t = (hx * oldDx + hy * oldDy) / oldLenSq;
                   t = Math.max(0, t);
                   newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
                   changed = true;
@@ -1036,14 +1185,22 @@ export default function App() {
           } else if (j % 3 === 1) {
               const anchorA = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
               const anchorB = j === 1 ? sourceNode?.point : newPts[j - 2];
-              if (!anchorA || !anchorB) continue;
+              
+              const oldAnchorA = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
+              const oldAnchorB = j === 1 ? oldSourceNode?.point : oldPts[j - 2];
+
+              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
               const dx = anchorB.x - anchorA.x;
               const dy = anchorB.y - anchorA.y;
-              const lenSq = dx * dx + dy * dy;
-              if (lenSq > 0.0001) {
-                  const hx = handle.x - anchorA.x;
-                  const hy = handle.y - anchorA.y;
-                  let t = (hx * dx + hy * dy) / lenSq;
+              
+              const oldDx = oldAnchorB.x - oldAnchorA.x;
+              const oldDy = oldAnchorB.y - oldAnchorA.y;
+              const oldLenSq = oldDx * oldDx + oldDy * oldDy;
+              
+              if (oldLenSq > 0.0001) {
+                  const hx = oldHandle.x - oldAnchorA.x;
+                  const hy = oldHandle.y - oldAnchorA.y;
+                  let t = (hx * oldDx + hy * oldDy) / oldLenSq;
                   t = Math.max(0, t);
                   newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
                   changed = true;
@@ -1089,26 +1246,15 @@ export default function App() {
                 if (edge.source === draggingNode.id || edge.target === draggingNode.id) {
                     if (edge.source === draggingNode.id && newPoints.length > 0) {
                         newPoints[0] = { ...newPoints[0], x: newPoints[0].x + dx, y: newPoints[0].y + dy, z: (newPoints[0].z ?? 4) + dz };
-                        if (newPoints.length > 1 && !softSelectionEnabled) {
-                            newPoints[1] = { ...newPoints[1], x: newPoints[1].x + dx, y: newPoints[1].y + dy, z: (newPoints[1].z ?? 4) + dz };
-                        }
                         changed = true;
                     }
-                    if (edge.target === draggingNode.id && newPoints.length > 1) {
+                    if (edge.target === draggingNode.id && newPoints.length > 0) {
                         newPoints[newPoints.length - 1] = { 
                             ...newPoints[newPoints.length - 1],
                             x: newPoints[newPoints.length - 1].x + dx, 
                             y: newPoints[newPoints.length - 1].y + dy,
                             z: (newPoints[newPoints.length - 1].z ?? 4) + dz
                         };
-                        if (newPoints.length > 2 && !softSelectionEnabled) {
-                            newPoints[newPoints.length - 2] = { 
-                                ...newPoints[newPoints.length - 2],
-                                x: newPoints[newPoints.length - 2].x + dx, 
-                                y: newPoints[newPoints.length - 2].y + dy,
-                                z: (newPoints[newPoints.length - 2].z ?? 4) + dz
-                            };
-                        }
                         changed = true;
                     }
                 }
@@ -1131,7 +1277,7 @@ export default function App() {
                     });
                 }
 
-                return changed ? enforceLinear({ ...edge, points: newPoints }, newNodes) : edge;
+                return changed ? enforceLinear({ ...edge, points: newPoints }, newNodes, edge, nodes) : edge;
             }));
         }
     } else if (dragState.type === 'edge' && dragState.pointId !== undefined) {
@@ -1192,7 +1338,7 @@ export default function App() {
                 const anchorIdx = isIncoming ? pid + 1 : pid - 1;
                 const oppositeIdx = isIncoming ? pid + 2 : pid - 2;
              
-                if (anchorIdx >= 0 && anchorIdx < newPoints.length && oppositeIdx >= 0 && oppositeIdx < newPoints.length) {
+                if (anchorIdx >= 0 && anchorIdx < newPoints.length && oppositeIdx >= 0 && oppositeIdx < newPoints.length && !handle.linear) {
                     const anchor = newPoints[anchorIdx];
                     if (anchor.linked) {
                         const dxAngle = effectivePos.x - anchor.x;
@@ -1248,7 +1394,8 @@ export default function App() {
             });
         }
 
-        return changed ? enforceLinear({ ...e, points: newPoints }, newNodes) : e;
+        const passOldEdge = (pid % 3 === 2);
+        return changed ? enforceLinear({ ...e, points: newPoints }, newNodes, passOldEdge ? e : undefined, passOldEdge ? nodes : undefined) : e;
       }));
     }
   };
@@ -1452,6 +1599,7 @@ export default function App() {
               chamferAngle={chamferAngle} 
               meshResolution={meshResolution} 
               showMesh={showMesh}
+              showControlPoints={showControlPoints}
               setNodes={setNodes} 
               setEdges={setEdges} 
               view={view}
