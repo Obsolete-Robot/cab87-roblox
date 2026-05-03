@@ -129,6 +129,27 @@ class LayoutTests(unittest.TestCase):
 		self.assertGreater(left.words[0].x, center.words[0].x)
 		self.assertGreater(center.words[0].x, right.words[0].x)
 
+	def test_vertical_alignment_offsets_line_positions(self):
+		payload = {
+			"words": [
+				{"text": "one", "start": 0.0, "end": 0.1},
+				{"text": "two", "start": 0.2, "end": 0.3},
+				{"text": "tri", "start": 0.4, "end": 0.5},
+			]
+		}
+		options = {
+			"max_chars_per_line": 3,
+			"line_spacing": 2.0,
+		}
+
+		top = layout.build_layout(payload, layout.LayoutOptions(vertical_alignment="TOP", **options))
+		center = layout.build_layout(payload, layout.LayoutOptions(vertical_alignment="CENTER", **options))
+		bottom = layout.build_layout(payload, layout.LayoutOptions(vertical_alignment="BOTTOM", **options))
+
+		self.assertEqual([word.y for word in top.words], [0.0, -2.0, -4.0])
+		self.assertEqual([word.y for word in center.words], [2.0, 0.0, -2.0])
+		self.assertEqual([word.y for word in bottom.words], [4.0, 2.0, 0.0])
+
 
 if __name__ == "__main__":
 	unittest.main()

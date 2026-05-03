@@ -119,6 +119,7 @@ h2 {
 }
 
 .header-actions,
+.transport-controls,
 .action-row,
 .export-grid,
 .table-toolbar,
@@ -129,6 +130,22 @@ h2 {
 	display: flex;
 	align-items: center;
 	gap: 0.55rem;
+}
+
+.header-actions {
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.transport-controls {
+	gap: 0.35rem;
+	flex-wrap: wrap;
+}
+
+.transport-button {
+	min-width: 58px;
+	padding: 0.58rem 0.64rem;
+	white-space: nowrap;
 }
 
 .app-shell {
@@ -349,10 +366,6 @@ button:focus-visible {
 
 .preview-header h2 {
 	margin-bottom: 0;
-}
-
-.playback-button {
-	min-width: 86px;
 }
 
 .export-grid {
@@ -777,11 +790,13 @@ td input {
 	}
 
 	.action-row,
+	.transport-controls,
 	.nudge-actions {
 		flex-wrap: wrap;
 	}
 
 	.action-row button,
+	.transport-controls button,
 	.export-grid button {
 		flex: 1 1 130px;
 	}

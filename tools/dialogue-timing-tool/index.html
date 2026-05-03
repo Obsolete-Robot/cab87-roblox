@@ -23,6 +23,13 @@
 						<option value="60">60</option>
 					</select>
 				</label>
+				<div class="transport-controls" aria-label="Playback controls">
+					<button id="skipBackButton" type="button" class="secondary transport-button" disabled>-5s</button>
+					<button id="playPauseButton" type="button" class="primary transport-button" disabled>Play</button>
+					<button id="pauseButton" type="button" class="secondary transport-button" disabled>Pause</button>
+					<button id="stopButton" type="button" class="secondary transport-button" disabled>Stop</button>
+					<button id="skipForwardButton" type="button" class="secondary transport-button" disabled>+5s</button>
+				</div>
 				<button id="clearButton" type="button" class="secondary">Clear</button>
 			</div>
 		</header>
@@ -103,7 +110,6 @@
 				<div class="preview-panel">
 					<div class="preview-header">
 						<h2>Preview</h2>
-						<button id="playPauseButton" type="button" class="primary playback-button" disabled>Play</button>
 					</div>
 					<div id="wordPreview" class="word-preview"></div>
 				</div>

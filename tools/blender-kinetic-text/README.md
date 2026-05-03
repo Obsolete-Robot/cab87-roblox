@@ -48,6 +48,7 @@ The update pass reapplies:
 
 - max characters per line.
 - word and line spacing.
+- horizontal and vertical alignment.
 - font file and font size.
 - material color and alpha.
 - JSON default color, word color overrides, and color swatch remaps.
@@ -73,6 +74,8 @@ Within each section, lines wrap by max characters per line.
 When a kinetic JSON file includes `customColors`, `defaultColor`, or per-word color overrides, the add-on imports those swatches into the `Text Style` color section. Each source swatch gets a material color picker so the Blender scene can remap the JSON color breakouts without editing the timing file.
 
 `Apply Layout And Style To Group` reapplies the current remaps to generated word materials and stores the remap table on the parent group.
+
+The reapply pass clears generated word object, curve, material, and material node-tree animation before rebuilding keys so stale scale or alpha keys do not accumulate.
 
 ## Validation
 

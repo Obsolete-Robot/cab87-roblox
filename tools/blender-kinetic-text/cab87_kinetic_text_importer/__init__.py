@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Kinetic Text Importer",
 	"author": "Cab87",
-	"version": (0, 1, 5),
+	"version": (0, 1, 7),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Kinetic Text",
 	"description": "Import Cab87 dialogue timing JSON and create animated kinetic Text objects.",
@@ -99,6 +99,15 @@ class CAB87_KineticTextSettings(PropertyGroup):
 			("LEFT", "Left", "Anchor wrapped lines on the left."),
 			("CENTER", "Center", "Center wrapped lines around the group origin."),
 			("RIGHT", "Right", "Anchor wrapped lines on the right."),
+		),
+		default="CENTER",
+	)
+	vertical_alignment: EnumProperty(
+		name="Vertical Align",
+		items=(
+			("TOP", "Top", "Anchor the first text line at the group origin."),
+			("CENTER", "Center", "Center each section vertically around the group origin."),
+			("BOTTOM", "Bottom", "Anchor the last text line at the group origin."),
 		),
 		default="CENTER",
 	)
@@ -293,6 +302,7 @@ class CAB87_PT_kinetic_text_panel(Panel):
 		box.label(text="Layout")
 		box.prop(settings, "max_chars_per_line")
 		box.prop(settings, "horizontal_alignment")
+		box.prop(settings, "vertical_alignment")
 		box.prop(settings, "word_spacing")
 		box.prop(settings, "line_spacing")
 		box.prop(settings, "character_width")
@@ -342,6 +352,7 @@ def layout_options_from_settings(settings: CAB87_KineticTextSettings) -> LayoutO
 		line_spacing=settings.line_spacing,
 		character_width=settings.character_width,
 		horizontal_alignment=settings.horizontal_alignment,
+		vertical_alignment=settings.vertical_alignment,
 	)
 
 
@@ -427,6 +438,9 @@ def apply_layout_to_existing_group(group, word_objects, layout_document: LayoutD
 	section_starts = [section.start for section in layout_document.sections]
 	objects_by_index = {int(obj.get("cab87_word_index", -1)): obj for obj in word_objects}
 
+	for obj in word_objects:
+		clear_generated_word_animation(obj)
+
 	for layout_word in layout_document.words:
 		obj = objects_by_index.get(layout_word.source_index)
 		if obj is None or obj.type != "FONT":
@@ -437,10 +451,27 @@ def apply_layout_to_existing_group(group, word_objects, layout_document: LayoutD
 		write_word_properties(obj, layout_word)
 		word_color = color_for_layout_word(layout_word, settings)
 		material = ensure_word_material(obj, settings, word_color)
-		obj.animation_data_clear()
-		if material:
-			material.animation_data_clear()
+		clear_material_animation(material)
 		animate_word_object(obj, material, layout_word, section_starts, settings, fps)
+
+
+def clear_generated_word_animation(obj) -> None:
+	clear_animation_data(obj)
+	clear_animation_data(getattr(obj, "data", None))
+	for material in getattr(getattr(obj, "data", None), "materials", []):
+		clear_material_animation(material)
+
+
+def clear_material_animation(material) -> None:
+	if material is None:
+		return
+	clear_animation_data(material)
+	clear_animation_data(getattr(material, "node_tree", None))
+
+
+def clear_animation_data(owner) -> None:
+	if owner is not None and hasattr(owner, "animation_data_clear"):
+		owner.animation_data_clear()
 
 
 def apply_text_curve_style(curve, settings: CAB87_KineticTextSettings, font) -> None:
@@ -859,6 +890,7 @@ def write_group_properties(group, settings: CAB87_KineticTextSettings, document:
 	group["cab87_max_chars_per_section"] = settings.max_chars_per_section
 	group["cab87_max_chars_per_line"] = settings.max_chars_per_line
 	group["cab87_horizontal_alignment"] = settings.horizontal_alignment
+	group["cab87_vertical_alignment"] = settings.vertical_alignment
 	group["cab87_word_spacing"] = settings.word_spacing
 	group["cab87_line_spacing"] = settings.line_spacing
 	group["cab87_character_width"] = settings.character_width
@@ -955,6 +987,7 @@ def load_group_properties_into_settings(group, settings: CAB87_KineticTextSettin
 	settings.max_chars_per_section = int(group.get("cab87_max_chars_per_section", settings.max_chars_per_section))
 	settings.max_chars_per_line = int(group.get("cab87_max_chars_per_line", settings.max_chars_per_line))
 	settings.horizontal_alignment = group.get("cab87_horizontal_alignment", settings.horizontal_alignment)
+	settings.vertical_alignment = group.get("cab87_vertical_alignment", settings.vertical_alignment)
 	settings.word_spacing = _float_prop(group, "cab87_word_spacing", settings.word_spacing)
 	settings.line_spacing = _float_prop(group, "cab87_line_spacing", settings.line_spacing)
 	settings.character_width = _float_prop(group, "cab87_character_width", settings.character_width)

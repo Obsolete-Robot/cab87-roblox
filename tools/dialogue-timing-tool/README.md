@@ -29,7 +29,7 @@ The API key stays on the local Node server. The browser uploads the selected cli
 2. Add an optional language code or prompt context for names and unusual terms.
 3. Click **Transcribe**.
 4. Review the word timing against the waveform and audio preview.
-5. Use **Play** to watch the current word highlight against the clip.
+5. Use the top-bar transport controls to play, pause, stop, or jump backward/forward 5 seconds while the current word highlights against the clip.
 6. Click **Hide Sidebar** when you want the transcript workspace to fill the page.
 7. Nudge or edit any word start/end values that need tighter kinetic text timing, use **Prev +50/+100** and **Next +50/+100** to borrow timing from adjacent words, or click **Trash** to remove unwanted words.
 8. Set the overall word color in the Word Timing toolbar with the picker, swatches, or HEX input, or enable a word's **Override** color controls for a per-word color.
@@ -44,7 +44,7 @@ The API key stays on the local Node server. The browser uploads the selected cli
 - Kinetic JSON exports store an `audioPath` reference instead of embedding the audio/video bytes. On import, the local server tries to load that path if the file is still available.
 - Imported JSON with embedded audio data is culled immediately; re-exporting writes the compact path-based format.
 - Standard browser file pickers may expose only the filename, not the full local filesystem path. Imported JSON with a full `audioPath` can preserve and reload that path.
-- Kinetic JSON exports include the overall color plus any word color overrides.
+- Kinetic JSON exports include the overall color plus any word color overrides. Color swatches are derived from colors currently in use.
 - Preview sections and caption exports split only at break entries.
 - `Import JSON` accepts OpenAI `verbose_json` responses, this tool's kinetic JSON exports, and simple `{ "words": [{ "word": "...", "start": 0, "end": 1 }] }` timing files from other engines.
 - To change the port, run `PORT=8020 npm run dev`.

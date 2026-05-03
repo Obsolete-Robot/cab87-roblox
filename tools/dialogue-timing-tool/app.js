@@ -8,7 +8,6 @@ const state = {
 	duration: 0,
 	result: null,
 	defaultColor: DEFAULT_TEXT_COLOR,
-	customColors: [DEFAULT_TEXT_COLOR],
 	words: [],
 	segments: [],
 	activeIndex: -1,
@@ -26,6 +25,10 @@ const els = {
 	fileMeta: document.getElementById("fileMeta"),
 	audioPlayer: document.getElementById("audioPlayer"),
 	playPauseButton: document.getElementById("playPauseButton"),
+	pauseButton: document.getElementById("pauseButton"),
+	stopButton: document.getElementById("stopButton"),
+	skipBackButton: document.getElementById("skipBackButton"),
+	skipForwardButton: document.getElementById("skipForwardButton"),
 	transcribeButton: document.getElementById("transcribeButton"),
 	autoBreakButton: document.getElementById("autoBreakButton"),
 	defaultColorInput: document.getElementById("defaultColorInput"),
@@ -187,19 +190,6 @@ function wordColorValue(word) {
 	return word.color ?? word.textColor ?? word.fillColor ?? word.hexColor ?? null;
 }
 
-function colorListPayloadValue(payload) {
-	if (!payload || typeof payload !== "object") {
-		return [];
-	}
-	if (Array.isArray(payload.customColors)) {
-		return payload.customColors;
-	}
-	if (payload.colors && typeof payload.colors === "object" && Array.isArray(payload.colors.swatches)) {
-		return payload.colors.swatches;
-	}
-	return [];
-}
-
 function readBoolean(value, fallback = false) {
 	if (value === undefined || value === null) {
 		return fallback;
@@ -217,20 +207,12 @@ function effectiveWordColor(word) {
 	return normalizeHexColor(word?.colorOverride ? word.color : state.defaultColor, state.defaultColor);
 }
 
-function rememberCustomColor(value) {
-	const color = normalizeHexColor(value, null);
-	if (!color) {
-		return null;
-	}
-
-	if (!state.customColors.includes(color)) {
-		state.customColors.push(color);
-	}
-	return color;
+function normalizePickedColor(value) {
+	return normalizeHexColor(value, null);
 }
 
 function colorPalette() {
-	const colors = [state.defaultColor, ...state.customColors];
+	const colors = [state.defaultColor];
 	for (const word of state.words) {
 		if (word.colorOverride) {
 			colors.push(word.color);
@@ -268,6 +250,25 @@ function syncDefaultColorControls() {
 	els.defaultColorInput.value = state.defaultColor;
 	els.defaultColorHexInput.value = state.defaultColor;
 	renderColorPalette(els.defaultColorPalette, state.defaultColor, updateDefaultColor);
+}
+
+function updateRenderedWordColors() {
+	for (const chip of els.wordPreview.querySelectorAll("[data-word-index]")) {
+		const index = Number(chip.dataset.wordIndex);
+		const word = state.words[index];
+		if (word) {
+			chip.style.setProperty("--word-color", effectiveWordColor(word));
+		}
+	}
+
+	for (const row of els.wordTableBody.querySelectorAll("[data-row-index]")) {
+		const index = Number(row.dataset.rowIndex);
+		const word = state.words[index];
+		const swatch = row.querySelector(".color-swatch");
+		if (word && swatch) {
+			swatch.style.background = effectiveWordColor(word);
+		}
+	}
 }
 
 function setStatus(message, tone = "") {
@@ -464,6 +465,7 @@ function updatePlayhead() {
 	const percent = duration > 0 ? Math.min(1, Math.max(0, els.audioPlayer.currentTime / duration)) : 0;
 	els.playhead.style.left = `${percent * 100}%`;
 	els.currentTimeReadout.textContent = secondsToClock(els.audioPlayer.currentTime || 0);
+	updatePlayButton();
 }
 
 function getDuration() {
@@ -486,10 +488,23 @@ function updateActiveWord() {
 	updateTimingActionButtons();
 }
 
+function hasPlayableAudio() {
+	return Boolean(state.file && els.audioPlayer.src);
+}
+
 function updatePlayButton() {
-	const hasAudio = Boolean(state.file && els.audioPlayer.src);
-	els.playPauseButton.disabled = !hasAudio;
-	els.playPauseButton.textContent = !hasAudio || els.audioPlayer.paused ? "Play" : "Pause";
+	const hasAudio = hasPlayableAudio();
+	const isPlaying = hasAudio && !els.audioPlayer.paused && !els.audioPlayer.ended;
+	const currentTime = els.audioPlayer.currentTime || 0;
+	const duration = getDuration();
+	const canSeekBackward = hasAudio && currentTime > 0;
+	const canSeekForward = hasAudio && duration > 0 && currentTime < duration;
+
+	els.playPauseButton.disabled = !hasAudio || isPlaying;
+	els.pauseButton.disabled = !isPlaying;
+	els.stopButton.disabled = !hasAudio || (!isPlaying && currentTime <= 0);
+	els.skipBackButton.disabled = !canSeekBackward;
+	els.skipForwardButton.disabled = !canSeekForward;
 }
 
 function playbackTick() {
@@ -514,7 +529,7 @@ function stopPlaybackLoop() {
 	updateActiveWord();
 }
 
-async function togglePlayback() {
+async function playAudio() {
 	if (!state.file || !els.audioPlayer.src) {
 		return;
 	}
@@ -523,11 +538,40 @@ async function togglePlayback() {
 		els.audioPlayer.currentTime = 0;
 	}
 
-	if (els.audioPlayer.paused) {
-		await els.audioPlayer.play();
-	} else {
-		els.audioPlayer.pause();
+	await els.audioPlayer.play();
+}
+
+function pauseAudio() {
+	if (!hasPlayableAudio()) {
+		return;
 	}
+	els.audioPlayer.pause();
+	updatePlayButton();
+}
+
+function stopAudio() {
+	if (!hasPlayableAudio()) {
+		return;
+	}
+	els.audioPlayer.pause();
+	els.audioPlayer.currentTime = 0;
+	const previousActive = state.activeIndex;
+	state.activeIndex = -1;
+	updatePreviewActive(previousActive, -1);
+	updateTableActive(previousActive, -1);
+	updatePlayhead();
+	drawWaveform();
+}
+
+function seekAudioBy(deltaSeconds) {
+	if (!hasPlayableAudio()) {
+		return;
+	}
+	const duration = getDuration();
+	const currentTime = els.audioPlayer.currentTime || 0;
+	const nextTime = Math.min(duration || Number.POSITIVE_INFINITY, Math.max(0, currentTime + deltaSeconds));
+	els.audioPlayer.currentTime = Number.isFinite(nextTime) ? nextTime : 0;
+	updateActiveWord();
 }
 
 function updatePreviewActive(previousIndex, nextIndex) {
@@ -544,8 +588,23 @@ function updateTableActive(previousIndex, nextIndex) {
 		els.wordTableBody.querySelector(`[data-row-index="${previousIndex}"]`)?.classList.remove("active");
 	}
 	if (nextIndex >= 0) {
-		els.wordTableBody.querySelector(`[data-row-index="${nextIndex}"]`)?.classList.add("active");
+		const row = els.wordTableBody.querySelector(`[data-row-index="${nextIndex}"]`);
+		row?.classList.add("active");
+		if (!els.audioPlayer.paused && !els.audioPlayer.ended) {
+			scrollTimingRowIntoView(row);
+		}
 	}
+}
+
+function scrollTimingRowIntoView(row) {
+	if (!row) {
+		return;
+	}
+	row.scrollIntoView({
+		block: "center",
+		inline: "nearest",
+		behavior: "smooth",
+	});
 }
 
 function selectWord(index, shouldSeek = true) {
@@ -616,6 +675,12 @@ function renderPreview() {
 			chip.className = "word-chip";
 			chip.dataset.wordIndex = String(item.index);
 			chip.style.setProperty("--word-color", effectiveWordColor(item.word));
+			if (item.index === state.activeIndex) {
+				chip.classList.add("active");
+			}
+			if (item.index === state.selectedIndex) {
+				chip.classList.add("selected");
+			}
 			chip.textContent = item.word.word;
 			chip.title = `${secondsToClock(item.word.start)} - ${secondsToClock(item.word.end)}`;
 			chip.addEventListener("click", () => selectWord(item.index));
@@ -651,6 +716,12 @@ function renderTable() {
 		row.dataset.rowIndex = String(index);
 		if (word.breakAfter) {
 			row.classList.add("has-break-after");
+		}
+		if (index === state.activeIndex) {
+			row.classList.add("active");
+		}
+		if (index === state.selectedIndex) {
+			row.classList.add("selected");
 		}
 		row.addEventListener("click", (event) => {
 			if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) {
@@ -746,6 +817,9 @@ function renderTable() {
 	});
 
 	els.wordTableBody.append(fragment);
+	if (!els.audioPlayer.paused && !els.audioPlayer.ended && state.activeIndex >= 0) {
+		scrollTimingRowIntoView(els.wordTableBody.querySelector(`[data-row-index="${state.activeIndex}"]`));
+	}
 }
 
 function createBreakEntryRow(index, fps) {
@@ -838,8 +912,8 @@ function createWordColorCell(word, index) {
 	const palette = document.createElement("div");
 	palette.className = "color-palette word-color-palette";
 
-	const applyColor = (value, forceOverride = true) => {
-		const color = rememberCustomColor(value);
+	const applyColor = (value, forceOverride = true, commit = true) => {
+		const color = normalizePickedColor(value);
 		if (!color) {
 			setStatus("Enter a color as #RRGGBB or #RGB.", "warning");
 			hexInput.value = normalizeHexColor(word.color, state.defaultColor);
@@ -856,10 +930,13 @@ function createWordColorCell(word, index) {
 		picker.disabled = !word.colorOverride;
 		hexInput.disabled = !word.colorOverride;
 		swatch.style.background = effectiveWordColor(word);
-		syncDefaultColorControls();
-		renderPreview();
-		renderTable();
-		selectWord(index, false);
+		updateRenderedWordColors();
+		if (commit) {
+			syncDefaultColorControls();
+			renderPreview();
+			renderTable();
+			selectWord(index, false);
+		}
 	};
 
 	checkbox.addEventListener("change", () => {
@@ -876,7 +953,8 @@ function createWordColorCell(word, index) {
 		selectWord(index, false);
 	});
 
-	picker.addEventListener("input", () => applyColor(picker.value));
+	picker.addEventListener("input", () => applyColor(picker.value, true, false));
+	picker.addEventListener("change", () => applyColor(picker.value));
 	hexInput.addEventListener("change", () => applyColor(hexInput.value));
 	hexInput.addEventListener("keydown", (event) => {
 		if (event.key === "Enter") {
@@ -1220,17 +1298,7 @@ function normalizeImportedSegments(input) {
 function loadResult(payload) {
 	state.result = payload;
 	state.defaultColor = normalizeHexColor(colorPayloadValue(payload), state.defaultColor);
-	state.customColors = [DEFAULT_TEXT_COLOR];
-	for (const color of colorListPayloadValue(payload)) {
-		rememberCustomColor(color);
-	}
-	rememberCustomColor(state.defaultColor);
 	state.words = normalizeImportedWords(payload);
-	for (const word of state.words) {
-		if (word.colorOverride) {
-			rememberCustomColor(word.color);
-		}
-	}
 	state.segments = normalizeImportedSegments(payload);
 	state.duration = Number(payload.duration) || state.duration;
 	renumberWords();
@@ -1421,19 +1489,24 @@ function autoBreakIndices(words) {
 	return breakIndices;
 }
 
-function updateDefaultColor(value) {
-	const color = rememberCustomColor(value);
+function updateDefaultColor(value, commit = true) {
+	const color = normalizePickedColor(value);
 	if (!color) {
 		setStatus("Enter the overall color as #RRGGBB or #RGB.", "warning");
 		syncDefaultColorControls();
 		return;
 	}
 	state.defaultColor = color;
-	syncDefaultColorControls();
-	renderPreview();
-	renderTable();
-	if (state.selectedIndex >= 0) {
-		selectWord(state.selectedIndex, false);
+	els.defaultColorInput.value = color;
+	els.defaultColorHexInput.value = color;
+	updateRenderedWordColors();
+	if (commit) {
+		syncDefaultColorControls();
+		renderPreview();
+		renderTable();
+		if (state.selectedIndex >= 0) {
+			selectWord(state.selectedIndex, false);
+		}
 	}
 }
 
@@ -1745,7 +1818,6 @@ function resetTool() {
 	state.duration = 0;
 	state.result = null;
 	state.defaultColor = DEFAULT_TEXT_COLOR;
-	state.customColors = [DEFAULT_TEXT_COLOR];
 	state.words = [];
 	state.segments = [];
 	state.activeIndex = -1;
@@ -1788,7 +1860,8 @@ els.dropZone.addEventListener("drop", (event) => {
 
 els.transcribeButton.addEventListener("click", transcribe);
 els.autoBreakButton.addEventListener("click", autoBreakWords);
-els.defaultColorInput.addEventListener("input", () => updateDefaultColor(els.defaultColorInput.value));
+els.defaultColorInput.addEventListener("input", () => updateDefaultColor(els.defaultColorInput.value, false));
+els.defaultColorInput.addEventListener("change", () => updateDefaultColor(els.defaultColorInput.value));
 els.defaultColorHexInput.addEventListener("change", () => updateDefaultColor(els.defaultColorHexInput.value));
 els.defaultColorHexInput.addEventListener("keydown", (event) => {
 	if (event.key === "Enter") {
@@ -1797,8 +1870,12 @@ els.defaultColorHexInput.addEventListener("keydown", (event) => {
 	}
 });
 els.playPauseButton.addEventListener("click", () => {
-	togglePlayback().catch((error) => setStatus(`Playback failed: ${error.message}`, "error"));
+	playAudio().catch((error) => setStatus(`Playback failed: ${error.message}`, "error"));
 });
+els.pauseButton.addEventListener("click", pauseAudio);
+els.stopButton.addEventListener("click", stopAudio);
+els.skipBackButton.addEventListener("click", () => seekAudioBy(-5));
+els.skipForwardButton.addEventListener("click", () => seekAudioBy(5));
 els.sidebarToggleButton.addEventListener("click", () => {
 	setSidebarCollapsed(!state.sidebarCollapsed);
 });

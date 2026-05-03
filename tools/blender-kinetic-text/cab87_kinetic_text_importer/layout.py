@@ -52,6 +52,7 @@ class LayoutOptions:
 	line_spacing: float = DEFAULT_LINE_SPACING
 	character_width: float = DEFAULT_CHARACTER_WIDTH
 	horizontal_alignment: str = "CENTER"
+	vertical_alignment: str = "CENTER"
 
 
 @dataclass(frozen=True)
@@ -200,6 +201,9 @@ def sanitize_options(options: LayoutOptions) -> LayoutOptions:
 	alignment = (options.horizontal_alignment or "CENTER").upper()
 	if alignment not in {"LEFT", "CENTER", "RIGHT"}:
 		alignment = "CENTER"
+	vertical_alignment = (options.vertical_alignment or "CENTER").upper()
+	if vertical_alignment not in {"TOP", "CENTER", "BOTTOM"}:
+		vertical_alignment = "CENTER"
 
 	return LayoutOptions(
 		max_words_per_section=max(1, int(options.max_words_per_section or DEFAULT_MAX_WORDS_PER_SECTION)),
@@ -209,6 +213,7 @@ def sanitize_options(options: LayoutOptions) -> LayoutOptions:
 		line_spacing=max(0.1, float(options.line_spacing)),
 		character_width=max(0.05, float(options.character_width)),
 		horizontal_alignment=alignment,
+		vertical_alignment=vertical_alignment,
 	)
 
 
@@ -241,7 +246,7 @@ def _layout_section_words(section_index: int, words: list[TimingWord], options: 
 		widths = [_word_width(word.text, options.character_width) for word in line_words]
 		line_width = sum(widths) + options.word_spacing * max(0, len(line_words) - 1)
 		cursor = _line_left_edge(line_width, options.horizontal_alignment)
-		y = ((line_count - 1) * options.line_spacing * 0.5) - (line_index * options.line_spacing)
+		y = _line_y(line_index, line_count, options.line_spacing, options.vertical_alignment)
 
 		for word, width in zip(line_words, widths):
 			x = cursor + width * 0.5
@@ -292,6 +297,15 @@ def _line_left_edge(line_width: float, alignment: str) -> float:
 	if alignment == "RIGHT":
 		return -line_width
 	return -line_width * 0.5
+
+
+def _line_y(line_index: int, line_count: int, line_spacing: float, alignment: str) -> float:
+	line_block_height = max(0, line_count - 1) * line_spacing
+	if alignment == "TOP":
+		return -(line_index * line_spacing)
+	if alignment == "BOTTOM":
+		return line_block_height - (line_index * line_spacing)
+	return (line_block_height * 0.5) - (line_index * line_spacing)
 
 
 def _joined_length(words: Iterable[TimingWord]) -> int:
