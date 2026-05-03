@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Kinetic Text Importer",
 	"author": "Cab87",
-	"version": (0, 1, 9),
+	"version": (0, 1, 12),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Kinetic Text",
 	"description": "Import Cab87 dialogue timing JSON and create animated kinetic Text objects.",
@@ -9,6 +9,7 @@ bl_info = {
 }
 
 import json
+from math import cos, pi, sin
 from pathlib import Path
 import re
 
@@ -34,6 +35,8 @@ from .utils.version_gate import run_version_gate
 
 GROUP_PROP = "cab87_kinetic_text_group"
 WORD_PROP = "cab87_kinetic_text_word"
+STROKE_PROP = "cab87_kinetic_text_stroke"
+STROKE_LAYER_PROP = "cab87_stroke_layer_index"
 COLLECTION_PROP = "cab87_kinetic_text_collection"
 ADDON_ID = "cab87_kinetic_text_importer"
 ADDON_VERSION = ".".join(str(part) for part in bl_info["version"])
@@ -160,6 +163,40 @@ class CAB87_KineticTextSettings(PropertyGroup):
 		default=(1.0, 0.86, 0.22, 1.0),
 	)
 	color_remaps: CollectionProperty(type=CAB87_KineticTextColorRemap)
+	stroke_enabled: BoolProperty(
+		name="Stroke",
+		description="Create a larger backing text object behind each word for an outline-like stroke.",
+		default=False,
+	)
+	stroke_color: FloatVectorProperty(
+		name="Stroke Color",
+		subtype="COLOR",
+		size=4,
+		min=0.0,
+		max=1.0,
+		default=(0.0, 0.0, 0.0, 1.0),
+	)
+	stroke_width: FloatProperty(
+		name="Stroke Width",
+		description="Offset distance for backing stroke copies, scaled by font size.",
+		default=0.06,
+		min=0.0,
+		soft_max=1.0,
+	)
+	stroke_copies: IntProperty(
+		name="Stroke Copies",
+		description="Number of same-size backing copies arranged around each fill word.",
+		default=8,
+		min=4,
+		soft_max=24,
+	)
+	stroke_z_offset: FloatProperty(
+		name="Stroke Z Offset",
+		description="Local Z offset for stroke objects. Negative values place the stroke behind the fill text.",
+		default=-0.02,
+		soft_min=-1.0,
+		soft_max=1.0,
+	)
 	bevel_depth: FloatProperty(name="Bevel Depth", default=0.0, min=0.0, soft_max=1.0)
 	bevel_resolution: IntProperty(name="Bevel Resolution", default=0, min=0, soft_max=8)
 	extrude: FloatProperty(name="Extrusion", default=0.0, min=0.0, soft_max=2.0)
@@ -336,6 +373,12 @@ class CAB87_PT_kinetic_text_panel(Panel):
 				source.prop(remap, "source_color", text=remap.source_hex)
 				row.label(text="to")
 				row.prop(remap, "target_color", text="")
+		box.prop(settings, "stroke_enabled")
+		if settings.stroke_enabled:
+			box.prop(settings, "stroke_color")
+			box.prop(settings, "stroke_width")
+			box.prop(settings, "stroke_copies")
+			box.prop(settings, "stroke_z_offset")
 		box.prop(settings, "fill_mode")
 		box.prop(settings, "bevel_depth")
 		box.prop(settings, "bevel_resolution")
@@ -404,7 +447,25 @@ def create_kinetic_text_group(context, layout_document: LayoutDocument, settings
 
 	font = load_font(settings.font_path)
 	section_starts = [section.start for section in layout_document.sections]
+	active_stroke_offsets = stroke_offsets(settings) if settings.stroke_enabled else ()
 	for layout_word in layout_document.words:
+		for stroke_layer_index, stroke_offset in enumerate(active_stroke_offsets):
+			stroke_obj = create_stroke_object(layout_word, settings, font, stroke_layer_index, stroke_offset)
+			stroke_obj.parent = group
+			collection.objects.link(stroke_obj)
+			stroke_material = create_word_material(f"{stroke_obj.name}_Material", settings, stroke_rgb(settings), stroke_alpha(settings))
+			stroke_obj.data.materials.append(stroke_material)
+			animate_word_object(
+				stroke_obj,
+				stroke_material,
+				layout_word,
+				section_starts,
+				settings,
+				fps,
+				stroke_rgb(settings),
+				stroke_alpha(settings),
+			)
+
 		curve = bpy.data.curves.new(unique_name(f"Cab87Word_{layout_word.source_index + 1:03d}_{slug(layout_word.text)}"), "FONT")
 		curve.body = layout_word.text
 		apply_text_curve_style(curve, settings, font)
@@ -437,14 +498,68 @@ def apply_layout_to_existing_group(group, word_objects, layout_document: LayoutD
 	font = load_font(settings.font_path)
 	section_starts = [section.start for section in layout_document.sections]
 	objects_by_index = {int(obj.get("cab87_word_index", -1)): obj for obj in word_objects}
+	stroke_objects = collect_stroke_objects(group)
+	stroke_objects_by_key = {}
+	duplicate_stroke_objects = []
+	for obj in stroke_objects:
+		key = stroke_object_key(obj)
+		if key in stroke_objects_by_key:
+			duplicate_stroke_objects.append(obj)
+		else:
+			stroke_objects_by_key[key] = obj
+	active_stroke_offsets = stroke_offsets(settings) if settings.stroke_enabled else ()
+	expected_stroke_keys = {
+		(layout_word.source_index, stroke_layer_index)
+		for layout_word in layout_document.words
+		for stroke_layer_index, _stroke_offset in enumerate(active_stroke_offsets)
+	}
 
 	for obj in word_objects:
 		clear_generated_word_animation(obj)
+	for obj in stroke_objects:
+		clear_generated_word_animation(obj)
+
+	if not settings.stroke_enabled:
+		for obj in stroke_objects:
+			remove_object_data(obj)
+		stroke_objects_by_key = {}
+	else:
+		for obj in duplicate_stroke_objects:
+			remove_object_data(obj)
+		for key, obj in list(stroke_objects_by_key.items()):
+			if key not in expected_stroke_keys:
+				remove_object_data(obj)
+				stroke_objects_by_key.pop(key, None)
 
 	for layout_word in layout_document.words:
 		obj = objects_by_index.get(layout_word.source_index)
 		if obj is None or obj.type != "FONT":
 			continue
+		for stroke_layer_index, stroke_offset in enumerate(active_stroke_offsets):
+			stroke_key = (layout_word.source_index, stroke_layer_index)
+			stroke_obj = stroke_objects_by_key.get(stroke_key)
+			if stroke_obj is None:
+				stroke_obj = create_stroke_object(layout_word, settings, font, stroke_layer_index, stroke_offset)
+				stroke_obj.parent = group
+				target_collection = collection_for_generated_object(obj, group)
+				target_collection.objects.link(stroke_obj)
+			else:
+				stroke_obj.data.body = layout_word.text
+				apply_stroke_text_curve_style(stroke_obj.data, settings, font)
+				stroke_obj.location = stroke_location(layout_word, settings, stroke_offset)
+				write_stroke_properties(stroke_obj, layout_word, stroke_layer_index)
+			stroke_material = ensure_word_material(stroke_obj, settings, stroke_rgb(settings), stroke_alpha(settings))
+			clear_material_animation(stroke_material)
+			animate_word_object(
+				stroke_obj,
+				stroke_material,
+				layout_word,
+				section_starts,
+				settings,
+				fps,
+				stroke_rgb(settings),
+				stroke_alpha(settings),
+			)
 		obj.data.body = layout_word.text
 		apply_text_curve_style(obj.data, settings, font)
 		obj.location = scaled_location(layout_word, settings)
@@ -486,6 +601,34 @@ def apply_text_curve_style(curve, settings: CAB87_KineticTextSettings, font) -> 
 		set_curve_fill_mode(curve, settings.fill_mode)
 	if font is not None:
 		curve.font = font
+
+
+def apply_stroke_text_curve_style(curve, settings: CAB87_KineticTextSettings, font) -> None:
+	apply_text_curve_style(curve, settings, font)
+	if hasattr(curve, "offset"):
+		curve.offset = 0.0
+
+
+def create_stroke_object(layout_word, settings: CAB87_KineticTextSettings, font, stroke_layer_index: int, stroke_offset):
+	curve = bpy.data.curves.new(
+		unique_name(f"Cab87Stroke_{layout_word.source_index + 1:03d}_{stroke_layer_index + 1:02d}_{slug(layout_word.text)}"),
+		"FONT",
+	)
+	curve.body = layout_word.text
+	apply_stroke_text_curve_style(curve, settings, font)
+
+	obj = bpy.data.objects.new(curve.name, curve)
+	write_stroke_properties(obj, layout_word, stroke_layer_index)
+	obj.location = stroke_location(layout_word, settings, stroke_offset)
+	return obj
+
+
+def collection_for_generated_object(obj, group):
+	if getattr(obj, "users_collection", None):
+		return obj.users_collection[0]
+	if getattr(group, "users_collection", None):
+		return group.users_collection[0]
+	return bpy.context.scene.collection
 
 
 def set_curve_fill_mode(curve, fill_mode: str) -> None:
@@ -686,34 +829,73 @@ def rgb_to_hex(value) -> str:
 	return "#" + "".join(f"{round(channel * 255):02x}" for channel in rgb)
 
 
-def create_word_material(name: str, settings: CAB87_KineticTextSettings, color=None):
+def stroke_rgb(settings: CAB87_KineticTextSettings):
+	return sanitize_rgb(settings.stroke_color[:3], (0.0, 0.0, 0.0))
+
+
+def stroke_alpha(settings: CAB87_KineticTextSettings) -> float:
+	try:
+		return max(0.0, min(1.0, float(settings.stroke_color[3])))
+	except (TypeError, ValueError):
+		return 1.0
+
+
+def stroke_copy_count(settings: CAB87_KineticTextSettings) -> int:
+	return max(4, int(settings.stroke_copies or 8))
+
+
+def stroke_offsets(settings: CAB87_KineticTextSettings) -> tuple[tuple[float, float], ...]:
+	radius = max(0.0, float(settings.stroke_width)) * max(0.01, float(settings.font_size))
+	if radius <= 0:
+		return ()
+	count = stroke_copy_count(settings)
+	return tuple(
+		(
+			cos((2 * pi * index) / count) * radius,
+			sin((2 * pi * index) / count) * radius,
+		)
+		for index in range(count)
+	)
+
+
+def create_word_material(name: str, settings: CAB87_KineticTextSettings, color=None, alpha=None):
 	material = bpy.data.materials.new(unique_name(name))
 	material.use_nodes = True
 	if hasattr(material, "blend_method"):
 		material.blend_method = "BLEND"
 	if hasattr(material, "show_transparent_back"):
 		material.show_transparent_back = True
-	set_material_color(material, settings, settings.color[3], color)
+	set_material_color(material, settings, settings.color[3] if alpha is None else alpha, color)
 	return material
 
 
-def ensure_word_material(obj, settings: CAB87_KineticTextSettings, color=None):
+def ensure_word_material(obj, settings: CAB87_KineticTextSettings, color=None, alpha=None):
 	if obj.data.materials:
 		material = obj.data.materials[0]
 	else:
-		material = create_word_material(f"{obj.name}_Material", settings, color)
+		material = create_word_material(f"{obj.name}_Material", settings, color, alpha)
 		obj.data.materials.append(material)
-	set_material_color(material, settings, settings.color[3], color)
+	set_material_color(material, settings, settings.color[3] if alpha is None else alpha, color)
 	return material
 
 
-def animate_word_object(obj, material, layout_word, section_starts: list[float], settings: CAB87_KineticTextSettings, fps: float) -> None:
+def animate_word_object(
+	obj,
+	material,
+	layout_word,
+	section_starts: list[float],
+	settings: CAB87_KineticTextSettings,
+	fps: float,
+	material_color=None,
+	material_alpha=None,
+) -> None:
 	start_frame = frame_for_seconds(layout_word.start, fps, settings.start_frame)
 	intro_frame = max(settings.start_frame, start_frame - settings.intro_frames)
 	full_scale = (1.0, 1.0, 1.0)
 	intro_scale = (settings.intro_scale, settings.intro_scale, settings.intro_scale)
 	outro_scale = (settings.outro_scale, settings.outro_scale, settings.outro_scale)
-	word_color = color_for_layout_word(layout_word, settings)
+	word_color = material_color if material_color is not None else color_for_layout_word(layout_word, settings)
+	word_alpha = settings.color[3] if material_alpha is None else material_alpha
 	intro_animation = resolve_animation_mode(settings.intro_animation, "SCALE_FADE")
 	outro_animation = resolve_animation_mode(settings.outro_animation, "FADE")
 
@@ -735,6 +917,7 @@ def animate_word_object(obj, material, layout_word, section_starts: list[float],
 		intro_scale,
 		full_scale,
 		word_color,
+		word_alpha,
 		clear_start_frame,
 	)
 
@@ -749,6 +932,7 @@ def animate_word_object(obj, material, layout_word, section_starts: list[float],
 			full_scale,
 			outro_scale,
 			word_color,
+			word_alpha,
 		)
 
 	set_fcurve_interpolation(obj, "BEZIER")
@@ -767,6 +951,7 @@ def animate_intro(
 	intro_scale,
 	full_scale,
 	word_color,
+	word_alpha: float,
 	outro_start_frame: int | None = None,
 ) -> None:
 	if animation_uses_scale(mode):
@@ -781,13 +966,13 @@ def animate_intro(
 		if intro_keyframe_allowed(intro_frame, outro_start_frame):
 			set_material_alpha_key(material, settings, 0.0, intro_frame, word_color)
 		if intro_keyframe_allowed(start_frame, outro_start_frame):
-			set_material_alpha_key(material, settings, settings.color[3], start_frame, word_color)
+			set_material_alpha_key(material, settings, word_alpha, start_frame, word_color)
 	else:
 		hidden_frame = max(settings.start_frame, intro_frame - 1)
 		if hidden_frame < intro_frame and intro_keyframe_allowed(hidden_frame, outro_start_frame):
 			set_material_alpha_key(material, settings, 0.0, hidden_frame, word_color)
 		if intro_keyframe_allowed(intro_frame, outro_start_frame):
-			set_material_alpha_key(material, settings, settings.color[3], intro_frame, word_color)
+			set_material_alpha_key(material, settings, word_alpha, intro_frame, word_color)
 
 
 def set_intro_scale_target_keys(obj, settings: CAB87_KineticTextSettings, start_frame: int, full_scale, outro_start_frame: int | None = None) -> None:
@@ -803,7 +988,7 @@ def set_intro_scale_target_keys(obj, settings: CAB87_KineticTextSettings, start_
 		set_object_scale_key(obj, overshoot if target == "overshoot" else full_scale, frame)
 
 
-def animate_outro(obj, material, settings: CAB87_KineticTextSettings, mode: str, clear_start_frame: int, clear_end_frame: int, full_scale, outro_scale, word_color) -> None:
+def animate_outro(obj, material, settings: CAB87_KineticTextSettings, mode: str, clear_start_frame: int, clear_end_frame: int, full_scale, outro_scale, word_color, word_alpha: float) -> None:
 	if animation_uses_scale(mode):
 		set_object_scale_key(obj, full_scale, clear_start_frame)
 		set_object_scale_key(obj, outro_scale, clear_end_frame)
@@ -811,11 +996,11 @@ def animate_outro(obj, material, settings: CAB87_KineticTextSettings, mode: str,
 		set_object_scale_key(obj, full_scale, clear_start_frame)
 
 	if animation_uses_fade(mode):
-		set_material_alpha_key(material, settings, settings.color[3], clear_start_frame, word_color)
+		set_material_alpha_key(material, settings, word_alpha, clear_start_frame, word_color)
 		set_material_alpha_key(material, settings, 0.0, clear_end_frame, word_color)
 	else:
-		set_material_alpha_key(material, settings, settings.color[3], clear_start_frame, word_color)
-		set_material_alpha_key(material, settings, settings.color[3], clear_end_frame, word_color)
+		set_material_alpha_key(material, settings, word_alpha, clear_start_frame, word_color)
+		set_material_alpha_key(material, settings, word_alpha, clear_end_frame, word_color)
 
 
 def set_object_scale_key(obj, scale, frame: int) -> None:
@@ -879,6 +1064,12 @@ def scaled_location(layout_word, settings: CAB87_KineticTextSettings):
 	return (layout_word.x * scale, layout_word.y * scale, 0.0)
 
 
+def stroke_location(layout_word, settings: CAB87_KineticTextSettings, stroke_offset):
+	x, y, _z = scaled_location(layout_word, settings)
+	offset_x, offset_y = stroke_offset
+	return (x + offset_x, y + offset_y, settings.stroke_z_offset)
+
+
 def update_scene_frame_range(scene, layout_document: LayoutDocument, settings: CAB87_KineticTextSettings, fps: float) -> None:
 	animation_tail_frames = max(
 		settings.clear_frames,
@@ -901,6 +1092,12 @@ def write_word_properties(obj, layout_word) -> None:
 	obj["cab87_color_override"] = bool(layout_word.color_override)
 	obj["cab87_section_index"] = layout_word.section_index
 	obj["cab87_line_index"] = layout_word.line_index
+
+
+def write_stroke_properties(obj, layout_word, stroke_layer_index: int) -> None:
+	obj[STROKE_PROP] = True
+	obj[STROKE_LAYER_PROP] = int(stroke_layer_index)
+	write_word_properties(obj, layout_word)
 
 
 def write_group_properties(group, settings: CAB87_KineticTextSettings, document: TimingDocument, fps: float, source_path: str) -> None:
@@ -934,6 +1131,11 @@ def write_group_properties(group, settings: CAB87_KineticTextSettings, document:
 	group["cab87_font_path"] = settings.font_path
 	group["cab87_font_size"] = settings.font_size
 	group["cab87_color"] = [float(value) for value in settings.color]
+	group["cab87_stroke_enabled"] = bool(settings.stroke_enabled)
+	group["cab87_stroke_color"] = [float(value) for value in settings.stroke_color]
+	group["cab87_stroke_width"] = settings.stroke_width
+	group["cab87_stroke_copies"] = settings.stroke_copies
+	group["cab87_stroke_z_offset"] = settings.stroke_z_offset
 	group["cab87_fill_mode"] = settings.fill_mode
 	group["cab87_bevel_depth"] = settings.bevel_depth
 	group["cab87_bevel_resolution"] = settings.bevel_resolution
@@ -1051,6 +1253,13 @@ def load_group_properties_into_settings(group, settings: CAB87_KineticTextSettin
 	color = group.get("cab87_color")
 	if color and len(color) == 4:
 		settings.color = tuple(float(value) for value in color)
+	settings.stroke_enabled = bool(group.get("cab87_stroke_enabled", settings.stroke_enabled))
+	stroke_color = group.get("cab87_stroke_color")
+	if stroke_color and len(stroke_color) == 4:
+		settings.stroke_color = tuple(float(value) for value in stroke_color)
+	settings.stroke_width = _float_prop(group, "cab87_stroke_width", settings.stroke_width)
+	settings.stroke_copies = int(group.get("cab87_stroke_copies", settings.stroke_copies))
+	settings.stroke_z_offset = _float_prop(group, "cab87_stroke_z_offset", settings.stroke_z_offset)
 	load_color_remaps_from_group(group, settings)
 
 
@@ -1084,6 +1293,17 @@ def collect_word_objects(group):
 		(obj for obj in group.children if obj.get(WORD_PROP) and obj.type == "FONT"),
 		key=lambda obj: int(obj.get("cab87_word_index", 0)),
 	)
+
+
+def collect_stroke_objects(group):
+	return sorted(
+		(obj for obj in group.children if obj.get(STROKE_PROP) and obj.type == "FONT"),
+		key=lambda obj: stroke_object_key(obj),
+	)
+
+
+def stroke_object_key(obj) -> tuple[int, int]:
+	return (int(obj.get("cab87_word_index", -1)), int(obj.get(STROKE_LAYER_PROP, 0)))
 
 
 def find_target_group(context):
