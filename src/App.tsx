@@ -39,6 +39,8 @@ export default function App() {
 
   const [selectedEdges, setSelectedEdges] = useState<string[]>([]);
   const lastDragPosRef = useRef<Point | null>(null);
+  const startDragPosRef = useRef<Point | null>(null);
+  const addedToSelectionRef = useRef<boolean>(false);
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
   const selectedNode = selectedNodes.length > 0 ? selectedNodes[selectedNodes.length - 1] : null;
 
@@ -51,10 +53,11 @@ export default function App() {
 
   const draggingPoint = useMemo(() => {
     if (!dragging) return null;
-    if (dragging.type === 'node') return nodes.find(n => n.id === dragging.id)?.point || null;
-    if (dragging.type === 'edge') {
+    if (dragging.type === 'node' || dragging.type === 'multi-node') return nodes.find(n => n.id === dragging.id)?.point || null;
+    if (dragging.type === 'edge' || dragging.type === 'multi-edge') {
         const edge = edges.find(e => e.id === dragging.id);
-        return edge ? edge.points[dragging.pointId!] : null;
+        if (dragging.pointId != null) return edge ? edge.points[dragging.pointId] : null;
+        else if (lastDragPosRef.current) return lastDragPosRef.current;
     }
     return null;
   }, [dragging, nodes, edges]);
@@ -905,16 +908,23 @@ export default function App() {
     for (const n of nodes) {
         if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < 25) {
             if (e.shiftKey) {
-                setSelectedNodes(prev => prev.includes(n.id) ? prev.filter(id => id !== n.id) : [...prev, n.id]);
+                if (!selectedNodes.includes(n.id)) {
+                    setSelectedNodes(prev => [...prev, n.id]);
+                    addedToSelectionRef.current = true;
+                } else {
+                    addedToSelectionRef.current = false;
+                }
                 setSelectedEdges([]);
                 setSelectedPointIndex(null);
                 lastDragPosRef.current = pos;
+                startDragPosRef.current = pos;
                 setDragging({ type: 'multi-node', id: n.id });
                 return;
             }
 
             if (selectedNodes.includes(n.id) && selectedNodes.length > 1) {
                 lastDragPosRef.current = pos;
+                startDragPosRef.current = pos;
                 setDragging({ type: 'multi-node', id: n.id });
                 return;
             }
@@ -1169,15 +1179,22 @@ export default function App() {
 
       if (hitIndex !== -1) {
         if (e.shiftKey) {
-            setSelectedEdges(prev => prev.includes(edge.id) ? prev.filter(id => id !== edge.id) : [...prev, edge.id]);
+            if (!selectedEdges.includes(edge.id)) {
+                setSelectedEdges(prev => [...prev, edge.id]);
+                addedToSelectionRef.current = true;
+            } else {
+                addedToSelectionRef.current = false;
+            }
             setSelectedNode(null);
             lastDragPosRef.current = pos;
+            startDragPosRef.current = pos;
             setDragging({ type: 'multi-edge', id: edge.id });
             return;
         }
 
         if (selectedEdges.includes(edge.id) && selectedEdges.length > 1) {
             lastDragPosRef.current = pos;
+            startDragPosRef.current = pos;
             setDragging({ type: 'multi-edge', id: edge.id });
             return;
         }
@@ -1319,13 +1336,14 @@ export default function App() {
       return changed ? { ...edge, points: newPts } : edge;
   };
 
-  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan' | 'multi-edge' | 'multi-node'; id: string; pointId?: number }, pos: Point) => {
+  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan' | 'multi-edge' | 'multi-node'; id: string; pointId?: number }, pos: Point, shiftKey: boolean) => {
     const taper = (dist: number, radius: number) => Math.max(0, 1 - Math.pow(dist / radius, 2));
 
     if (dragState.type === 'multi-node') {
         if (!lastDragPosRef.current) return;
-        const dx = pos.x - lastDragPosRef.current.x;
-        const dy = pos.y - lastDragPosRef.current.y;
+        let dx = pos.x - lastDragPosRef.current.x;
+        let dy = pos.y - lastDragPosRef.current.y;
+        if (is3DMode && shiftKey) { dx = 0; dy = 0; }
         const dz = pos.z !== undefined ? pos.z - (lastDragPosRef.current.z ?? 4) : 0;
         lastDragPosRef.current = pos;
 
@@ -1348,8 +1366,9 @@ export default function App() {
 
     if (dragState.type === 'multi-edge') {
         if (!lastDragPosRef.current) return;
-        const dx = pos.x - lastDragPosRef.current.x;
-        const dy = pos.y - lastDragPosRef.current.y;
+        let dx = pos.x - lastDragPosRef.current.x;
+        let dy = pos.y - lastDragPosRef.current.y;
+        if (is3DMode && shiftKey) { dx = 0; dy = 0; }
         const dz = pos.z !== undefined ? pos.z - (lastDragPosRef.current.z ?? 4) : 0;
         lastDragPosRef.current = pos;
 
@@ -1394,14 +1413,15 @@ export default function App() {
     if (dragState.type === 'node') {
         const draggingNode = nodes.find(n => n.id === dragState.id);
         if (draggingNode) {
-            const dx = pos.x - draggingNode.point.x;
-            const dy = pos.y - draggingNode.point.y;
+            let dx = pos.x - draggingNode.point.x;
+            let dy = pos.y - draggingNode.point.y;
+            if (is3DMode && shiftKey) { dx = 0; dy = 0; }
             const dz = pos.z !== undefined ? pos.z - (draggingNode.point.z ?? 4) : 0;
 
             const originPoint = draggingNode.point;
             
             const newNodes = nodes.map(n => {
-                if (n.id === draggingNode.id) return { ...n, point: { ...pos, z: pos.z ?? originPoint.z } };
+                if (n.id === draggingNode.id) return { ...n, point: { ...n.point, x: n.point.x + dx, y: n.point.y + dy, z: pos.z ?? originPoint.z } };
                 if (!softSelectionEnabled) return n;
                 const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
                 const w = taper(d, softSelectionRadius);
@@ -1463,8 +1483,9 @@ export default function App() {
       const draggingEdge = edges.find(e => e.id === dragState.id);
       if (!draggingEdge) return;
       const originPoint = draggingEdge.points[pid];
-      const dx = pos.x - originPoint.x;
-      const dy = pos.y - originPoint.y;
+      let dx = pos.x - originPoint.x;
+      let dy = pos.y - originPoint.y;
+      if (is3DMode && shiftKey) { dx = 0; dy = 0; }
       const dz = pos.z !== undefined ? pos.z - (originPoint.z ?? 4) : 0;
 
       let newNodes = nodes;
@@ -1493,12 +1514,13 @@ export default function App() {
 
         if (e.id === draggingEdge.id) {
             const oldTarget = newPoints[pid];
-            const ddx = pos.x - oldTarget.x;
-            const ddy = pos.y - oldTarget.y;
+            let ddx = pos.x - oldTarget.x;
+            let ddy = pos.y - oldTarget.y;
+            if (is3DMode && shiftKey) { ddx = 0; ddy = 0; }
             const ddz = pos.z !== undefined ? pos.z - (oldTarget.z ?? 4) : 0;
 
             if (pid % 3 === 2) {
-               newPoints[pid] = { ...oldTarget, x: pos.x, y: pos.y, z: pos.z ?? oldTarget.z ?? 4 };
+               newPoints[pid] = { ...oldTarget, x: oldTarget.x + ddx, y: oldTarget.y + ddy, z: pos.z ?? oldTarget.z ?? 4 };
                if (pid - 1 >= 0) {
                    newPoints[pid - 1] = { ...newPoints[pid - 1], x: newPoints[pid - 1].x + ddx, y: newPoints[pid - 1].y + ddy, z: (newPoints[pid - 1].z ?? 4) + ddz };
                }
@@ -1507,7 +1529,7 @@ export default function App() {
                }
             } else if (pid % 3 === 0 || pid % 3 === 1) {
                 const handle = newPoints[pid];
-                let effectivePos = { x: pos.x, y: pos.y, z: pos.z ?? oldTarget.z ?? 4 };
+                let effectivePos = { x: handle.x + ddx, y: handle.y + ddy, z: pos.z ?? oldTarget.z ?? 4 };
 
                 newPoints[pid] = { ...handle, ...effectivePos };
              
@@ -1604,10 +1626,25 @@ export default function App() {
 
     const pos = getMousePos(e);
 
-    handleDrag(dragging, pos);
+    handleDrag(dragging, pos, e.shiftKey);
   };
 
   const onPointerUp = (e: React.PointerEvent | any) => {
+    if (dragging && e.shiftKey && startDragPosRef.current) {
+        const pos = getMousePos(e);
+        const dx = pos.x - startDragPosRef.current.x;
+        const dy = pos.y - startDragPosRef.current.y;
+        const dist = Math.hypot(dx, dy);
+        
+        if (dist < 5 && !addedToSelectionRef.current) {
+            if (dragging.type === 'multi-node' || dragging.type === 'node') {
+                setSelectedNodes(prev => prev.filter(id => id !== dragging.id));
+            } else if (dragging.type === 'multi-edge' || dragging.type === 'edge') {
+                setSelectedEdges(prev => prev.filter(id => id !== dragging.id));
+            }
+        }
+    }
+
     if (!is3DMode) {
       pointersRef.current.delete(e.pointerId);
       if (pointersRef.current.size < 2 && dragging?.type !== 'pan') {
