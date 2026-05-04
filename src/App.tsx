@@ -307,12 +307,72 @@ export default function App() {
     e.preventDefault();
     const pos = getMousePos(e);
 
+    const getNewEdgeParams = (sn: Node, targetPt: Point) => {
+        let params: any = {
+            width: 60,
+            sidewalk: 12,
+            color: COLORS[edges.length % COLORS.length]
+        };
+
+        const conns = edges.filter(e => e.source === sn.id || e.target === sn.id);
+        if (conns.length > 0) {
+            const dx = targetPt.x - sn.point.x;
+            const dy = targetPt.y - sn.point.y;
+            const lenN = Math.hypot(dx, dy);
+
+            let bestEdge: Edge | null = null;
+            let minError = Infinity;
+
+            if (lenN > 0) {
+                for (const c of conns) {
+                    const isSource = c.source === sn.id;
+                    let nextPt: Point | undefined;
+                    if (isSource) {
+                        nextPt = c.points.length > 0 ? c.points[0] : nodes.find(n => n.id === c.target)?.point;
+                    } else {
+                        nextPt = c.points.length > 0 ? c.points[c.points.length - 1] : nodes.find(n => n.id === c.source)?.point;
+                    }
+                    
+                    if (nextPt) {
+                        const odx = nextPt.x - sn.point.x;
+                        const ody = nextPt.y - sn.point.y;
+                        const lenC = Math.hypot(odx, ody);
+                        
+                        if (lenC > 0) {
+                            const dot = ((odx/lenC) * (dx/lenN) + (ody/lenC) * (dy/lenN));
+                            const error = dot + 1; // 0 when perfectly opposite
+                            if (error < minError) {
+                                minError = error;
+                                bestEdge = c;
+                            }
+                        }
+                    }
+                }
+                
+                if (bestEdge) {
+                    params = {
+                        width: bestEdge.width,
+                        sidewalk: bestEdge.sidewalk,
+                        sidewalkLeft: bestEdge.sidewalkLeft,
+                        sidewalkRight: bestEdge.sidewalkRight,
+                        transitionSmoothness: bestEdge.transitionSmoothness,
+                        color: bestEdge.color,
+                        oneWay: bestEdge.oneWay
+                    };
+                    Object.keys(params).forEach(key => params[key] === undefined && delete params[key]);
+                }
+            }
+        }
+        return params;
+    };
+
     // Right click existing node
     for (const n of nodes) {
         if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < 25) {
             if (selectedNode && selectedNode !== n.id) {
                 const sn = nodes.find(nn => nn.id === selectedNode)!;
                 const newEdgeId = Math.random().toString(36).substring(2, 9);
+                const edgeParams = getNewEdgeParams(sn, n.point);
                 const newEdge: Edge = {
                     id: newEdgeId,
                     source: selectedNode,
@@ -321,9 +381,7 @@ export default function App() {
                       { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
                       { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
                     ],
-                    width: 60,
-                    sidewalk: 12,
-                    color: COLORS[edges.length % COLORS.length]
+                    ...edgeParams
                 };
                 setEdges(prev => [...prev, newEdge]);
                 setSelectedNode(n.id);
@@ -461,11 +519,12 @@ export default function App() {
         const sn = nodes.find(n => n.id === selectedNode);
         if (sn) {
             const newEdgeId = Math.random().toString(36).substring(2, 9);
+            const edgeParams = getNewEdgeParams(sn, spawnPos);
             const newEdge: Edge = {
                 id: newEdgeId, source: selectedNode, target: newNodeId, points: [
                   { x: sn.point.x + (spawnPos.x - sn.point.x)/3, y: sn.point.y + (spawnPos.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
                   { x: sn.point.x + 2*(spawnPos.x - sn.point.x)/3, y: sn.point.y + 2*(spawnPos.y - sn.point.y)/3, z: spawnPos.z ?? 4, linear: true }
-                ], width: 60, sidewalk: 12, color: COLORS[edges.length % COLORS.length]
+                ], ...edgeParams
             };
             setEdges(prev => [...prev, newEdge]);
             setSelectedEdges([newEdgeId]);

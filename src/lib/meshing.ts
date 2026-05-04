@@ -294,7 +294,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
        const clStart = { x: (bL.x + bR.x) / 2, y: (bL.y + bR.y) / 2, z: (bL.z ?? 4) };
        const startDir = getDir(spline[0], spline[Math.min(1, spline.length - 1)]);
-       const fullCenterLine: { p: Point, dir: Point }[] = [{ p: clStart, dir: startDir }, ...centerLine];
+       const startRight = { x: (bR.x - clStart.x) / W, y: (bR.y - clStart.y) / W };
+       const fullCenterLine: { p: Point, dir: Point, right: Point }[] = [{ p: clStart, dir: startDir, right: startRight }, ...centerLine.map(pt => ({ ...pt, right: { x: -pt.dir.y, y: pt.dir.x } }))];
 
        let poly = [bL, bR, ...rightPoints];
        let outerPoly = [obL, obR, ...outerRightPoints];
@@ -333,7 +334,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
            const clEnd = { x: (tbL.x + tbR.x) / 2, y: (tbL.y + tbR.y) / 2, z: (tbL.z ?? 4) };
            const endDirForDashes = getDir(spline[Math.max(0, spline.length - 2)], spline[spline.length - 1]);
-           fullCenterLine.push({ p: clEnd, dir: endDirForDashes });
+           const endRight = { x: (tbR.x - clEnd.x) / W, y: (tbR.y - clEnd.y) / W };
+           fullCenterLine.push({ p: clEnd, dir: endDirForDashes, right: endRight });
            
            poly.push(tbR, tbL);
            outerPoly.push(otbR, otbL);
@@ -356,7 +358,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                const lL = leftPoints[leftPoints.length - 1];
                const lR = rightPoints[rightPoints.length - 1];
                const endDirForDashes = getDir(spline[Math.max(0, spline.length - 2)], spline[spline.length - 1]);
-               fullCenterLine.push({ p: { x: (lL.x + lR.x) / 2, y: (lL.y + lR.y) / 2, z: (lL.z ?? 4) }, dir: endDirForDashes });
+               const clEnd = { x: (lL.x + lR.x) / 2, y: (lL.y + lR.y) / 2, z: (lL.z ?? 4) };
+               const endRight = { x: (lR.x - clEnd.x) / W, y: (lR.y - clEnd.y) / W };
+               fullCenterLine.push({ p: clEnd, dir: endDirForDashes, right: endRight });
            }
        }
        poly.push(...[...leftPoints].reverse());
@@ -405,7 +409,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            for (let j = 0; j < fullCenterLine.length; j++) {
                const pt = fullCenterLine[j];
                const p = pt.p;
-               const right = { x: -pt.dir.y, y: pt.dir.x };
+               const right = pt.right;
                linePoints.push({ x: p.x + right.x * divider.offset, y: p.y + right.y * divider.offset, z: p.z });
            }
            if (divider.type === 'dashed') {
