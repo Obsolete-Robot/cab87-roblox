@@ -344,7 +344,7 @@ export const drawNetwork2D = (
 
       ctx.beginPath();
       ctx.arc(n.point.x, n.point.y, 8, 0, Math.PI * 2);
-      ctx.fillStyle = isActive ? '#ef4444' : isSelected ? '#fca5a5' : '#60a5fa';
+      ctx.fillStyle = isActive ? (n.point.linked ? '#059669' : '#ef4444') : isSelected ? (n.point.linked ? '#6ee7b7' : '#fca5a5') : (n.point.linked ? '#10b981' : '#60a5fa');
       ctx.fill();
       ctx.lineWidth = 2;
       ctx.strokeStyle = '#fff';

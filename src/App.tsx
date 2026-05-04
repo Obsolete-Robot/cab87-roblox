@@ -530,6 +530,127 @@ export default function App() {
                 return;
             }
 
+            if (e.ctrlKey) {
+                if (n.point.linked) {
+                    setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: { ...node.point, linked: false } } : node));
+                    return;
+                }
+
+                let newEdges = [...edges];
+                const incidentCount = newEdges.filter(edge => edge.source === n.id || edge.target === n.id).length;
+                if (incidentCount === 0) return;
+                
+                // Ensure all incident edges have handles
+                newEdges = newEdges.map(edge => {
+                    if (edge.source === n.id || edge.target === n.id) {
+                        if (edge.points.length === 0) {
+                            const sourceNode = nodes.find(nn => nn.id === edge.source);
+                            const targetNode = nodes.find(nn => nn.id === edge.target);
+                            if (sourceNode && targetNode) {
+                                return {
+                                    ...edge,
+                                    points: [
+                                        { x: sourceNode.point.x + (targetNode.point.x - sourceNode.point.x) / 3, y: sourceNode.point.y + (targetNode.point.y - sourceNode.point.y) / 3, z: sourceNode.point.z ?? 4, linear: true, linked: false },
+                                        { x: sourceNode.point.x + 2 * (targetNode.point.x - sourceNode.point.x) / 3, y: sourceNode.point.y + 2 * (targetNode.point.y - sourceNode.point.y) / 3, z: targetNode.point.z ?? 4, linear: true, linked: false }
+                                    ]
+                                };
+                            }
+                        }
+                    }
+                    return edge;
+                });
+                
+                // Gather current handles attached to this node
+                const connections = newEdges.filter(edge => edge.source === n.id || edge.target === n.id).map(edge => {
+                    const isSource = edge.source === n.id;
+                    const handle = isSource ? edge.points[0] : edge.points[edge.points.length - 1];
+                    const dx = handle.x - n.point.x;
+                    const dy = handle.y - n.point.y;
+                    return {
+                        edgeId: edge.id,
+                        isSource,
+                        dist: Math.hypot(dx, dy) || 1, // avoid division by zero
+                        angle: Math.atan2(dy, dx)
+                    };
+                });
+                
+                const N = connections.length;
+                if (N > 0) {
+                    let targetAngles: number[] = [];
+                    connections.sort((a, b) => a.angle - b.angle);
+                    
+                    if (N === 1) {
+                         targetAngles = [connections[0].angle];
+                    } else if (N === 2) {
+                         let base = connections[0].angle;
+                         let base2 = connections[1].angle;
+                         // Check which bisector is closer to current
+                         let diff = base2 - base;
+                         if (diff < 0) diff += Math.PI * 2;
+                         const isCurrentCloserToStraight = Math.abs(diff - Math.PI) < Math.PI / 4;
+                         targetAngles = [base, base + Math.PI];
+                    } else if (N === 3) {
+                         const diff1 = (connections[1].angle - connections[0].angle + 2 * Math.PI) % (2 * Math.PI);
+                         const diff2 = (connections[2].angle - connections[0].angle + 2 * Math.PI) % (2 * Math.PI);
+                         
+                         const costY = Math.abs(diff1 - 2*Math.PI/3) + Math.abs(diff2 - 4*Math.PI/3);
+                         const costT1 = Math.abs(diff1 - Math.PI/2) + Math.abs(diff2 - Math.PI);
+                         const costT2 = Math.abs(diff1 - Math.PI/2) + Math.abs(diff2 - 3*Math.PI/2);
+                         const costT3 = Math.abs(diff1 - Math.PI) + Math.abs(diff2 - 3*Math.PI/2);
+                         
+                         const minCost = Math.min(costY, costT1, costT2, costT3);
+                         let base = connections[0].angle;
+                         if (minCost === costY) {
+                             targetAngles = [base, base + 2*Math.PI/3, base + 4*Math.PI/3];
+                         } else if (minCost === costT1) {
+                             targetAngles = [base, base + Math.PI/2, base + Math.PI];
+                         } else if (minCost === costT2) {
+                             targetAngles = [base, base + Math.PI/2, base + 3*Math.PI/2];
+                         } else {
+                             targetAngles = [base, base + Math.PI, base + 3*Math.PI/2];
+                         }
+                    } else if (N === 4) {
+                         let base = connections[0].angle;
+                         targetAngles = [base, base + Math.PI/2, base + Math.PI, base + 3*Math.PI/2];
+                    } else {
+                         let base = connections[0].angle;
+                         const step = 2 * Math.PI / N;
+                         for (let i = 0; i < N; i++) {
+                             targetAngles.push(base + i * step);
+                         }
+                    }
+                    
+                    newEdges = newEdges.map(edge => {
+                        const connIdx = connections.findIndex(c => c.edgeId === edge.id);
+                        if (connIdx !== -1) {
+                            const conn = connections[connIdx];
+                            const angle = targetAngles[connIdx];
+                            const newX = n.point.x + Math.cos(angle) * conn.dist;
+                            const newY = n.point.y + Math.sin(angle) * conn.dist;
+                            
+                            const newPts = [...edge.points];
+                            if (conn.isSource) {
+                                newPts[0] = { ...newPts[0], x: newX, y: newY, linear: false };
+                            } else {
+                                newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: newX, y: newY, linear: false };
+                            }
+                            return { ...edge, points: newPts };
+                        }
+                        return edge;
+                    });
+                    
+                    setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: { ...node.point, linked: true } } : node));
+                    setEdges(newEdges);
+                }
+                
+                setSelectedNode(n.id);
+                setSelectedEdges([]);
+                setSelectedPointIndex(null);
+                setIsConnectMode(false);
+                setIsMergeMode(false);
+                return;
+            }
+
             if (e.altKey) {
                 setEdges(prev => prev.map(edge => {
                     const newPts = [...edge.points];
@@ -1013,124 +1134,180 @@ export default function App() {
             }));
         }
     } else if (dragState.type === 'edge' && dragState.pointId !== undefined) {
-      const pid = dragState.pointId;
-      const draggingEdge = edges.find(e => e.id === dragState.id);
-      if (!draggingEdge) return;
-      const originPoint = draggingEdge.points[pid];
-      let dx = pos.x - originPoint.x;
-      let dy = pos.y - originPoint.y;
-      if (is3DMode && shiftKey) { dx = 0; dy = 0; }
-      const dz = pos.z !== undefined ? pos.z - (originPoint.z ?? 4) : 0;
-
-      let newNodes = nodes;
-      if (softSelectionEnabled) {
-          newNodes = nodes.map(n => {
-              const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
-              const w = taper(d, softSelectionRadius);
-              if (w <= 0) return n;
-              return {
-                  ...n,
-                  point: {
-                      x: n.point.x + dx * w,
-                      y: n.point.y + dy * w,
-                      z: (n.point.z ?? 4) + dz * w
-                  }
-              };
-          });
-          setNodes(newNodes);
-      }
-      
-      setEdges((prev) => prev.map((e) => {
-        if (e.id !== draggingEdge.id && !softSelectionEnabled) return e;
+      setEdges((prev) => {
+        const pid = dragState.pointId as number;
+        const draggingEdge = prev.find(e => e.id === dragState.id);
+        if (!draggingEdge) return prev;
         
-        let newPoints = [...e.points];
-        let changed = false;
+        const originPoint = draggingEdge.points[pid];
+        let ddx = pos.x - originPoint.x;
+        let ddy = pos.y - originPoint.y;
+        if (is3DMode && shiftKey) { ddx = 0; ddy = 0; }
+        const ddz = pos.z !== undefined ? pos.z - (originPoint.z ?? 4) : 0;
 
-        if (e.id === draggingEdge.id) {
-            const oldTarget = newPoints[pid];
-            let ddx = pos.x - oldTarget.x;
-            let ddy = pos.y - oldTarget.y;
-            if (is3DMode && shiftKey) { ddx = 0; ddy = 0; }
-            const ddz = pos.z !== undefined ? pos.z - (oldTarget.z ?? 4) : 0;
+        let linkedNode: Node | null = null;
+        let angleDelta = 0;
+        let scaleRatio = 1;
 
-            if (pid % 3 === 2) {
-               newPoints[pid] = { ...oldTarget, x: oldTarget.x + ddx, y: oldTarget.y + ddy, z: pos.z ?? oldTarget.z ?? 4 };
-               if (pid - 1 >= 0) {
-                   newPoints[pid - 1] = { ...newPoints[pid - 1], x: newPoints[pid - 1].x + ddx, y: newPoints[pid - 1].y + ddy, z: (newPoints[pid - 1].z ?? 4) + ddz };
+        if (pid === 0 || pid === draggingEdge.points.length - 1) {
+            const nodeId = pid === 0 ? draggingEdge.source : draggingEdge.target;
+            if (nodeId && !originPoint.linear) {
+               const node = nodes.find(n => n.id === nodeId);
+               if (node && node.point.linked) {
+                   linkedNode = node;
+                   
+                   const oldDx = originPoint.x - node.point.x;
+                   const oldDy = originPoint.y - node.point.y;
+                   const oldAngle = Math.atan2(oldDy, oldDx);
+                   
+                   const newPos = { x: originPoint.x + ddx, y: originPoint.y + ddy };
+                   const newDx = newPos.x - node.point.x;
+                   const newDy = newPos.y - node.point.y;
+                   const newAngle = Math.atan2(newDy, newDx);
+                   
+                   angleDelta = newAngle - oldAngle;
                }
-               if (pid + 1 < newPoints.length) {
-                   newPoints[pid + 1] = { ...newPoints[pid + 1], x: newPoints[pid + 1].x + ddx, y: newPoints[pid + 1].y + ddy, z: (newPoints[pid + 1].z ?? 4) + ddz };
-               }
-            } else if (pid % 3 === 0 || pid % 3 === 1) {
-                const handle = newPoints[pid];
-                let effectivePos = { x: handle.x + ddx, y: handle.y + ddy, z: pos.z ?? oldTarget.z ?? 4 };
-
-                newPoints[pid] = { ...handle, ...effectivePos };
-             
-                // Check if anchor is linked
-                const isIncoming = pid % 3 === 1;
-                const anchorIdx = isIncoming ? pid + 1 : pid - 1;
-                const oppositeIdx = isIncoming ? pid + 2 : pid - 2;
-             
-                if (anchorIdx >= 0 && anchorIdx < newPoints.length && oppositeIdx >= 0 && oppositeIdx < newPoints.length && !handle.linear) {
-                    const anchor = newPoints[anchorIdx];
-                    if (anchor.linked) {
-                        const dxAngle = effectivePos.x - anchor.x;
-                        const dyAngle = effectivePos.y - anchor.y;
-                        const oppPos = newPoints[oppositeIdx];
-                        
-                        const curDist = Math.hypot(dxAngle, dyAngle);
-                        const oppDist = curDist;
-                        
-                        if (curDist > 0.001) {
-                            const oppDirX = -dxAngle / curDist;
-                            const oppDirY = -dyAngle / curDist;
-                            
-                            newPoints[oppositeIdx] = {
-                                ...oppPos,
-                                x: anchor.x + oppDirX * oppDist,
-                                y: anchor.y + oppDirY * oppDist,
-                                linear: false
-                            };
-                        }
-                    }
-                }
             }
-            changed = true;
-
-            if (softSelectionEnabled) {
-                newPoints = newPoints.map((pt, idx) => {
-                    if (idx === pid) return pt;
-                    if (pid % 3 === 2 && (idx === pid - 1 || idx === pid + 1)) return pt;
-                    const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
-                    const w = taper(d, softSelectionRadius);
-                    if (w <= 0) return pt;
-                    return {
-                        ...pt,
-                        x: pt.x + dx * w,
-                        y: pt.y + dy * w,
-                        z: (pt.z ?? 4) + dz * w
-                    };
-                });
-            }
-        } else if (softSelectionEnabled) {
-            newPoints = newPoints.map((pt, idx) => {
-                const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
-                const w = taper(d, softSelectionRadius);
-                if (w <= 0) return pt;
-                changed = true;
-                return {
-                    ...pt,
-                    x: pt.x + dx * w,
-                    y: pt.y + dy * w,
-                    z: (pt.z ?? 4) + dz * w
-                };
-            });
         }
 
-        const passOldEdge = (pid % 3 === 2);
-        return changed ? enforceLinear({ ...e, points: newPoints }, newNodes, passOldEdge ? e : undefined, passOldEdge ? nodes : undefined) : e;
-      }));
+        let newNodes = nodes;
+        if (softSelectionEnabled) {
+            newNodes = nodes.map(n => {
+                const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
+                const w = taper(d, softSelectionRadius);
+                if (w <= 0) return n;
+                return {
+                    ...n,
+                    point: {
+                        x: n.point.x + ddx * w,
+                        y: n.point.y + ddy * w,
+                        z: (n.point.z ?? 4) + ddz * w
+                    }
+                };
+            });
+            // Calling setNodes here relies on it batching nicely
+            setNodes(newNodes);
+        }
+
+        return prev.map((e) => {
+          let isLinkedEdge = false;
+          if (linkedNode && e.id !== draggingEdge.id && (e.source === linkedNode.id || e.target === linkedNode.id)) {
+              isLinkedEdge = true;
+          }
+
+          if (e.id !== draggingEdge.id && !softSelectionEnabled && !isLinkedEdge) return e;
+          
+          let newPoints = [...e.points];
+          let changed = false;
+
+          if (e.id === draggingEdge.id) {
+              const oldTarget = originPoint;
+
+              if (pid % 3 === 2) {
+                 newPoints[pid] = { ...oldTarget, x: oldTarget.x + ddx, y: oldTarget.y + ddy, z: oldTarget.z !== undefined ? oldTarget.z + ddz : 4 + ddz };
+                 if (pid - 1 >= 0) {
+                     newPoints[pid - 1] = { ...newPoints[pid - 1], x: newPoints[pid - 1].x + ddx, y: newPoints[pid - 1].y + ddy, z: (newPoints[pid - 1].z ?? 4) + ddz };
+                 }
+                 if (pid + 1 < newPoints.length) {
+                     newPoints[pid + 1] = { ...newPoints[pid + 1], x: newPoints[pid + 1].x + ddx, y: newPoints[pid + 1].y + ddy, z: (newPoints[pid + 1].z ?? 4) + ddz };
+                 }
+              } else if (pid % 3 === 0 || pid % 3 === 1) {
+                  const handle = originPoint;
+                  let effectivePos = { x: handle.x + ddx, y: handle.y + ddy, z: pos.z ?? oldTarget.z ?? 4 };
+
+                  newPoints[pid] = { ...handle, ...effectivePos };
+               
+                  // Check if anchor is linked
+                  const isIncoming = pid % 3 === 1;
+                  const anchorIdx = isIncoming ? pid + 1 : pid - 1;
+                  const oppositeIdx = isIncoming ? pid + 2 : pid - 2;
+               
+                  if (anchorIdx >= 0 && anchorIdx < newPoints.length && oppositeIdx >= 0 && oppositeIdx < newPoints.length && !handle.linear) {
+                      const anchor = newPoints[anchorIdx];
+                      if (anchor.linked) {
+                          const dxAngle = effectivePos.x - anchor.x;
+                          const dyAngle = effectivePos.y - anchor.y;
+                          const oppPos = newPoints[oppositeIdx];
+                          
+                          const curDist = Math.hypot(dxAngle, dyAngle);
+                          const oppOldDx = oppPos.x - anchor.x;
+                          const oppOldDy = oppPos.y - anchor.y;
+                          const oppDist = Math.hypot(oppOldDx, oppOldDy);
+                          
+                          if (curDist > 0.001) {
+                              const oppDirX = -dxAngle / curDist;
+                              const oppDirY = -dyAngle / curDist;
+                              
+                              newPoints[oppositeIdx] = {
+                                  ...oppPos,
+                                  x: anchor.x + oppDirX * oppDist,
+                                  y: anchor.y + oppDirY * oppDist,
+                                  linear: false
+                              };
+                          }
+                      }
+                  }
+              }
+              changed = true;
+
+              if (softSelectionEnabled) {
+                  newPoints = newPoints.map((pt, idx) => {
+                      if (idx === pid) return pt;
+                      if (pid % 3 === 2 && (idx === pid - 1 || idx === pid + 1)) return pt;
+                      const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
+                      const w = taper(d, softSelectionRadius);
+                      if (w <= 0) return pt;
+                      return {
+                          ...pt,
+                          x: pt.x + ddx * w,
+                          y: pt.y + ddy * w,
+                          z: (pt.z ?? 4) + ddz * w
+                      };
+                  });
+              }
+          } else if (isLinkedEdge && linkedNode && angleDelta !== 0) {
+              if (e.source === linkedNode.id && newPoints.length > 0 && !newPoints[0].linear) {
+                  const h = newPoints[0];
+                  const odx = h.x - linkedNode.point.x;
+                  const ody = h.y - linkedNode.point.y;
+                  const oAng = Math.atan2(ody, odx);
+                  const oDist = Math.hypot(odx, ody);
+                  const nAng = oAng + angleDelta;
+                  const nDist = oDist * scaleRatio;
+                  newPoints[0] = { ...h, x: linkedNode.point.x + Math.cos(nAng) * nDist, y: linkedNode.point.y + Math.sin(nAng) * nDist, linear: false };
+                  changed = true;
+              }
+              if (e.target === linkedNode.id && newPoints.length > 0 && !newPoints[newPoints.length - 1].linear) {
+                  const idx = newPoints.length - 1;
+                  const h = newPoints[idx];
+                  const odx = h.x - linkedNode.point.x;
+                  const ody = h.y - linkedNode.point.y;
+                  const oAng = Math.atan2(ody, odx);
+                  const oDist = Math.hypot(odx, ody);
+                  const nAng = oAng + angleDelta;
+                  const nDist = oDist * scaleRatio;
+                  newPoints[idx] = { ...h, x: linkedNode.point.x + Math.cos(nAng) * nDist, y: linkedNode.point.y + Math.sin(nAng) * nDist, linear: false };
+                  changed = true;
+              }
+          } else if (softSelectionEnabled) {
+              newPoints = newPoints.map((pt, idx) => {
+                  const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
+                  const w = taper(d, softSelectionRadius);
+                  if (w <= 0) return pt;
+                  changed = true;
+                  return {
+                      ...pt,
+                      x: pt.x + ddx * w,
+                      y: pt.y + ddy * w,
+                      z: (pt.z ?? 4) + ddz * w
+                  };
+              });
+          }
+
+          const passOldEdge = (pid % 3 === 2);
+          return changed ? enforceLinear({ ...e, points: newPoints }, newNodes, passOldEdge ? e : undefined, passOldEdge ? nodes : undefined) : e;
+        });
+      });
     }
   };
 
