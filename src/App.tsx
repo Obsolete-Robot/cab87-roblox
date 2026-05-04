@@ -39,10 +39,15 @@ export default function App() {
 
   const [selectedEdges, setSelectedEdges] = useState<string[]>([]);
   const lastDragPosRef = useRef<Point | null>(null);
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
+  const selectedNode = selectedNodes.length > 0 ? selectedNodes[selectedNodes.length - 1] : null;
+
+  const setSelectedNode = (id: string | null) => {
+    setSelectedNodes(id ? [id] : []);
+  };
   const [isConnectMode, setIsConnectMode] = useState(false);
   
-  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan' | 'multi-edge'; id: string; pointId?: number } | null>(null);
+  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan' | 'multi-edge' | 'multi-node'; id: string; pointId?: number } | null>(null);
 
   const draggingPoint = useMemo(() => {
     if (!dragging) return null;
@@ -126,7 +131,7 @@ export default function App() {
           } else {
             setLaneWidth(30);
           }
-          setSelectedEdge(null);
+          setSelectedEdges([]);
           setSelectedNode(null);
           setSelectedPointIndex(null);
           setIsConnectMode(false);
@@ -153,7 +158,7 @@ export default function App() {
 
       if (e.key === 'Escape') {
         setSelectedNode(null);
-        setSelectedEdge(null);
+        setSelectedEdges([]);
         setSelectedPointIndex(null);
         setDragging(null);
         setIsConnectMode(false);
@@ -168,11 +173,7 @@ export default function App() {
         setIsConnectMode(false);
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedNode) {
-          setNodes(prev => prev.filter(n => n.id !== selectedNode));
-          setEdges(prev => prev.filter(edge => edge.source !== selectedNode && edge.target !== selectedNode));
-          setSelectedNode(null);
-        } else if (selectedEdges.length > 0 && selectedPointIndex !== null) {
+        if (selectedEdges.length > 0 && selectedPointIndex !== null && selectedNodes.length === 0 && selectedEdges.length === 1) {
           setEdges(prev => prev.map(edge => {
             if (selectedEdges.includes(edge.id)) {
               const newPoints = [...edge.points];
@@ -188,8 +189,10 @@ export default function App() {
             return edge;
           }));
           setSelectedPointIndex(null);
-        } else if (selectedEdges.length > 0) {
-          setEdges(prev => prev.filter(edge => !selectedEdges.includes(edge.id)));
+        } else if (selectedNodes.length > 0 || selectedEdges.length > 0) {
+          setNodes(prev => prev.filter(n => !selectedNodes.includes(n.id)));
+          setEdges(prev => prev.filter(edge => !selectedEdges.includes(edge.id) && !selectedNodes.includes(edge.source) && (!edge.target || !selectedNodes.includes(edge.target))));
+          setSelectedNodes([]);
           setSelectedEdges([]);
           setSelectedPointIndex(null);
         }
@@ -291,14 +294,14 @@ export default function App() {
     ctx.save();
     ctx.translate(view.x, view.y);
     ctx.scale(view.zoom, view.zoom);
-    draw(ctx, size, nodes, edges, selectedEdges, selectedNode, showMesh, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint);
+    draw(ctx, size, nodes, edges, selectedEdges, selectedNodes, showMesh, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint);
     ctx.restore();
-  }, [size, nodes, edges, selectedEdges, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
 
-  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdges: string[], selectedNode: string | null, showMesh: boolean, chamferAngle: number, meshResolution: number, laneWidth: number, softSelectionEnabled: boolean, softSelectionRadius: number, draggingPoint: Point | null) => {
+  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdges: string[], selectedNodes: string[], showMesh: boolean, chamferAngle: number, meshResolution: number, laneWidth: number, softSelectionEnabled: boolean, softSelectionRadius: number, draggingPoint: Point | null) => {
     ctx.clearRect(0, 0, size.w, size.h);
 
-    if (nodes.length === 0 || edges.length === 0) return;
+    if (nodes.length === 0) return;
 
     const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth);
 
@@ -615,13 +618,13 @@ export default function App() {
     nodes.forEach(n => {
         ctx.beginPath();
         ctx.arc(n.point.x, n.point.y, 8, 0, Math.PI * 2);
-        ctx.fillStyle = selectedNode === n.id ? '#ffffff' : '#60a5fa';
+        ctx.fillStyle = selectedNodes.includes(n.id) ? '#ffffff' : '#60a5fa';
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = '#fff';
         ctx.stroke();
 
-        if (selectedNode === n.id) {
+        if (selectedNodes.includes(n.id)) {
           ctx.beginPath();
           ctx.arc(n.point.x, n.point.y, 16, 0, Math.PI * 2);
           ctx.strokeStyle = isConnectMode ? 'rgba(52, 211, 153, 0.8)' : isMergeMode ? 'rgba(239, 68, 68, 0.8)' : 'rgba(255, 255, 255, 0.4)';
@@ -901,6 +904,21 @@ export default function App() {
     // Click nodes
     for (const n of nodes) {
         if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < 25) {
+            if (e.shiftKey) {
+                setSelectedNodes(prev => prev.includes(n.id) ? prev.filter(id => id !== n.id) : [...prev, n.id]);
+                setSelectedEdges([]);
+                setSelectedPointIndex(null);
+                lastDragPosRef.current = pos;
+                setDragging({ type: 'multi-node', id: n.id });
+                return;
+            }
+
+            if (selectedNodes.includes(n.id) && selectedNodes.length > 1) {
+                lastDragPosRef.current = pos;
+                setDragging({ type: 'multi-node', id: n.id });
+                return;
+            }
+
             if (e.altKey) {
                 setEdges(prev => prev.map(edge => {
                     const newPts = [...edge.points];
@@ -1227,7 +1245,7 @@ export default function App() {
     // Click Empty Space
     // Default deselect
     setSelectedNode(null);
-    setSelectedEdge(null);
+    setSelectedEdges([]);
     setSelectedPointIndex(null);
     setIsConnectMode(false);
     setIsMergeMode(false);
@@ -1301,8 +1319,32 @@ export default function App() {
       return changed ? { ...edge, points: newPts } : edge;
   };
 
-  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan' | 'multi-edge'; id: string; pointId?: number }, pos: Point) => {
+  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan' | 'multi-edge' | 'multi-node'; id: string; pointId?: number }, pos: Point) => {
     const taper = (dist: number, radius: number) => Math.max(0, 1 - Math.pow(dist / radius, 2));
+
+    if (dragState.type === 'multi-node') {
+        if (!lastDragPosRef.current) return;
+        const dx = pos.x - lastDragPosRef.current.x;
+        const dy = pos.y - lastDragPosRef.current.y;
+        const dz = pos.z !== undefined ? pos.z - (lastDragPosRef.current.z ?? 4) : 0;
+        lastDragPosRef.current = pos;
+
+        const newNodes = nodes.map(n => {
+            if (selectedNodes.includes(n.id)) {
+                return { ...n, point: { x: n.point.x + dx, y: n.point.y + dy, z: (n.point.z ?? 4) + dz } };
+            }
+            return n;
+        });
+        setNodes(newNodes);
+
+        setEdges(prev => prev.map(e => {
+            if (selectedNodes.includes(e.source) || (e.target && selectedNodes.includes(e.target))) {
+                return enforceLinear(e, newNodes, e, nodes);
+            }
+            return e;
+        }));
+        return;
+    }
 
     if (dragState.type === 'multi-edge') {
         if (!lastDragPosRef.current) return;
@@ -1949,6 +1991,69 @@ export default function App() {
                     />
                   </div>
                 </div>
+              </div>
+            )}
+          </section>
+
+          <section className="flex-grow flex flex-col min-h-0">
+            <div 
+              className="flex items-center justify-between cursor-pointer mb-2"
+              onClick={() => toggleSection('junctions')}
+            >
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Junctions {selectedNodes.length > 0 ? '(Selected)' : ''}</h3>
+              {collapsedSections['junctions'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+            </div>
+            {!collapsedSections['junctions'] && (
+              <div className="space-y-3 overflow-y-auto max-h-48 pb-4">
+                {selectedNodes.length === 0 ? (
+                  <div className="text-sm text-slate-500 text-center py-4 px-4 bg-slate-800/10 rounded-lg border border-slate-800/50 border-dashed">
+                    Select a junction.
+                  </div>
+                ) : (
+                  nodes.filter(n => selectedNodes.includes(n.id)).map((n) => (
+                    <div
+                      key={n.id}
+                      className="p-3 bg-blue-900/10 rounded-xl border border-blue-500/50 flex flex-col gap-2"
+                    >
+                      <div className="flex justify-between items-center text-sm font-bold text-slate-200">
+                        <span>Junction {n.id.substring(0,4)}</span>
+                        <button
+                          onClick={(evt) => {
+                            evt.stopPropagation();
+                            setNodes(prev => prev.filter(node => node.id !== n.id));
+                            setSelectedNodes(prev => prev.filter(id => id !== n.id));
+                            setEdges(prev => prev.filter(edge => edge.source !== n.id && edge.target !== n.id));
+                          }}
+                          className="text-slate-500 hover:text-red-400 p-1 rounded-lg hover:bg-slate-800 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4 opacity-70" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="text-xs text-slate-400 block mb-1">X</label>
+                          <input type="number" disabled value={Math.round(n.point.x)} className="w-full bg-slate-900 text-slate-300 border border-slate-700 rounded p-1 text-xs" />
+                        </div>
+                        <div>
+                          <label className="text-xs text-slate-400 block mb-1">Y</label>
+                          <input type="number" disabled value={Math.round(n.point.y)} className="w-full bg-slate-900 text-slate-300 border border-slate-700 rounded p-1 text-xs" />
+                        </div>
+                        <div>
+                          <label className="text-xs text-slate-400 block mb-1">Elevation Z</label>
+                          <input 
+                            type="number" 
+                            value={Math.round(n.point.z ?? 4)} 
+                            onChange={(e) => {
+                                const val = parseInt(e.target.value) || 0;
+                                setNodes(prev => prev.map(pn => pn.id === n.id ? { ...pn, point: { ...pn.point, z: val } } : pn));
+                            }}
+                            className="w-full bg-slate-800 text-white border border-slate-600 rounded p-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors" 
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </section>
