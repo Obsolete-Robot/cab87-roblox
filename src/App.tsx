@@ -1,23 +1,16 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Settings2, Trash2, Plus, Bug, Menu, X, Layers, Download, Upload, Box, ChevronDown, ChevronRight, Copy, ClipboardPaste } from 'lucide-react';
-import { Point, Node, Edge, MeshData } from './lib/types';
-import { getEdgeControlPoints, getExtendedEdgeControlPoints, sampleEdgeSpline } from './lib/network';
-import { buildNetworkMesh } from './lib/meshing';
+import { Point, Node, Edge } from './lib/types';
+import { getExtendedEdgeControlPoints, sampleEdgeSpline } from './lib/network';
 import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
 import ThreeScene from './ThreeScene';
-
-const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-const ROAD_NETWORK_SCHEMA = 'cab87-road-network';
-const ROAD_NETWORK_VERSION = 1;
-const DEFAULT_CHAMFER_ANGLE = 70;
-const DEFAULT_MESH_RESOLUTION = 20;
-
-function sanitizeMeshResolution(value: unknown): number {
-  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
-  if (!Number.isFinite(parsed)) return DEFAULT_MESH_RESOLUTION;
-  return Math.max(5, Math.min(100, Math.round(parsed)));
-}
+import Sidebar from './components/Sidebar';
+import Header from './components/Header';
+import { drawNetwork2D } from './lib/render2d';
+import { 
+  COLORS, ROAD_NETWORK_SCHEMA, ROAD_NETWORK_VERSION, 
+  DEFAULT_CHAMFER_ANGLE, DEFAULT_MESH_RESOLUTION, sanitizeMeshResolution 
+} from './lib/constants';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -65,21 +58,15 @@ export default function App() {
   const [isMergeMode, setIsMergeMode] = useState(false);
   const [showMesh, setShowMesh] = useState(false);
   const [showControlPoints, setShowControlPoints] = useState(true);
-  const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
-  const [editingEdgeName, setEditingEdgeName] = useState<string | null>(null);
-  const [editingNameValue, setEditingNameValue] = useState("");
   const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
   const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
   const [laneWidth, setLaneWidth] = useState(30);
   const [is3DMode, setIs3DMode] = useState(false);
   const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
   const [softSelectionRadius, setSoftSelectionRadius] = useState(200);
-  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
-  const toggleSection = (section: string) => setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
-  const [copiedEdgeSettings, setCopiedEdgeSettings] = useState<Partial<Edge> | null>(null);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = () => {
     const data = JSON.stringify({
@@ -148,7 +135,7 @@ export default function App() {
       }
     };
     reader.readAsText(file);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    e.target.value = '';
   };
 
   const pointersRef = useRef<Map<number, Point>>(new Map());
@@ -297,416 +284,14 @@ export default function App() {
     ctx.save();
     ctx.translate(view.x, view.y);
     ctx.scale(view.zoom, view.zoom);
-    draw(ctx, size, nodes, edges, selectedEdges, selectedNodes, showMesh, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint);
+    drawNetwork2D(
+      ctx, size, nodes, edges, selectedEdges, selectedNodes, selectedNode,
+      showMesh, showControlPoints, isConnectMode, isMergeMode,
+      chamferAngle, meshResolution, laneWidth,
+      softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex
+    );
     ctx.restore();
-  }, [size, nodes, edges, selectedEdges, selectedNodes, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
-
-  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdges: string[], selectedNodes: string[], showMesh: boolean, chamferAngle: number, meshResolution: number, laneWidth: number, softSelectionEnabled: boolean, softSelectionRadius: number, draggingPoint: Point | null) => {
-    ctx.clearRect(0, 0, size.w, size.h);
-
-    if (nodes.length === 0) return;
-
-    const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth);
-
-    if (showMesh) {
-      mesh.triangles.forEach((tri, idx) => {
-        ctx.beginPath();
-        ctx.moveTo(tri[0].x, tri[0].y);
-        ctx.lineTo(tri[1].x, tri[1].y);
-        ctx.lineTo(tri[2].x, tri[2].y);
-        ctx.closePath();
-        
-        ctx.fillStyle = `hsla(${(idx * 137) % 360}, 70%, 50%, 0.3)`;
-        ctx.strokeStyle = `hsla(${(idx * 137) % 360}, 70%, 50%, 0.9)`;
-        ctx.lineWidth = 1;
-        ctx.fill();
-        ctx.stroke();
-      });
-    }
-
-    if (!showMesh) {
-      const getAvgZ = (paths: Point[]) => {
-        let sum = 0;
-        for (const p of paths) sum += (p.z ?? 4);
-        return sum / (paths.length || 1);
-      };
-
-      const getZColor = (paths: Point[], type: 'road' | 'sidewalk' | 'crosswalk' | 'hub') => {
-        const z = getAvgZ(paths);
-        const zDiff = (z - 4);
-        if (type === 'road' || type === 'hub') {
-            const l = Math.max(5, Math.min(80, 17 + zDiff * 0.06));
-            return `hsl(217, 33%, ${l}%)`;
-        } else if (type === 'sidewalk') {
-            const l = Math.max(30, Math.min(95, 65 + zDiff * 0.06));
-            return `hsl(215, 25%, ${l}%)`;
-        } else if (type === 'crosswalk') {
-            const l = Math.max(10, Math.min(85, 27 + zDiff * 0.06));
-            return `hsl(215, 25%, ${l}%)`;
-        }
-        return '#000';
-      };
-
-      ctx.shadowColor = 'rgba(0,0,0,0.5)';
-      ctx.shadowBlur = 15;
-      ctx.shadowOffsetY = 4;
-      
-      const renderables: { z: number, priority: number, paths: Point[], draw: () => void }[] = [];
-
-      mesh.roadPolygons.forEach(rp => {
-        if (rp.outerLeftCurve && rp.outerRightCurve && rp.outerLeftCurve.length === rp.outerRightCurve.length && rp.outerLeftCurve.length > 0) {
-            for (let i = 0; i < rp.outerLeftCurve.length - 1; i++) {
-                const p0 = rp.outerLeftCurve[i];
-                const p1 = rp.outerRightCurve[i];
-                const p2 = rp.outerRightCurve[i+1];
-                const p3 = rp.outerLeftCurve[i+1];
-                const poly = [p0, p1, p2, p3];
-                renderables.push({
-                    z: getAvgZ(poly),
-                    priority: 0,
-                    paths: poly,
-                    draw: () => {
-                        ctx.fillStyle = getZColor(poly, 'sidewalk');
-                        ctx.beginPath();
-                        ctx.moveTo(p0.x, p0.y);
-                        ctx.lineTo(p1.x, p1.y);
-                        ctx.lineTo(p2.x, p2.y);
-                        ctx.lineTo(p3.x, p3.y);
-                        ctx.closePath();
-                        ctx.fill();
-                        ctx.strokeStyle = ctx.fillStyle;
-                        ctx.lineWidth = 0.5;
-                        ctx.stroke();
-                    }
-                });
-            }
-        } else if (rp.outerPolygon && rp.outerPolygon.length > 0) {
-            renderables.push({
-                z: getAvgZ(rp.outerPolygon),
-                priority: 0,
-                paths: rp.outerPolygon,
-                draw: () => {
-                    ctx.fillStyle = getZColor(rp.outerPolygon, 'sidewalk');
-                    ctx.beginPath();
-                    ctx.moveTo(rp.outerPolygon[0].x, rp.outerPolygon[0].y);
-                    rp.outerPolygon.forEach(p => ctx.lineTo(p.x, p.y));
-                    ctx.closePath();
-                    ctx.fill();
-                }
-            });
-        }
-      });
-      
-      mesh.sidewalkPolygons.forEach(poly => {
-        if (poly.length === 0) return;
-        renderables.push({
-            z: getAvgZ(poly),
-            priority: 0,
-            paths: poly,
-            draw: () => {
-                ctx.fillStyle = getZColor(poly, 'sidewalk');
-                ctx.beginPath();
-                ctx.moveTo(poly[0].x, poly[0].y);
-                poly.forEach(p => ctx.lineTo(p.x, p.y));
-                ctx.closePath();
-                ctx.fill();
-            }
-        });
-      });
-
-      mesh.hubs.forEach(hub => {
-        if (hub.polygon.length === 0) return;
-        renderables.push({
-            z: getAvgZ(hub.polygon),
-            priority: 1,
-            paths: hub.polygon,
-            draw: () => {
-                ctx.fillStyle = getZColor(hub.polygon, 'hub');
-                ctx.beginPath();
-                ctx.moveTo(hub.polygon[0].x, hub.polygon[0].y);
-                hub.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-                ctx.closePath();
-                ctx.fill();
-            }
-        });
-      });
-
-      mesh.roadPolygons.forEach(rp => {
-        if (rp.leftCurve && rp.rightCurve && rp.leftCurve.length === rp.rightCurve.length && rp.leftCurve.length > 0) {
-            for (let i = 0; i < rp.leftCurve.length - 1; i++) {
-                const p0 = rp.leftCurve[i];
-                const p1 = rp.rightCurve[i];
-                const p2 = rp.rightCurve[i+1];
-                const p3 = rp.leftCurve[i+1];
-                const poly = [p0, p1, p2, p3];
-                renderables.push({
-                    z: getAvgZ(poly),
-                    priority: 2,
-                    paths: poly,
-                    draw: () => {
-                        ctx.fillStyle = getZColor(poly, 'road');
-                        ctx.beginPath();
-                        ctx.moveTo(p0.x, p0.y);
-                        ctx.lineTo(p1.x, p1.y);
-                        ctx.lineTo(p2.x, p2.y);
-                        ctx.lineTo(p3.x, p3.y);
-                        ctx.closePath();
-                        ctx.fill();
-                        ctx.strokeStyle = ctx.fillStyle;
-                        ctx.lineWidth = 0.5;
-                        ctx.stroke();
-                    }
-                });
-            }
-        } else if (rp.polygon && rp.polygon.length > 0) {
-            renderables.push({
-                z: getAvgZ(rp.polygon),
-                priority: 2,
-                paths: rp.polygon,
-                draw: () => {
-                    ctx.fillStyle = getZColor(rp.polygon, 'road');
-                    ctx.beginPath();
-                    ctx.moveTo(rp.polygon[0].x, rp.polygon[0].y);
-                    rp.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-                    ctx.closePath();
-                    ctx.fill();
-                }
-            });
-        }
-      });
-
-      mesh.crosswalks.forEach(cw => {
-         if (cw.polygon.length === 0) return;
-         renderables.push({
-             z: getAvgZ(cw.polygon),
-             priority: 3,
-             paths: cw.polygon,
-             draw: () => {
-                 ctx.fillStyle = getZColor(cw.polygon, 'crosswalk');
-                 ctx.beginPath();
-                 ctx.moveTo(cw.polygon[0].x, cw.polygon[0].y);
-                 cw.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-                 ctx.closePath();
-                 ctx.fill();
-                 
-                 if (cw.polygon.length === 4) {
-                     const p0 = cw.polygon[0];
-                     const p1 = cw.polygon[1];
-                     const p2 = cw.polygon[2];
-                     const p3 = cw.polygon[3];
-                     const midLeft = { x: (p0.x + p3.x)/2, y: (p0.y + p3.y)/2 };
-                     const midRight = { x: (p1.x + p2.x)/2, y: (p1.y + p2.y)/2 };
-                     
-                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-                     ctx.lineWidth = 10;
-                     ctx.setLineDash([4, 6]);
-                     ctx.beginPath();
-                     ctx.moveTo(midLeft.x, midLeft.y);
-                     ctx.lineTo(midRight.x, midRight.y);
-                     ctx.stroke();
-                     ctx.setLineDash([]);
-                 }
-             }
-         });
-      });
-      
-      mesh.dashedLines.forEach(cl => {
-          if (cl.length > 0) {
-              let currentDist = 0;
-              for (let i = 0; i < cl.length - 1; i++) {
-                  const p1 = cl[i];
-                  const p2 = cl[i+1];
-                  const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-                  const startOffset = currentDist;
-                  currentDist += segLen;
-
-                  renderables.push({
-                      z: getAvgZ([p1, p2]),
-                      priority: 4,
-                      paths: [p1, p2],
-                      draw: () => {
-                          ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-                          ctx.lineWidth = 2;
-                          ctx.setLineDash([15, 15]);
-                          ctx.lineDashOffset = -startOffset;
-                          ctx.beginPath();
-                          ctx.moveTo(p1.x, p1.y);
-                          ctx.lineTo(p2.x, p2.y);
-                          ctx.stroke();
-                          ctx.setLineDash([]);
-                          ctx.lineDashOffset = 0;
-                      }
-                  });
-              }
-          }
-      });
-
-      mesh.solidYellowLines.forEach(cl => {
-          if (cl.length > 0) {
-              for (let j = 0; j < cl.length - 1; j++) {
-                  const p1 = cl[j];
-                  const p2 = cl[j+1];
-                  renderables.push({
-                      z: getAvgZ([p1, p2]),
-                      priority: 4,
-                      paths: [p1, p2],
-                      draw: () => {
-                          ctx.strokeStyle = '#eab308';
-                          ctx.lineWidth = 2;
-                          
-                          const dx = p2.x - p1.x;
-                          const dy = p2.y - p1.y;
-                          const len = Math.hypot(dx, dy);
-                          if (len === 0) return;
-                          const nx = -dy / len * 2;
-                          const ny = dx / len * 2;
-                          
-                          ctx.beginPath();
-                          ctx.moveTo(p1.x + nx, p1.y + ny);
-                          ctx.lineTo(p2.x + nx, p2.y + ny);
-                          ctx.stroke();
-
-                          ctx.beginPath();
-                          ctx.moveTo(p1.x - nx, p1.y - ny);
-                          ctx.lineTo(p2.x - nx, p2.y - ny);
-                          ctx.stroke();
-                      }
-                  });
-              }
-          }
-      });
-      
-      mesh.laneArrows.forEach(arrow => {
-          renderables.push({
-              z: arrow.position.z ?? 4,
-              priority: 5,
-              paths: [arrow.position],
-              draw: () => {
-                  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-                  ctx.beginPath();
-                  ctx.moveTo(arrow.position.x + arrow.dir.x * 6, arrow.position.y + arrow.dir.y * 6);
-                  const right = { x: -arrow.dir.y, y: arrow.dir.x };
-                  ctx.lineTo(arrow.position.x - arrow.dir.x * 4 + right.x * 4, arrow.position.y - arrow.dir.y * 4 + right.y * 4);
-                  ctx.lineTo(arrow.position.x - arrow.dir.x * 4 - right.x * 4, arrow.position.y - arrow.dir.y * 4 - right.y * 4);
-                  ctx.closePath();
-                  ctx.fill();
-              }
-          });
-      });
-
-      renderables.sort((a, b) => {
-          if (Math.abs(a.z - b.z) > 0.05) return a.z - b.z;
-          return a.priority - b.priority;
-      });
-
-      renderables.forEach(r => {
-          if (r.priority > 0) ctx.shadowColor = 'transparent';
-          r.draw();
-      });
-      
-    }
-
-    // Soft selection radius
-    if (softSelectionEnabled && draggingPoint) {
-      ctx.beginPath();
-      ctx.arc(draggingPoint.x, draggingPoint.y, softSelectionRadius, 0, Math.PI * 2);
-      ctx.setLineDash([5, 5]);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Nodes and control points
-    nodes.forEach(n => {
-        const isActive = selectedNode === n.id;
-        const isSelected = selectedNodes.includes(n.id) || isActive;
-
-        ctx.beginPath();
-        ctx.arc(n.point.x, n.point.y, 8, 0, Math.PI * 2);
-        ctx.fillStyle = isActive ? '#ef4444' : isSelected ? '#fca5a5' : '#60a5fa';
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#fff';
-        ctx.stroke();
-
-        if (isSelected) {
-          ctx.beginPath();
-          ctx.arc(n.point.x, n.point.y, 16, 0, Math.PI * 2);
-          if (isActive && isConnectMode) {
-              ctx.strokeStyle = 'rgba(52, 211, 153, 0.8)';
-          } else if (isActive && isMergeMode) {
-              ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
-          } else {
-              ctx.strokeStyle = isActive ? 'rgba(239, 68, 68, 0.4)' : 'rgba(252, 165, 165, 0.4)';
-          }
-          ctx.lineWidth = (isActive && (isConnectMode || isMergeMode)) ? 3 : 2;
-          ctx.stroke();
-        }
-    });
-
-    edges.forEach((e) => {
-        if (showControlPoints) {
-            const controlPts = getExtendedEdgeControlPoints(e, nodes, edges, chamferAngle);
-            if (controlPts.length > 0) {
-                const cubicPts = controlPts;
-
-                ctx.beginPath();
-                ctx.strokeStyle = '#475569';
-                ctx.lineWidth = 2;
-                for (let i = 0; i + 3 < cubicPts.length; i += 3) {
-                    ctx.moveTo(cubicPts[i].x, cubicPts[i].y);
-                    ctx.lineTo(cubicPts[i+1].x, cubicPts[i+1].y);
-                    ctx.moveTo(cubicPts[i+2].x, cubicPts[i+2].y);
-                    ctx.lineTo(cubicPts[i+3].x, cubicPts[i+3].y);
-                }
-                ctx.stroke();
-                
-                // Draw the invisible automatic nodes (indices 3, 6, 9 etc if they are anchors)
-                // Actually, all anchors are at index i % 3 === 0
-                ctx.fillStyle = '#94a3b8'; // light slate for automatic
-                for (let i = 3; i < cubicPts.length - 1; i += 3) {
-                    // Only draw if it's not a user-editable anchor.
-                    // User anchors are normally at index 6, 12... wait.
-                    // In getExtendedEdgeControlPoints, CW0 is at 3.
-                    // then U1 is 4, U2 is 5, CW1 is 6!
-                    // But wait, if there's a middle anchor A1, in extended it is:
-                    // 3: CW0
-                    // 4: U1
-                    // 5: U2
-                    // 6: A1 (user)
-                    // 7: U3
-                    // 8: U4
-                    // 9: CW1
-                    ctx.beginPath();
-                    // Check if this anchor corresponds to a user anchor
-                    // User points start at edge.points[0]. 
-                    // In extended, index 4 is edge.points[0].
-                    // So user points are at index 4, 5, 6, ...
-                    // Is this index `i` an automatic point? 
-                    // `i` is 3 (CW0) or `cubicPts.length - 4` (CW1).
-                    // The other anchors (i=6, etc) are user anchors if there are multiple segments!
-                    if (i === 3 || i === cubicPts.length - 4) {
-                        ctx.arc(cubicPts[i].x, cubicPts[i].y, 4, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-                }
-            }
-        }
-
-        e.points.forEach((pt, j) => {
-            const isAnchor = (j % 3 === 2);
-            if (!showControlPoints && !isAnchor) return;
-
-            ctx.beginPath();
-            const isSelectedPoint = selectedEdges.includes(e.id) && selectedPointIndex === j;
-            ctx.arc(pt.x, pt.y, isAnchor ? 8 : 5, 0, Math.PI * 2);
-            ctx.fillStyle = selectedEdges.includes(e.id) ? (isSelectedPoint ? '#ef4444' : (isAnchor ? (pt.linked ? '#10b981' : '#fbbf24') : (pt.linear ? '#0ea5e9' : '#ffffff'))) : '#64748b';
-            ctx.fill();
-            ctx.stroke();
-        });
-    });
-  };
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
     if (e.__scenePos) return e.__scenePos;
@@ -1693,82 +1278,18 @@ export default function App() {
 
   return (
     <div className="w-full h-screen bg-slate-950 text-slate-300 font-sans flex flex-col overflow-hidden">
-      <header className="h-14 lg:h-16 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-4 lg:px-6 shrink-0 relative z-30">
-        <div className="flex items-center gap-2 lg:gap-3">
-          <button 
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 lg:hidden text-slate-400 hover:text-white"
-          >
-            {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
-          <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center shrink-0">
-            <Layers className="w-5 h-5 text-white" />
-          </div>
-          <h1 className="text-base lg:text-lg font-semibold tracking-tight text-white line-clamp-1">
-            Cab87 Road Graph <span className="hidden sm:inline text-slate-500 font-normal">v3.0</span>
-          </h1>
-        </div>
-
-        <div className="flex items-center gap-2 lg:gap-4">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
-            title="Import JSON"
-          >
-            <Upload className="w-4 h-4" />
-            <span className="hidden xl:inline">Import</span>
-          </button>
-          <input
-            type="file"
-            accept=".json"
-            ref={fileInputRef}
-            onChange={handleImport}
-            className="hidden"
-          />
-          <button
-            onClick={handleExport}
-            className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
-            title="Export JSON"
-          >
-            <Download className="w-4 h-4" />
-            <span className="hidden xl:inline">Export</span>
-          </button>
-          <div className="w-px h-6 bg-slate-700 hidden sm:block mx-1"></div>
-          <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300 font-medium hover:text-white sm:mr-2">
-            <input 
-              type="checkbox" 
-              className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 w-4 h-4 cursor-pointer"
-              checked={showControlPoints} 
-              onChange={(e) => setShowControlPoints(e.target.checked)} 
-            />
-            <span className="hidden md:inline">Show Control Points</span>
-            <span className="md:hidden">Points</span>
-          </label>
-          <button
-            onClick={() => setIs3DMode(!is3DMode)}
-            className={`p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors ${
-              is3DMode 
-                ? 'bg-blue-600 border-blue-500 text-white hover:bg-blue-500' 
-                : 'border-slate-700 hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Box className="w-4 h-4" />
-            <span className="hidden md:inline">{is3DMode ? '2D View' : '3D View'}</span>
-          </button>
-          
-          <button
-            onClick={() => setShowMesh(!showMesh)}
-            className={`p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors ${
-              showMesh 
-                ? 'bg-blue-600 border-blue-500 text-white hover:bg-blue-500' 
-                : 'border-slate-700 hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span className="hidden md:inline">{showMesh ? 'Hide Mesh' : 'Show Mesh'}</span>
-          </button>
-        </div>
-      </header>
+      <Header
+        isSidebarOpen={isSidebarOpen}
+        setIsSidebarOpen={setIsSidebarOpen}
+        handleImport={handleImport}
+        handleExport={handleExport}
+        showControlPoints={showControlPoints}
+        setShowControlPoints={setShowControlPoints}
+        is3DMode={is3DMode}
+        setIs3DMode={setIs3DMode}
+        showMesh={showMesh}
+        setShowMesh={setShowMesh}
+      />
 
       <div className="flex flex-grow overflow-hidden relative">
         <main className="flex-grow relative bg-slate-900 overflow-hidden" ref={containerRef}>
@@ -1844,400 +1365,30 @@ export default function App() {
           )}
         </main>
 
-        <aside className={`${isSidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} fixed lg:relative right-0 top-0 h-full w-full sm:w-80 lg:w-72 border-l border-slate-800 bg-slate-900 p-4 lg:p-5 flex flex-col gap-4 shrink-0 overflow-y-auto transition-transform duration-300 ease-in-out z-40 lg:z-10`}>
-          <div className="flex items-center justify-between lg:hidden mb-1">
-            <h2 className="text-white font-bold text-lg uppercase tracking-tight">Properties</h2>
-            <button 
-              onClick={() => setIsSidebarOpen(false)}
-              className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          <section>
-            <div className="flex gap-2">
-                <button onClick={addNode} className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-semibold flex justify-center items-center gap-2">Add Node</button>
-                <button onClick={addEdge} className="flex-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-semibold flex justify-center items-center gap-2">Add Road</button>
-            </div>
-          </section>
-
-          <section>
-            <div 
-              className="flex items-center justify-between cursor-pointer mb-2"
-              onClick={() => toggleSection('selection')}
-            >
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Selection</h3>
-              {collapsedSections['selection'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
-            </div>
-            {!collapsedSections['selection'] && (
-              <div className="space-y-4 bg-slate-800/20 p-3 rounded-lg border border-slate-800/50">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-300">Soft Selection</span>
-                  <button 
-                    onClick={() => setSoftSelectionEnabled(!softSelectionEnabled)}
-                    className={`px-3 py-1 rounded text-xs font-medium transition-colors ${softSelectionEnabled ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}
-                  >
-                    {softSelectionEnabled ? 'ENABLED' : 'DISABLED'}
-                  </button>
-                </div>
-                {softSelectionEnabled && (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-300 mb-1">
-                      Radius ({softSelectionRadius}px)
-                    </label>
-                    <input
-                      type="range"
-                      min="10"
-                      max="1000"
-                      step="10"
-                      value={softSelectionRadius}
-                      onChange={(e) => setSoftSelectionRadius(parseInt(e.target.value))}
-                      className="w-full accent-blue-500 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          <section>
-            <div 
-              className="flex items-center justify-between cursor-pointer mb-2"
-              onClick={() => toggleSection('settings')}
-            >
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Settings</h3>
-              {collapsedSections['settings'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
-            </div>
-            {!collapsedSections['settings'] && (
-              <div className="space-y-4 bg-slate-800/20 p-3 rounded-lg border border-slate-800/50">
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1">
-                    Chamfer Angle ({chamferAngle}°)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="range"
-                      min="10"
-                      max="180"
-                      value={chamferAngle}
-                      onChange={(e) => setChamferAngle(parseInt(e.target.value))}
-                      className="flex-grow min-w-0"
-                    />
-                    <input
-                      type="number"
-                      min="10"
-                      max="180"
-                      value={chamferAngle}
-                      onChange={(e) => setChamferAngle(parseInt(e.target.value) || 70)}
-                      className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1">
-                    Mesh Split Size ({meshResolution}px)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="range"
-                      min="5"
-                      max="100"
-                      value={meshResolution}
-                      onChange={(e) => setMeshResolution(sanitizeMeshResolution(e.target.value))}
-                      className="flex-grow min-w-0"
-                    />
-                    <input
-                      type="number"
-                      min="5"
-                      max="100"
-                      value={meshResolution}
-                      onChange={(e) => setMeshResolution(sanitizeMeshResolution(e.target.value))}
-                      className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1">
-                    Lane Width ({laneWidth}px)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="range"
-                      min="10"
-                      max="100"
-                      value={laneWidth}
-                      onChange={(e) => setLaneWidth(parseInt(e.target.value))}
-                      className="flex-grow min-w-0"
-                    />
-                    <input
-                      type="number"
-                      min="10"
-                      max="100"
-                      value={laneWidth}
-                      onChange={(e) => setLaneWidth(parseInt(e.target.value) || 30)}
-                      className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </section>
-
-          <section className="flex-grow flex flex-col min-h-0">
-            <div 
-              className="flex items-center justify-between cursor-pointer mb-2"
-              onClick={() => toggleSection('junctions')}
-            >
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Junctions {selectedNodes.length > 0 ? '(Selected)' : ''}</h3>
-              {collapsedSections['junctions'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
-            </div>
-            {!collapsedSections['junctions'] && (
-              <div className="space-y-3 overflow-y-auto max-h-48 pb-4">
-                {selectedNodes.length === 0 ? (
-                  <div className="text-sm text-slate-500 text-center py-4 px-4 bg-slate-800/10 rounded-lg border border-slate-800/50 border-dashed">
-                    Select a junction.
-                  </div>
-                ) : (
-                  nodes.filter(n => selectedNodes.includes(n.id)).map((n) => (
-                    <div
-                      key={n.id}
-                      className="p-3 bg-blue-900/10 rounded-xl border border-blue-500/50 flex flex-col gap-2"
-                    >
-                      <div className="flex justify-between items-center text-sm font-bold text-slate-200">
-                        <span>Junction {n.id.substring(0,4)}</span>
-                        <button
-                          onClick={(evt) => {
-                            evt.stopPropagation();
-                            setNodes(prev => prev.filter(node => node.id !== n.id));
-                            setSelectedNodes(prev => prev.filter(id => id !== n.id));
-                            setEdges(prev => prev.filter(edge => edge.source !== n.id && edge.target !== n.id));
-                          }}
-                          className="text-slate-500 hover:text-red-400 p-1 rounded-lg hover:bg-slate-800 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4 opacity-70" />
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div>
-                          <label className="text-xs text-slate-400 block mb-1">X</label>
-                          <input type="number" disabled value={Math.round(n.point.x)} className="w-full bg-slate-900 text-slate-300 border border-slate-700 rounded p-1 text-xs" />
-                        </div>
-                        <div>
-                          <label className="text-xs text-slate-400 block mb-1">Y</label>
-                          <input type="number" disabled value={Math.round(n.point.y)} className="w-full bg-slate-900 text-slate-300 border border-slate-700 rounded p-1 text-xs" />
-                        </div>
-                        <div>
-                          <label className="text-xs text-slate-400 block mb-1">Elevation Z</label>
-                          <input 
-                            type="number" 
-                            value={Math.round(n.point.z ?? 4)} 
-                            onChange={(e) => {
-                                const val = parseInt(e.target.value) || 0;
-                                setNodes(prev => prev.map(pn => pn.id === n.id ? { ...pn, point: { ...pn.point, z: val } } : pn));
-                            }}
-                            className="w-full bg-slate-800 text-white border border-slate-600 rounded p-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors" 
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </section>
-
-          <section className="flex-grow flex flex-col min-h-0">
-            <div 
-              className="flex items-center justify-between cursor-pointer mb-2"
-              onClick={() => toggleSection('edges')}
-            >
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Edges {selectedEdges.length > 0 ? '(Selected)' : ''}</h3>
-              {collapsedSections['edges'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
-            </div>
-            {!collapsedSections['edges'] && (
-              <div className="space-y-3 overflow-y-auto flex-grow pb-4">
-                {edges.filter(e => selectedEdges.includes(e.id)).length === 0 ? (
-                  <div className="text-sm text-slate-500 text-center py-8 px-4 bg-slate-800/10 rounded-lg border border-slate-800/50 border-dashed">
-                    Select a road in the viewport to adjust its properties.
-                  </div>
-                ) : (
-                  edges.filter(e => selectedEdges.includes(e.id)).map((e, idx) => (
-                    <div
-                      key={e.id}
-                      className="p-3 lg:p-4 rounded-xl border transition-all pointer-events-none bg-blue-900/10 border-blue-500/50 ring-1 ring-blue-500/20"
-                    >
-                      <div className="flex justify-between items-center mb-3 pointer-events-auto">
-                        {editingEdgeName === e.id ? (
-                          <input
-                            autoFocus
-                            value={editingNameValue}
-                            onChange={(evt) => setEditingNameValue(evt.target.value)}
-                            onBlur={() => {
-                              setEdges(prev => prev.map(ed => ed.id === e.id ? { ...ed, name: editingNameValue } : ed));
-                              setEditingEdgeName(null);
-                            }}
-                            onKeyDown={(evt) => {
-                              if (evt.key === 'Enter') {
-                                setEdges(prev => prev.map(ed => ed.id === e.id ? { ...ed, name: editingNameValue } : ed));
-                                setEditingEdgeName(null);
-                              } else if (evt.key === 'Escape') {
-                                setEditingEdgeName(null);
-                              }
-                            }}
-                            className="text-sm font-bold bg-slate-900 text-white px-1 py-0.5 rounded outline-none border border-blue-500 w-32"
-                          />
-                        ) : (
-                          <span 
-                            onDoubleClick={(evt) => {
-                              evt.stopPropagation();
-                              setEditingNameValue(e.name || `Selected Road`);
-                              setEditingEdgeName(e.id);
-                            }}
-                            className="text-sm font-bold text-slate-200 cursor-text"
-                            title="Double-click to rename"
-                          >
-                            {e.name || `Selected Road`}
-                          </span>
-                        )}
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={(evt) => { 
-                              evt.stopPropagation(); 
-                              setCopiedEdgeSettings({
-                                width: e.width,
-                                sidewalkLeft: e.sidewalkLeft,
-                                sidewalkRight: e.sidewalkRight,
-                                transitionSmoothness: e.transitionSmoothness,
-                              });
-                            }}
-                            title="Copy road settings"
-                            className="text-slate-500 hover:text-blue-400 p-2 lg:p-1 rounded-lg hover:bg-slate-800 transition-colors"
-                          >
-                            <Copy className="w-4 h-4 opacity-70" />
-                          </button>
-                          <button
-                            onClick={(evt) => { 
-                              evt.stopPropagation(); 
-                              if (!copiedEdgeSettings) return;
-                              setEdges(prev => prev.map(ed => ed.id === e.id ? { ...ed, ...copiedEdgeSettings } : ed));
-                            }}
-                            title="Paste road settings"
-                            disabled={!copiedEdgeSettings}
-                            className={`p-2 lg:p-1 rounded-lg transition-colors ${copiedEdgeSettings ? 'text-slate-500 hover:text-emerald-400 hover:bg-slate-800 cursor-pointer' : 'text-slate-700 cursor-not-allowed'}`}
-                          >
-                            <ClipboardPaste className="w-4 h-4 opacity-70" />
-                          </button>
-                          <button
-                            onClick={(evt) => { evt.stopPropagation(); setEdges(prev => prev.filter(edge => edge.id !== e.id)); setSelectedEdges(prev => prev.filter(id => id !== e.id)); }}
-                            className="text-slate-500 hover:text-red-400 p-2 lg:p-1 rounded-lg hover:bg-slate-800 transition-colors ml-1"
-                          >
-                            <Trash2 className="w-4 h-4 opacity-70" />
-                          </button>
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-3 pointer-events-auto">
-                        <div>
-                          <div className="flex justify-between text-xs text-slate-400 mb-1">
-                            <span>Width</span>
-                            <span>{e.width}px</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="20"
-                            max="200"
-                            step="5"
-                            value={e.width}
-                            onChange={(evt) =>
-                              setEdges((prev) =>
-                                prev.map((pr) => (pr.id === e.id ? { ...pr, width: parseInt(evt.target.value) } : pr))
-                              )
-                            }
-                            className="w-full accent-blue-600 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                          />
-                        </div>
-                        <div>
-                          <div className="flex justify-between text-xs text-slate-400 mb-1">
-                            <span>Sidewalk (Left)</span>
-                            <span>{e.sidewalkLeft ?? e.sidewalk ?? 12}px</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="100"
-                            step="2"
-                            value={e.sidewalkLeft ?? e.sidewalk ?? 12}
-                            onChange={(evt) =>
-                              setEdges((prev) =>
-                                prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkLeft: parseInt(evt.target.value) } : pr))
-                              )
-                            }
-                            className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-3"
-                          />
-                          <div className="flex justify-between text-xs text-slate-400 mb-1">
-                            <span>Sidewalk (Right)</span>
-                            <span>{e.sidewalkRight ?? e.sidewalk ?? 12}px</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="100"
-                            step="2"
-                            value={e.sidewalkRight ?? e.sidewalk ?? 12}
-                            onChange={(evt) =>
-                              setEdges((prev) =>
-                                prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkRight: parseInt(evt.target.value) } : pr))
-                              )
-                            }
-                            className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-3"
-                          />
-                          <div className="flex justify-between text-xs text-slate-400 mb-1">
-                            <span>Transition Smoothing</span>
-                            <span>{e.transitionSmoothness ?? 0}px</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="200"
-                            step="5"
-                            value={e.transitionSmoothness ?? 0}
-                            onChange={(evt) =>
-                              setEdges((prev) =>
-                                prev.map((pr) => (pr.id === e.id ? { ...pr, transitionSmoothness: parseInt(evt.target.value) } : pr))
-                              )
-                            }
-                            className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                          />
-                        </div>
-                        <div className="flex items-center gap-2 mt-2">
-                          <input
-                            type="checkbox"
-                            checked={e.oneWay || false}
-                            onChange={(evt) =>
-                              setEdges((prev) =>
-                                prev.map((pr) => (pr.id === e.id ? { ...pr, oneWay: evt.target.checked } : pr))
-                              )
-                            }
-                            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                          />
-                          <span className="text-xs text-slate-400">One Way Road</span>
-                        </div>
-                        <div className="mt-2 flex justify-end">
-                          <button
-                            onClick={() => handleFlipEdge(e.id)}
-                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
-                          >
-                            Flip Direction
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </section>
-        </aside>
+        <Sidebar
+          isSidebarOpen={isSidebarOpen}
+          setIsSidebarOpen={setIsSidebarOpen}
+          addNode={addNode}
+          addEdge={addEdge}
+          softSelectionEnabled={softSelectionEnabled}
+          setSoftSelectionEnabled={setSoftSelectionEnabled}
+          softSelectionRadius={softSelectionRadius}
+          setSoftSelectionRadius={setSoftSelectionRadius}
+          chamferAngle={chamferAngle}
+          setChamferAngle={setChamferAngle}
+          meshResolution={meshResolution}
+          setMeshResolution={setMeshResolution}
+          laneWidth={laneWidth}
+          setLaneWidth={setLaneWidth}
+          nodes={nodes}
+          setNodes={setNodes}
+          edges={edges}
+          setEdges={setEdges}
+          selectedNodes={selectedNodes}
+          setSelectedNodes={setSelectedNodes}
+          selectedEdges={selectedEdges}
+          setSelectedEdges={setSelectedEdges}
+        />
       </div>
     </div>
   );
