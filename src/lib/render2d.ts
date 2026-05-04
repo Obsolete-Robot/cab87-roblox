@@ -20,9 +20,58 @@ export const drawNetwork2D = (
   softSelectionEnabled: boolean,
   softSelectionRadius: number,
   draggingPoint: Point | null,
-  selectedPointIndex: number | null
+  selectedPointIndex: number | null,
+  view?: { x: number; y: number; zoom: number }
 ) => {
-  ctx.clearRect(0, 0, size.w, size.h);
+  // Clear the canvas outside of the view transform or just fill the entire view area.
+  // Wait, ctx is already transformed. To clear the whole canvas properly:
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform to clear screen
+  ctx.clearRect(0, 0, size.w * (window.devicePixelRatio || 1), size.h * (window.devicePixelRatio || 1));
+  ctx.restore();
+
+  if (view) {
+    const gridSize = 100;
+    const cellGridSize = 20;
+    const invZoom = 1 / view.zoom;
+    
+    const minX = -view.x * invZoom;
+    const maxX = (size.w - view.x) * invZoom;
+    const minY = -view.y * invZoom;
+    const maxY = (size.h - view.y) * invZoom;
+
+    // Draw small grid cells
+    ctx.lineWidth = 2 * invZoom;
+    ctx.strokeStyle = '#262626';
+    ctx.beginPath();
+    let startX = Math.floor(minX / cellGridSize) * cellGridSize;
+    for (let x = startX; x <= maxX; x += cellGridSize) {
+      ctx.moveTo(x, minY);
+      ctx.lineTo(x, maxY);
+    }
+    let startY = Math.floor(minY / cellGridSize) * cellGridSize;
+    for (let y = startY; y <= maxY; y += cellGridSize) {
+      ctx.moveTo(minX, y);
+      ctx.lineTo(maxX, y);
+    }
+    ctx.stroke();
+
+    // Draw main grid sections
+    ctx.lineWidth = 2 * invZoom;
+    ctx.strokeStyle = '#404040';
+    ctx.beginPath();
+    startX = Math.floor(minX / gridSize) * gridSize;
+    for (let x = startX; x <= maxX; x += gridSize) {
+      ctx.moveTo(x, minY);
+      ctx.lineTo(x, maxY);
+    }
+    startY = Math.floor(minY / gridSize) * gridSize;
+    for (let y = startY; y <= maxY; y += gridSize) {
+      ctx.moveTo(minX, y);
+      ctx.lineTo(maxX, y);
+    }
+    ctx.stroke();
+  }
 
   if (nodes.length === 0) return;
 

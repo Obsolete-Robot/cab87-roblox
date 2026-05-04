@@ -7,6 +7,7 @@ import { BezierPaths } from './BezierPaths';
 import { ActualMesh } from './ActualMesh';
 import { LaneLines } from './LaneLines';
 import { LaneArrows } from './LaneArrows';
+import { Grid } from '@react-three/drei';
 
 export function SceneContent({ 
   mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, 
@@ -21,6 +22,18 @@ export function SceneContent({
     <group>
       <ambientLight intensity={0.4} />
       <directionalLight position={[500, 1000, 500]} intensity={0.8} castShadow />
+
+      <Grid 
+        infiniteGrid 
+        fadeDistance={5000} 
+        sectionColor="#404040" 
+        cellColor="#262626" 
+        position={[0, -0.2, 0]} 
+        cellSize={20} 
+        sectionSize={100}
+        cellThickness={1}
+        sectionThickness={2}
+      />
 
       <CameraSync setView={setView} containerRef={containerRef} controlsRef={controlsRef} />
 

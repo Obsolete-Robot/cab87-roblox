@@ -288,7 +288,8 @@ export default function App() {
       ctx, size, nodes, edges, selectedEdges, selectedNodes, selectedNode,
       showMesh, showControlPoints, isConnectMode, isMergeMode,
       chamferAngle, meshResolution, laneWidth,
-      softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex
+      softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex,
+      view
     );
     ctx.restore();
   }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
