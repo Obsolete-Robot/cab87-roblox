@@ -440,11 +440,17 @@ export default function App() {
     // Right click Empty Space
     const newNodeId = Math.random().toString(36).substring(2, 9);
     
-    let spawnPos = pos;
+    let spawnPos = { ...pos };
     if (selectedNode) {
         const sn = nodes.find(n => n.id === selectedNode);
         if (sn) {
-            spawnPos = { ...pos, z: sn.point.z };
+            spawnPos.z = sn.point.z;
+            if (e.__ray && Math.abs(e.__ray.direction.y) > 0.0001) {
+                const zTarget = sn.point.z ?? 4;
+                const t = (zTarget - e.__ray.origin.y) / e.__ray.direction.y;
+                spawnPos.x = e.__ray.origin.x + e.__ray.direction.x * t;
+                spawnPos.y = e.__ray.origin.z + e.__ray.direction.z * t;
+            }
         }
     }
 

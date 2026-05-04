@@ -36,6 +36,7 @@ export function SceneContent({
         initialCameraParams={initialCameraParams}
         nodes={nodes}
         edges={edges}
+        selectedNode={selectedNode}
       />
 
       <group>

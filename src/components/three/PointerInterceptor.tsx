@@ -5,7 +5,7 @@ import * as THREE from 'three';
 
 export function PointerInterceptor({ 
    onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, 
-   isDragging, initialCameraParams, controlsRef, draggingPoint, nodes, edges 
+   isDragging, initialCameraParams, controlsRef, draggingPoint, nodes, edges, selectedNode 
 }: any) {
    const { camera, raycaster, gl } = useThree();
 
@@ -35,6 +35,12 @@ export function PointerInterceptor({
          } else {
             // Horizontal dragging or interaction
             let currentY = 4;
+            if (selectedNode && nodes) {
+               const sn = nodes.find((n: any) => n.id === selectedNode);
+               if (sn) {
+                  currentY = sn.point.z ?? 4;
+               }
+            }
             
             if (isDragging && draggingPoint) {
                currentY = draggingPoint.z ?? 4;
@@ -84,6 +90,10 @@ export function PointerInterceptor({
          const pos = getPos(e);
          if (pos) {
             e.__scenePos = pos;
+            e.__ray = {
+               origin: raycaster.ray.origin.clone(),
+               direction: raycaster.ray.direction.clone()
+            };
             handler(e);
          }
       };
@@ -106,7 +116,7 @@ export function PointerInterceptor({
          gl.domElement.removeEventListener('contextmenu', ctx);
          gl.domElement.removeEventListener('pointercancel', cancel);
       };
-   }, [camera, raycaster, gl, onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, isDragging, draggingPoint, nodes, edges]);
+   }, [camera, raycaster, gl, onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, isDragging, draggingPoint, nodes, edges, selectedNode]);
 
    return <OrbitControls 
       ref={controlsRef} 
