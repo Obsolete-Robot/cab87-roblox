@@ -49,12 +49,12 @@ export default function App() {
   };
   const [isConnectMode, setIsConnectMode] = useState(false);
   
-  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan' | 'multi-edge' | 'multi-node'; id: string; pointId?: number } | null>(null);
+  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan'; id: string; pointId?: number } | null>(null);
 
   const draggingPoint = useMemo(() => {
     if (!dragging) return null;
-    if (dragging.type === 'node' || dragging.type === 'multi-node') return nodes.find(n => n.id === dragging.id)?.point || null;
-    if (dragging.type === 'edge' || dragging.type === 'multi-edge') {
+    if (dragging.type === 'node') return nodes.find(n => n.id === dragging.id)?.point || null;
+    if (dragging.type === 'edge') {
         const edge = edges.find(e => e.id === dragging.id);
         if (dragging.pointId != null) return edge ? edge.points[dragging.pointId] : null;
         else if (lastDragPosRef.current) return lastDragPosRef.current;
@@ -916,16 +916,14 @@ export default function App() {
                 }
                 setSelectedEdges([]);
                 setSelectedPointIndex(null);
-                lastDragPosRef.current = pos;
                 startDragPosRef.current = pos;
-                setDragging({ type: 'multi-node', id: n.id });
+                setDragging({ type: 'node', id: n.id });
                 return;
             }
 
             if (selectedNodes.includes(n.id) && selectedNodes.length > 1) {
-                lastDragPosRef.current = pos;
                 startDragPosRef.current = pos;
-                setDragging({ type: 'multi-node', id: n.id });
+                setDragging({ type: 'node', id: n.id });
                 return;
             }
 
@@ -1186,16 +1184,14 @@ export default function App() {
                 addedToSelectionRef.current = false;
             }
             setSelectedNode(null);
-            lastDragPosRef.current = pos;
             startDragPosRef.current = pos;
-            setDragging({ type: 'multi-edge', id: edge.id });
+            setDragging({ type: 'edge', id: edge.id, pointId: hitIndex });
             return;
         }
 
         if (selectedEdges.includes(edge.id) && selectedEdges.length > 1) {
-            lastDragPosRef.current = pos;
             startDragPosRef.current = pos;
-            setDragging({ type: 'multi-edge', id: edge.id });
+            setDragging({ type: 'edge', id: edge.id, pointId: hitIndex });
             return;
         }
 
@@ -1336,79 +1332,8 @@ export default function App() {
       return changed ? { ...edge, points: newPts } : edge;
   };
 
-  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan' | 'multi-edge' | 'multi-node'; id: string; pointId?: number }, pos: Point, shiftKey: boolean) => {
+  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan'; id: string; pointId?: number }, pos: Point, shiftKey: boolean) => {
     const taper = (dist: number, radius: number) => Math.max(0, 1 - Math.pow(dist / radius, 2));
-
-    if (dragState.type === 'multi-node') {
-        if (!lastDragPosRef.current) return;
-        let dx = pos.x - lastDragPosRef.current.x;
-        let dy = pos.y - lastDragPosRef.current.y;
-        if (is3DMode && shiftKey) { dx = 0; dy = 0; }
-        const dz = pos.z !== undefined ? pos.z - (lastDragPosRef.current.z ?? 4) : 0;
-        lastDragPosRef.current = pos;
-
-        const newNodes = nodes.map(n => {
-            if (selectedNodes.includes(n.id)) {
-                return { ...n, point: { x: n.point.x + dx, y: n.point.y + dy, z: (n.point.z ?? 4) + dz } };
-            }
-            return n;
-        });
-        setNodes(newNodes);
-
-        setEdges(prev => prev.map(e => {
-            if (selectedNodes.includes(e.source) || (e.target && selectedNodes.includes(e.target))) {
-                return enforceLinear(e, newNodes, e, nodes);
-            }
-            return e;
-        }));
-        return;
-    }
-
-    if (dragState.type === 'multi-edge') {
-        if (!lastDragPosRef.current) return;
-        let dx = pos.x - lastDragPosRef.current.x;
-        let dy = pos.y - lastDragPosRef.current.y;
-        if (is3DMode && shiftKey) { dx = 0; dy = 0; }
-        const dz = pos.z !== undefined ? pos.z - (lastDragPosRef.current.z ?? 4) : 0;
-        lastDragPosRef.current = pos;
-
-        const attachedNodes = new Set<string>();
-        edges.forEach(e => {
-            if (selectedEdges.includes(e.id)) {
-                if (e.source) attachedNodes.add(e.source);
-                if (e.target) attachedNodes.add(e.target);
-            }
-        });
-
-        const newNodes = nodes.map(n => {
-            if (attachedNodes.has(n.id)) {
-                return { ...n, point: { x: n.point.x + dx, y: n.point.y + dy, z: (n.point.z ?? 4) + dz } };
-            }
-            return n;
-        });
-        setNodes(newNodes);
-
-        setEdges(prev => prev.map(e => {
-            let newE = e;
-            if (selectedEdges.includes(e.id)) {
-                newE = {
-                    ...e,
-                    points: e.points.map(pt => ({
-                        ...pt,
-                        x: pt.x + dx,
-                        y: pt.y + dy,
-                        z: (pt.z ?? 4) + dz
-                    }))
-                };
-            }
-            
-            if (attachedNodes.has(e.source) || (e.target && attachedNodes.has(e.target))) {
-                return enforceLinear(newE, newNodes, e, nodes);
-            }
-            return newE;
-        }));
-        return;
-    }
 
     if (dragState.type === 'node') {
         const draggingNode = nodes.find(n => n.id === dragState.id);
@@ -1421,7 +1346,12 @@ export default function App() {
             const originPoint = draggingNode.point;
             
             const newNodes = nodes.map(n => {
-                if (n.id === draggingNode.id) return { ...n, point: { ...n.point, x: n.point.x + dx, y: n.point.y + dy, z: pos.z ?? originPoint.z } };
+                const isSelected = selectedNodes.includes(n.id);
+                if (n.id === draggingNode.id) {
+                    return { ...n, point: { ...n.point, x: n.point.x + dx, y: n.point.y + dy, z: pos.z ?? originPoint.z } };
+                } else if (isSelected) {
+                    return { ...n, point: { ...n.point, x: n.point.x + dx, y: n.point.y + dy, z: (n.point.z ?? 4) + dz } };
+                }
                 if (!softSelectionEnabled) return n;
                 const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
                 const w = taper(d, softSelectionRadius);
@@ -1437,30 +1367,45 @@ export default function App() {
             });
             
             setNodes(newNodes);
+            const movedNodes = new Set([...selectedNodes, draggingNode.id]);
             setEdges(edges.map(edge => {
                 let newPoints = [...edge.points];
                 let changed = false;
 
-                if (edge.source === draggingNode.id || edge.target === draggingNode.id) {
-                    if (edge.source === draggingNode.id && newPoints.length > 0) {
+                if (movedNodes.has(edge.source) || movedNodes.has(edge.target)) {
+                    if (movedNodes.has(edge.source) && newPoints.length > 0) {
                         newPoints[0] = { ...newPoints[0], x: newPoints[0].x + dx, y: newPoints[0].y + dy, z: (newPoints[0].z ?? 4) + dz };
+                        if (newPoints.length > 1) {
+                            newPoints[1] = { ...newPoints[1], z: (newPoints[1].z ?? 4) + dz };
+                            if (!is3DMode || !shiftKey) {
+                                newPoints[1].x += dx;
+                                newPoints[1].y += dy;
+                            }
+                        }
                         changed = true;
                     }
-                    if (edge.target === draggingNode.id && newPoints.length > 0) {
+                    if (movedNodes.has(edge.target) && newPoints.length > 0) {
                         newPoints[newPoints.length - 1] = { 
                             ...newPoints[newPoints.length - 1],
                             x: newPoints[newPoints.length - 1].x + dx, 
                             y: newPoints[newPoints.length - 1].y + dy,
                             z: (newPoints[newPoints.length - 1].z ?? 4) + dz
                         };
+                        if (newPoints.length > 2) {
+                            newPoints[newPoints.length - 2] = { ...newPoints[newPoints.length - 2], z: (newPoints[newPoints.length - 2].z ?? 4) + dz };
+                            if (!is3DMode || !shiftKey) {
+                                newPoints[newPoints.length - 2].x += dx;
+                                newPoints[newPoints.length - 2].y += dy;
+                            }
+                        }
                         changed = true;
                     }
                 }
 
                 if (softSelectionEnabled) {
                     newPoints = newPoints.map((pt, idx) => {
-                        if (edge.source === draggingNode.id && idx === 0) return pt;
-                        if (edge.target === draggingNode.id && idx === newPoints.length - 1) return pt;
+                        if (movedNodes.has(edge.source) && idx === 0) return pt;
+                        if (movedNodes.has(edge.target) && idx === newPoints.length - 1) return pt;
                         
                         const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
                         const w = taper(d, softSelectionRadius);
@@ -1634,12 +1579,13 @@ export default function App() {
         const pos = getMousePos(e);
         const dx = pos.x - startDragPosRef.current.x;
         const dy = pos.y - startDragPosRef.current.y;
-        const dist = Math.hypot(dx, dy);
+        const dz = (pos.z ?? 0) - (startDragPosRef.current.z ?? 0);
+        const dist = Math.hypot(Math.hypot(dx, dy), dz);
         
         if (dist < 5 && !addedToSelectionRef.current) {
-            if (dragging.type === 'multi-node' || dragging.type === 'node') {
+            if (dragging.type === 'node') {
                 setSelectedNodes(prev => prev.filter(id => id !== dragging.id));
-            } else if (dragging.type === 'multi-edge' || dragging.type === 'edge') {
+            } else if (dragging.type === 'edge') {
                 setSelectedEdges(prev => prev.filter(id => id !== dragging.id));
             }
         }
