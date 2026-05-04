@@ -845,7 +845,16 @@ export default function App() {
 
     // Right click Empty Space
     const newNodeId = Math.random().toString(36).substring(2, 9);
-    setNodes(prev => [...prev, { id: newNodeId, point: pos }]);
+    
+    let spawnPos = pos;
+    if (selectedNode) {
+        const sn = nodes.find(n => n.id === selectedNode);
+        if (sn) {
+            spawnPos = { ...pos, z: sn.point.z };
+        }
+    }
+
+    setNodes(prev => [...prev, { id: newNodeId, point: spawnPos }]);
 
     if (selectedNode) {
         const sn = nodes.find(n => n.id === selectedNode);
@@ -853,8 +862,8 @@ export default function App() {
             const newEdgeId = Math.random().toString(36).substring(2, 9);
             const newEdge: Edge = {
                 id: newEdgeId, source: selectedNode, target: newNodeId, points: [
-                  { x: sn.point.x + (pos.x - sn.point.x)/3, y: sn.point.y + (pos.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
-                  { x: sn.point.x + 2*(pos.x - sn.point.x)/3, y: sn.point.y + 2*(pos.y - sn.point.y)/3, z: pos.z ?? 4, linear: true }
+                  { x: sn.point.x + (spawnPos.x - sn.point.x)/3, y: sn.point.y + (spawnPos.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
+                  { x: sn.point.x + 2*(spawnPos.x - sn.point.x)/3, y: sn.point.y + 2*(spawnPos.y - sn.point.y)/3, z: spawnPos.z ?? 4, linear: true }
                 ], width: 60, sidewalk: 12, color: COLORS[edges.length % COLORS.length]
             };
             setEdges(prev => [...prev, newEdge]);
@@ -1375,13 +1384,6 @@ export default function App() {
                 if (movedNodes.has(edge.source) || movedNodes.has(edge.target)) {
                     if (movedNodes.has(edge.source) && newPoints.length > 0) {
                         newPoints[0] = { ...newPoints[0], x: newPoints[0].x + dx, y: newPoints[0].y + dy, z: (newPoints[0].z ?? 4) + dz };
-                        if (newPoints.length > 1) {
-                            newPoints[1] = { ...newPoints[1], z: (newPoints[1].z ?? 4) + dz };
-                            if (!is3DMode || !shiftKey) {
-                                newPoints[1].x += dx;
-                                newPoints[1].y += dy;
-                            }
-                        }
                         changed = true;
                     }
                     if (movedNodes.has(edge.target) && newPoints.length > 0) {
@@ -1391,13 +1393,6 @@ export default function App() {
                             y: newPoints[newPoints.length - 1].y + dy,
                             z: (newPoints[newPoints.length - 1].z ?? 4) + dz
                         };
-                        if (newPoints.length > 2) {
-                            newPoints[newPoints.length - 2] = { ...newPoints[newPoints.length - 2], z: (newPoints[newPoints.length - 2].z ?? 4) + dz };
-                            if (!is3DMode || !shiftKey) {
-                                newPoints[newPoints.length - 2].x += dx;
-                                newPoints[newPoints.length - 2].y += dy;
-                            }
-                        }
                         changed = true;
                     }
                 }
