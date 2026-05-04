@@ -23,22 +23,30 @@ export function ActualMesh({ mesh, showMesh }: { mesh: any, showMesh: boolean })
   const hubGeo = useMemo(() => createGeo(mesh.hubTriangles || []), [mesh.hubTriangles]);
   const swGeo = useMemo(() => createGeo(mesh.sidewalkTriangles || []), [mesh.sidewalkTriangles]);
   const cwGeo = useMemo(() => createGeo(mesh.crosswalkTriangles || []), [mesh.crosswalkTriangles]);
+  const dashedGeo = useMemo(() => createGeo(mesh.dashedLineTriangles || []), [mesh.dashedLineTriangles]);
+  const solidGeo = useMemo(() => createGeo(mesh.solidLineTriangles || []), [mesh.solidLineTriangles]);
 
   const wireColor = showMesh ? "#22d3ee" : undefined;
 
   return (
     <group>
-      <mesh geometry={roadGeo}>
+      <mesh geometry={roadGeo} position={[0, 0, 0]}>
         <meshStandardMaterial color={wireColor || "#1e293b"} side={THREE.DoubleSide} wireframe={showMesh} />
       </mesh>
-      <mesh geometry={hubGeo}>
+      <mesh geometry={hubGeo} position={[0, 0.02, 0]}>
         <meshStandardMaterial color={wireColor || "#1e293b"} side={THREE.DoubleSide} wireframe={showMesh} />
       </mesh>
-      <mesh geometry={swGeo}>
+      <mesh geometry={cwGeo} position={[0, 0.04, 0]}>
+        <meshStandardMaterial color={wireColor || "#334155"} side={THREE.DoubleSide} wireframe={showMesh} />
+      </mesh>
+      <mesh geometry={swGeo} position={[0, 0.1, 0]}>
         <meshStandardMaterial color={wireColor || "#94a3b8"} side={THREE.DoubleSide} wireframe={showMesh} />
       </mesh>
-      <mesh geometry={cwGeo}>
-        <meshStandardMaterial color={wireColor || "#334155"} side={THREE.DoubleSide} wireframe={showMesh} />
+      <mesh geometry={dashedGeo} position={[0, 0, 0]}>
+        <meshStandardMaterial color={wireColor || "#cccccc"} side={THREE.DoubleSide} wireframe={showMesh} />
+      </mesh>
+      <mesh geometry={solidGeo} position={[0, 0, 0]}>
+        <meshStandardMaterial color={wireColor || "#eab308"} side={THREE.DoubleSide} wireframe={showMesh} />
       </mesh>
     </group>
   );

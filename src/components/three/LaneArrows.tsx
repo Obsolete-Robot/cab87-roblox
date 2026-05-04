@@ -2,7 +2,7 @@ import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { Point } from '../../lib/types';
 
-export function LaneArrows({ arrows }: { arrows: { position: Point, dir: Point }[] }) {
+export function LaneArrows({ arrows, showMesh }: { arrows: { position: Point, dir: Point }[], showMesh?: boolean }) {
   const instancedMeshRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
   
@@ -33,7 +33,7 @@ export function LaneArrows({ arrows }: { arrows: { position: Point, dir: Point }
 
   return (
     <instancedMesh ref={instancedMeshRef} args={[geometry, undefined, arrows.length]}>
-      <meshBasicMaterial color="#ffffff" opacity={0.6} transparent depthWrite={false} />
+      <meshBasicMaterial color={showMesh ? "#cccccc" : "#ffffff"} opacity={0.6} transparent={!showMesh} depthWrite={false} wireframe={showMesh} />
     </instancedMesh>
   );
 }

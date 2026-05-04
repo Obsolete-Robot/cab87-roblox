@@ -5,7 +5,6 @@ import { CameraSync } from './CameraSync';
 import { PointerInterceptor } from './PointerInterceptor';
 import { BezierPaths } from './BezierPaths';
 import { ActualMesh } from './ActualMesh';
-import { LaneLines } from './LaneLines';
 import { LaneArrows } from './LaneArrows';
 import { Grid } from '@react-three/drei';
 
@@ -90,8 +89,7 @@ export function SceneContent({
       </group>
 
       <ActualMesh mesh={mesh} showMesh={showMesh} />
-      {!showMesh && <LaneLines dashedLines={mesh.dashedLines} solidYellowLines={mesh.solidYellowLines} />}
-      {!showMesh && <LaneArrows arrows={mesh.laneArrows} />}
+      <LaneArrows arrows={mesh.laneArrows} showMesh={showMesh} />
 
       {softSelectionEnabled && isDragging && draggingPoint && (
         <mesh 

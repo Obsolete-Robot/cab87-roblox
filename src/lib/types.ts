@@ -43,5 +43,7 @@ export type MeshData = {
   sidewalkPolygons: Point[][];
   dashedLines: Point[][];
   solidYellowLines: Point[][];
+  dashedLineTriangles: Triangle[];
+  solidLineTriangles: Triangle[];
   laneArrows: { position: Point; dir: Point }[];
 };
