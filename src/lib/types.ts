@@ -2,6 +2,8 @@ export type Point = {
   x: number;
   y: number;
   z?: number;
+  u?: number;
+  v?: number;
   linked?: boolean;
   linear?: boolean;
   curveIndex?: number;

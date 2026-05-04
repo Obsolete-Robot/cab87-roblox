@@ -433,17 +433,16 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                     const right = { x: -dir.y, y: dir.x };
                     const dist = len;
 
-                    if (lengthSoFar % totalDash < dashLength) {
-                        const h1 = (p1.z ?? 4) + yOffset;
-                        const br = { x: p1.x + right.x * width / 2, y: p1.y + right.y * width / 2, z: h1 };
-                        const bl = { x: p1.x - right.x * width / 2, y: p1.y - right.y * width / 2, z: h1 };
-                        
-                        const h2 = (p2.z ?? 4) + yOffset;
-                        const tr = { x: p2.x + right.x * width / 2, y: p2.y + right.y * width / 2, z: h2 };
-                        const tl = { x: p2.x - right.x * width / 2, y: p2.y - right.y * width / 2, z: h2 };
+                     const h1 = (p1.z ?? 4) + yOffset;
+                     const br = { x: p1.x + right.x * width / 2, y: p1.y + right.y * width / 2, z: h1, u: 1, v: lengthSoFar / totalDash };
+                     const bl = { x: p1.x - right.x * width / 2, y: p1.y - right.y * width / 2, z: h1, u: 0, v: lengthSoFar / totalDash };
+                     
+                     const h2 = (p2.z ?? 4) + yOffset;
+                     const nextV = (lengthSoFar + dist) / totalDash;
+                     const tr = { x: p2.x + right.x * width / 2, y: p2.y + right.y * width / 2, z: h2, u: 1, v: nextV };
+                     const tl = { x: p2.x - right.x * width / 2, y: p2.y - right.y * width / 2, z: h2, u: 0, v: nextV };
 
-                        mesh.dashedLineTriangles.push([bl, tr, tl], [bl, br, tr]);
-                    }
+                     mesh.dashedLineTriangles.push([bl, tr, tl], [bl, br, tr]);
                     lengthSoFar += dist;
                 }
            } else {
