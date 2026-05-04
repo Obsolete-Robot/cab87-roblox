@@ -619,19 +619,28 @@ export default function App() {
 
     // Nodes and control points
     nodes.forEach(n => {
+        const isActive = selectedNode === n.id;
+        const isSelected = selectedNodes.includes(n.id) || isActive;
+
         ctx.beginPath();
         ctx.arc(n.point.x, n.point.y, 8, 0, Math.PI * 2);
-        ctx.fillStyle = selectedNodes.includes(n.id) ? '#ffffff' : '#60a5fa';
+        ctx.fillStyle = isActive ? '#ef4444' : isSelected ? '#fca5a5' : '#60a5fa';
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = '#fff';
         ctx.stroke();
 
-        if (selectedNodes.includes(n.id)) {
+        if (isSelected) {
           ctx.beginPath();
           ctx.arc(n.point.x, n.point.y, 16, 0, Math.PI * 2);
-          ctx.strokeStyle = isConnectMode ? 'rgba(52, 211, 153, 0.8)' : isMergeMode ? 'rgba(239, 68, 68, 0.8)' : 'rgba(255, 255, 255, 0.4)';
-          ctx.lineWidth = (isConnectMode || isMergeMode) ? 3 : 2;
+          if (isActive && isConnectMode) {
+              ctx.strokeStyle = 'rgba(52, 211, 153, 0.8)';
+          } else if (isActive && isMergeMode) {
+              ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+          } else {
+              ctx.strokeStyle = isActive ? 'rgba(239, 68, 68, 0.4)' : 'rgba(252, 165, 165, 0.4)';
+          }
+          ctx.lineWidth = (isActive && (isConnectMode || isMergeMode)) ? 3 : 2;
           ctx.stroke();
         }
     });
@@ -1787,7 +1796,9 @@ export default function App() {
               softSelectionEnabled={softSelectionEnabled}
               softSelectionRadius={softSelectionRadius}
               selectedNode={selectedNode}
+              selectedNodes={selectedNodes}
               selectedEdges={selectedEdges}
+              selectedPointIndex={selectedPointIndex}
             />
           ) : (
             <>
