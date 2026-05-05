@@ -30,8 +30,9 @@ export function PointerInterceptor({
                new THREE.Vector3(draggingPoint.x, draggingPoint.z ?? 4, draggingPoint.y)
             );
 
-            raycaster.ray.intersectPlane(verticalPlane, target);
-            if (target) return { x: draggingPoint.x, y: draggingPoint.y, z: target.y };
+            if (raycaster.ray.intersectPlane(verticalPlane, target)) {
+               return { x: draggingPoint.x, y: draggingPoint.y, z: target.y };
+            }
          } else {
             // Horizontal dragging or interaction
             let currentY = 4;
@@ -72,8 +73,7 @@ export function PointerInterceptor({
                new THREE.Vector3(0, currentY, 0)
             );
 
-            raycaster.ray.intersectPlane(horizontalPlane, target);
-            if (target) {
+            if (raycaster.ray.intersectPlane(horizontalPlane, target)) {
                // If we are close to a point, actually snap the x and y coordinates returned so that
                // the 2D picking logic in App.tsx perfectly matches it!
                // But returning the target on the plane is usually good enough because raycaster intersection

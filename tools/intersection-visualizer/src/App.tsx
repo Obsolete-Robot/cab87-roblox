@@ -772,9 +772,17 @@ export default function App() {
                     setIsConnectMode(false);
                 } else if (isMergeMode) {
                     const sn = nodes.find(nn => nn.id === selectedNode)!;
-                    const mid = { x: (sn.point.x + n.point.x) / 2, y: (sn.point.y + n.point.y) / 2 };
-                    const deltaSn = { x: mid.x - sn.point.x, y: mid.y - sn.point.y };
-                    const deltaN = { x: mid.x - n.point.x, y: mid.y - n.point.y };
+                    const snZ = sn.point.z ?? 4;
+                    const nZ = n.point.z ?? 4;
+                    const mid = { x: (sn.point.x + n.point.x) / 2, y: (sn.point.y + n.point.y) / 2, z: (snZ + nZ) / 2 };
+                    const deltaSn = { x: mid.x - sn.point.x, y: mid.y - sn.point.y, z: mid.z - snZ };
+                    const deltaN = { x: mid.x - n.point.x, y: mid.y - n.point.y, z: mid.z - nZ };
+                    const movePoint = (point: Point, delta: { x: number; y: number; z: number }, fallbackZ: number): Point => ({
+                        ...point,
+                        x: point.x + delta.x,
+                        y: point.y + delta.y,
+                        z: (point.z ?? fallbackZ) + delta.z,
+                    });
 
                     setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: mid } : node).filter(node => node.id !== selectedNode));
 
@@ -786,12 +794,12 @@ export default function App() {
                         if (edge.source === selectedNode) {
                             newEdge.source = n.id;
                             if (newPts.length > 0) {
-                                newPts[0] = { ...newPts[0], x: newPts[0].x + deltaSn.x, y: newPts[0].y + deltaSn.y };
+                                newPts[0] = movePoint(newPts[0], deltaSn, snZ);
                                 changed = true;
                             }
                         } else if (edge.source === n.id) {
                             if (newPts.length > 0) {
-                                newPts[0] = { ...newPts[0], x: newPts[0].x + deltaN.x, y: newPts[0].y + deltaN.y };
+                                newPts[0] = movePoint(newPts[0], deltaN, nZ);
                                 changed = true;
                             }
                         }
@@ -799,12 +807,12 @@ export default function App() {
                         if (edge.target === selectedNode) {
                             newEdge.target = n.id;
                             if (newPts.length > 0) {
-                                newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: newPts[newPts.length - 1].x + deltaSn.x, y: newPts[newPts.length - 1].y + deltaSn.y };
+                                newPts[newPts.length - 1] = movePoint(newPts[newPts.length - 1], deltaSn, snZ);
                                 changed = true;
                             }
                         } else if (edge.target === n.id) {
                             if (newPts.length > 0) {
-                                newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: newPts[newPts.length - 1].x + deltaN.x, y: newPts[newPts.length - 1].y + deltaN.y };
+                                newPts[newPts.length - 1] = movePoint(newPts[newPts.length - 1], deltaN, nZ);
                                 changed = true;
                             }
                         }
