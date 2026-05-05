@@ -27,7 +27,7 @@ export function SceneContent({
         fadeDistance={5000} 
         sectionColor="#404040" 
         cellColor="#262626" 
-        position={[0, -2, 0]} 
+        position={[0, -20, 0]} 
         cellSize={20} 
         sectionSize={100}
         cellThickness={1}
@@ -65,7 +65,7 @@ export function SceneContent({
             return (
               <mesh key={`fill-handle-${fill.id}`} position={[cx, 5, cy]} renderOrder={1000}>
                 <sphereGeometry args={[isSelected ? 10 : 8, 16, 16]} />
-                <meshBasicMaterial color={isSelected ? "#ffffff" : fill.color} depthTest={false} depthWrite={false} transparent={false} />
+                <meshBasicMaterial color={isSelected ? "#ffffff" : fill.color} depthTest={false} depthWrite={false} transparent={true} />
                 {isSelected && (
                   <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
                     <ringGeometry args={[14, 16, 32]} />

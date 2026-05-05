@@ -71,22 +71,31 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         if (N === 1) {
             const sw_left = r1.isSource ? (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12);
             const sw_right = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
-            const left = { x: r1.dir.y, y: -r1.dir.x };
-            const right = { x: -r1.dir.y, y: r1.dir.x };
             const W = r1.edge.width / 2;
             const OW_L = W + sw_left;
             const OW_R = W + sw_right;
+            
+            const pts: Point[] = [];
+            const outerPts: Point[] = [];
+            
+            const steps = 8;
+            const angle0 = Math.atan2(r1.dir.y, r1.dir.x);
+            const startAngle = angle0 - Math.PI / 2;
+            
+            for (let s = 0; s <= steps; s++) {
+                const a = startAngle - Math.PI * (s / steps);
+                const dx = Math.cos(a);
+                const dy = Math.sin(a);
+                pts.push({ x: node.point.x + dx * W, y: node.point.y + dy * W, z: node.point.z });
+                const outerR = OW_L * (1 - s/steps) + OW_R * (s/steps);
+                outerPts.push({ x: node.point.x + dx * outerR, y: node.point.y + dy * outerR, z: node.point.z });
+            }
+            
             corners.push({
-              points: [
-                { x: node.point.x + left.x * W, y: node.point.y + left.y * W, z: node.point.z },
-                { x: node.point.x + right.x * W, y: node.point.y + right.y * W, z: node.point.z }
-              ],
+              points: pts,
               sidewalkWidth: Math.max(sw_left, sw_right)
             });
-            outerCorners.push([
-                { x: node.point.x + left.x * OW_L, y: node.point.y + left.y * OW_L, z: node.point.z },
-                { x: node.point.x + right.x * OW_R, y: node.point.y + right.y * OW_R, z: node.point.z }
-            ]);
+            outerCorners.push(outerPts);
         } else {
             const [innerPts, outerPts] = calculateBothCornerPoints(
               node.point, 
@@ -117,9 +126,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       const r = outgoing[rIdx];
       
       const bL = N === 1 ? corners[0].points[0] : corners[i].points[corners[i].points.length - 1];
-      const bR = N === 1 ? corners[0].points[1] : corners[rIdx].points[0];
+      const bR = N === 1 ? corners[0].points[corners[0].points.length - 1] : corners[rIdx].points[0];
       const obL = N === 1 ? outerCorners[0][0] : outerCorners[i][outerCorners[i].length - 1];
-      const obR = N === 1 ? outerCorners[0][1] : outerCorners[rIdx][0];
+      const obR = N === 1 ? outerCorners[0][outerCorners[0].length - 1] : outerCorners[rIdx][0];
 
       const dir0 = r.dir;
       const distL = (bL.x - node.point.x) * dir0.x + (bL.y - node.point.y) * dir0.y;
@@ -516,11 +525,11 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        mesh.roadPolygons.push({
            id: edge.id,
            polygon: poly,
-           leftCurve: leftPoints,
-           rightCurve: rightPoints,
+           leftCurve: [bL, ...leftPoints, ...(tbL ? [tbL] : [])],
+           rightCurve: [bR, ...rightPoints, ...(tbR ? [tbR] : [])],
            outerPolygon: outerPoly,
-           outerLeftCurve: outerSourceBases ? [outerSourceBases[0], ...outerLeftPoints, ...(outerTargetBases ? [outerTargetBases[0]] : (otbL ? [otbL] : []))] : outerLeftPoints,
-           outerRightCurve: outerSourceBases ? [outerSourceBases[1], ...outerRightPoints, ...(outerTargetBases ? [outerTargetBases[1]] : (otbR ? [otbR] : []))] : outerRightPoints,
+           outerLeftCurve: [obL, ...outerLeftPoints, ...(otbL ? [otbL] : [])],
+           outerRightCurve: [obR, ...outerRightPoints, ...(otbR ? [otbR] : [])],
            sidewalkWidth: edge.sidewalk ?? 12
        });
 
