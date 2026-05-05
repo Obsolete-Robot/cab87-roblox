@@ -590,11 +590,13 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     const polyNodes = poly.points.map(id => nodes.find(n => n.id === id)).filter(n => !!n) as Node[];
     if (polyNodes.length < 3) continue;
 
-    // Calculate centroid for side selection
-    const centroid = { x: 0, y: 0 };
-    polyNodes.forEach(n => { centroid.x += n.point.x; centroid.y += n.point.y; });
-    centroid.x /= polyNodes.length;
-    centroid.y /= polyNodes.length;
+    let signedArea = 0;
+    for (let i = 0; i < polyNodes.length; i++) {
+        const p1 = polyNodes[i].point;
+        const p2 = polyNodes[(i + 1) % polyNodes.length].point;
+        signedArea += (p1.x * p2.y - p2.x * p1.y);
+    }
+    const isClockwise = signedArea > 0;
 
     const segments: Point[][] = [];
     
@@ -611,24 +613,22 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
         let curve: Point[] = [];
         if (roadPoly) {
-            // Determine which side (outerLeft vs outerRight) is closer to the polygon centroid
-            const avgL = { x: 0, y: 0 };
-            roadPoly.outerLeftCurve.forEach(p => { avgL.x += p.x; avgL.y += p.y; });
-            avgL.x /= Math.max(1, roadPoly.outerLeftCurve.length);
-            avgL.y /= Math.max(1, roadPoly.outerLeftCurve.length);
-
-            const avgR = { x: 0, y: 0 };
-            roadPoly.outerRightCurve.forEach(p => { avgR.x += p.x; avgR.y += p.y; });
-            avgR.x /= Math.max(1, roadPoly.outerRightCurve.length);
-            avgR.y /= Math.max(1, roadPoly.outerRightCurve.length);
-
-            const distL = Math.hypot(avgL.x - centroid.x, avgL.y - centroid.y);
-            const distR = Math.hypot(avgR.x - centroid.x, avgR.y - centroid.y);
-
-            const chosenCurve = distL < distR ? roadPoly.outerLeftCurve : roadPoly.outerRightCurve;
+            const isForward = edge!.source === n1_id;
+            let useRightCurve = false;
+            
+            // For drawing fills around roads, tracing clockwise means the fill is on the RIGHT.
+            // On the right side, we use the OUTER curve of the road.
+            // When traversing forward, the right side is outerRightCurve.
+            if (isClockwise) {
+                useRightCurve = isForward;
+            } else {
+                useRightCurve = !isForward;
+            }
+            
+            const chosenCurve = useRightCurve ? roadPoly.outerRightCurve : roadPoly.outerLeftCurve;
             
             // Reverse if traversing backwards relative to edge direction
-            if (edge.source === n1_id) {
+            if (isForward) {
                 for (let j = 0; j < chosenCurve.length; j++) {
                     curve.push(chosenCurve[j]);
                 }
@@ -688,17 +688,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                 }
                 
                 if (path1.length > 0 || path2.length > 0) {
-                    const getAvg = (pts: Point[]) => {
-                        let ax = 0, ay = 0;
-                        pts.forEach(p => { ax += p.x; ay += p.y; });
-                        return { x: ax / pts.length, y: ay / pts.length };
-                    };
-                    const avg1 = path1.length > 0 ? getAvg(path1) : p_end;
-                    const avg2 = path2.length > 0 ? getAvg(path2) : p_end;
-                    const d1 = Math.hypot(avg1.x - centroid.x, avg1.y - centroid.y);
-                    const d2 = Math.hypot(avg2.x - centroid.x, avg2.y - centroid.y);
-                    
-                    const chosenPath = d1 < d2 ? path1 : path2;
+                    const chosenPath = isClockwise ? path1 : path2;
                     if (chosenPath.length > 0) {
                         chosenPath.pop(); // remove p_start to avoid duplicate
                         for (let j = 0; j < chosenPath.length; j++) {
