@@ -94,6 +94,11 @@ local function vectorToGraphPoint(position, planeY)
 	}
 end
 
+local function scaleVectorFromPlane(position, planeY, pointScale)
+	local baseY = finiteNumber(planeY) or 0
+	return Vector3.new(position.X * pointScale, baseY + (position.Y - baseY) * pointScale, position.Z * pointScale)
+end
+
 local function childFolders(parent, name)
 	local child = parent and parent:FindFirstChild(name)
 	if child and child:IsA("Folder") then
@@ -178,8 +183,8 @@ function RoadGraphData.normalizePayload(payload, options)
 	end
 
 	local planeY = finiteNumber(options.planeY) or finiteNumber(payload.importPlaneY) or 0
-	local pointScale = sanitizeScale(options.pointScale or payload.importPointScale)
-	local widthScale = sanitizeScale(options.widthScale or payload.importWidthScale)
+	local pointScale = sanitizeScale(options.pointScale)
+	local widthScale = sanitizeScale(options.widthScale)
 	local settings = RoadGraphData.defaultSettings(options.config)
 	if type(payload.settings) == "table" then
 		settings.chamferAngleDeg = finiteNumber(payload.settings.chamferAngleDeg) or settings.chamferAngleDeg
@@ -189,15 +194,13 @@ function RoadGraphData.normalizePayload(payload, options)
 			or finiteNumber(payload.settings.splineSegments)
 			or settings.meshResolution
 	end
-	settings.crosswalkWidth *= widthScale
-	settings.sidewalkWidth *= widthScale
 
 	local normalizedNodes = {}
 	local nodeLookup = {}
 	for index, node in ipairs(nodes) do
 		if type(node) == "table" then
 			local nodeId = sanitizeId(node.id, "n", index)
-			local position = graphPointToVector(node.point, planeY, pointScale)
+			local position = graphPointToVector(node.point, planeY)
 			if position and not nodeLookup[nodeId] then
 				local normalized = {
 					id = nodeId,
@@ -218,24 +221,23 @@ function RoadGraphData.normalizePayload(payload, options)
 				local controlPoints = {}
 				if type(edge.points) == "table" then
 					for _, point in ipairs(edge.points) do
-						local position = graphPointToVector(point, planeY, pointScale)
+						local position = graphPointToVector(point, planeY)
 						if position then
 							table.insert(controlPoints, position)
 						end
 					end
 				end
-				local edgeSidewalk = scaleNumber(edge.sidewalk, widthScale) or settings.sidewalkWidth
 
 				table.insert(normalizedEdges, {
 					id = sanitizeId(edge.id, "e", index),
 					source = source,
 					target = target,
 					points = controlPoints,
-					width = RoadSampling.sanitizeRoadWidth((finiteNumber(edge.width) or RoadSampling.DEFAULT_ROAD_WIDTH) * widthScale),
-					sidewalk = math.max(edgeSidewalk, 0),
-					sidewalkLeft = scaleNumber(edge.sidewalkLeft, widthScale),
-					sidewalkRight = scaleNumber(edge.sidewalkRight, widthScale),
-					transitionSmoothness = scaleNumber(edge.transitionSmoothness, pointScale),
+					width = RoadSampling.sanitizeRoadWidth(edge.width),
+					sidewalk = math.max(finiteNumber(edge.sidewalk) or settings.sidewalkWidth, 0),
+					sidewalkLeft = finiteNumber(edge.sidewalkLeft),
+					sidewalkRight = finiteNumber(edge.sidewalkRight),
+					transitionSmoothness = finiteNumber(edge.transitionSmoothness),
 					color = sanitizeColor(edge.color),
 					name = sanitizeName(edge.name, nil),
 				})
@@ -250,7 +252,7 @@ function RoadGraphData.normalizePayload(payload, options)
 		return nil, "Road graph did not include any valid edges"
 	end
 
-	return {
+	local graph = {
 		schema = RoadGraphData.SCHEMA,
 		version = RoadGraphData.VERSION,
 		planeY = planeY,
@@ -259,7 +261,91 @@ function RoadGraphData.normalizePayload(payload, options)
 		settings = settings,
 		nodes = normalizedNodes,
 		edges = normalizedEdges,
-	}, nil
+	}
+
+	if pointScale ~= DEFAULT_IMPORT_SCALE or widthScale ~= DEFAULT_IMPORT_SCALE then
+		return RoadGraphData.scaleGraph(graph, {
+			pointScale = pointScale,
+			widthScale = widthScale,
+		}), nil
+	end
+
+	return graph, nil
+end
+
+function RoadGraphData.scaleGraph(graph, options)
+	options = options or {}
+	if type(graph) ~= "table" then
+		return nil
+	end
+
+	local pointScale = sanitizeScale(options.pointScale or graph.importPointScale)
+	local widthScale = sanitizeScale(options.widthScale or graph.importWidthScale)
+	local planeY = finiteNumber(graph.planeY) or 0
+	local settings = RoadGraphData.defaultSettings(options.config)
+	if type(graph.settings) == "table" then
+		settings.chamferAngleDeg = finiteNumber(graph.settings.chamferAngleDeg) or settings.chamferAngleDeg
+		settings.crosswalkWidth = finiteNumber(graph.settings.crosswalkWidth) or settings.crosswalkWidth
+		settings.sidewalkWidth = finiteNumber(graph.settings.sidewalkWidth) or settings.sidewalkWidth
+		settings.meshResolution = finiteNumber(graph.settings.meshResolution)
+			or finiteNumber(graph.settings.splineSegments)
+			or settings.meshResolution
+	end
+	settings.crosswalkWidth *= widthScale
+	settings.sidewalkWidth *= widthScale
+
+	local nodes = {}
+	local nodeLookup = {}
+	for index, node in ipairs(graph.nodes or {}) do
+		if type(node) == "table" and typeof(node.point) == "Vector3" then
+			local nodeId = sanitizeId(node.id, "n", index)
+			local scaledNode = {
+				id = nodeId,
+				point = scaleVectorFromPlane(node.point, planeY, pointScale),
+			}
+			table.insert(nodes, scaledNode)
+			nodeLookup[nodeId] = scaledNode
+		end
+	end
+
+	local edges = {}
+	for index, edge in ipairs(graph.edges or {}) do
+		if type(edge) == "table" then
+			local points = {}
+			for _, point in ipairs(edge.points or {}) do
+				if typeof(point) == "Vector3" then
+					table.insert(points, scaleVectorFromPlane(point, planeY, pointScale))
+				end
+			end
+
+			local edgeSidewalk = scaleNumber(edge.sidewalk, widthScale) or settings.sidewalkWidth
+			table.insert(edges, {
+				id = sanitizeId(edge.id, "e", index),
+				source = edge.source,
+				target = edge.target,
+				points = points,
+				width = RoadSampling.sanitizeRoadWidth((finiteNumber(edge.width) or RoadSampling.DEFAULT_ROAD_WIDTH) * widthScale),
+				sidewalk = math.max(edgeSidewalk, 0),
+				sidewalkLeft = scaleNumber(edge.sidewalkLeft, widthScale),
+				sidewalkRight = scaleNumber(edge.sidewalkRight, widthScale),
+				transitionSmoothness = scaleNumber(edge.transitionSmoothness, pointScale),
+				color = sanitizeColor(edge.color),
+				name = sanitizeName(edge.name, nil),
+			})
+		end
+	end
+
+	return {
+		schema = graph.schema or RoadGraphData.SCHEMA,
+		version = tonumber(graph.version) or RoadGraphData.VERSION,
+		planeY = planeY,
+		importPointScale = pointScale,
+		importWidthScale = widthScale,
+		settings = settings,
+		nodes = nodes,
+		edges = edges,
+		nodeLookup = nodeLookup,
+	}
 end
 
 function RoadGraphData.hasGraph(root)

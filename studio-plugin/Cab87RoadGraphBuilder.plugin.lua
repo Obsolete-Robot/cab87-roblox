@@ -24,7 +24,6 @@ local BAKED_SURFACES_NAME = "RoadGraphBakedSurfaces"
 local BAKED_COLLISION_NAME = "RoadGraphBakedCollision"
 local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
 local ASSETS_NAME = "RoadGraphAssets"
-local GRAPH_MESH_GENERATOR_NAME = "Cab87RoadGraphBuilder"
 local BAKED_MESH_GENERATOR_NAME = "Cab87RoadGraphBake"
 local MINIMAP_MESH_GENERATOR_NAME = "Cab87MinimapRoadMeshBake"
 local MINIMAP_MESH_VERSION = 2
@@ -391,6 +390,7 @@ local function makeSliderRow(labelText, defaultValue)
 	end)
 
 	function slider.getValue()
+		setValue(input.Text)
 		return currentValue
 	end
 
@@ -411,7 +411,6 @@ local importPointScaleSlider = makeSliderRow("Point Scale", importPointScale)
 local importWidthScaleSlider = makeSliderRow("Width Scale", importWidthScale)
 local mapIdInput = makeInputRow("Map ID", mapId)
 local importButton = makeButton("Import Graph JSON")
-local rebuildButton = makeButton("Rebuild Preview Mesh")
 local bakeAssetsButton = makeButton("Bake Runtime Geometry")
 local forkMapButton = makeButton("Fork As New Map")
 local clearAllButton = makeButton("Clear All Road Data")
@@ -521,6 +520,10 @@ local function refreshImportScales()
 	return true
 end
 
+local function scaleSummary()
+	return string.format("point scale=%sx, width scale=%sx", formatImportScale(importPointScale), formatImportScale(importWidthScale))
+end
+
 local function sanitizeMapId(value)
 	local text = tostring(value or "")
 	text = string.gsub(text, "^%s+", "")
@@ -590,6 +593,14 @@ local function createFolder(parent, name)
 	folder.Name = name
 	folder.Parent = parent
 	return folder
+end
+
+local function setBakeScaleAttributes(instance)
+	if not instance then
+		return
+	end
+	instance:SetAttribute("PointScale", importPointScale)
+	instance:SetAttribute("WidthScale", importWidthScale)
 end
 
 local function assetAttr(spec, suffix)
@@ -765,6 +776,7 @@ local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reas
 	bakedRoot:SetAttribute("BakedRoadGraphRuntime", true)
 	bakedRoot:SetAttribute("BakeMode", "primitive")
 	bakedRoot:SetAttribute("UploadReason", tostring(reason or "asset upload unavailable"))
+	setBakeScaleAttributes(bakedRoot)
 	bakedRoot.Parent = root
 
 	local result = RoadMeshBuilder.createClassifiedPrimitiveMeshes(bakedRoot, meshData, {
@@ -795,6 +807,7 @@ local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reas
 	local minimapResult, minimapErr = createBakedMinimapRoadMesh(bakedRoot, meshData, RoadMeshBuilder)
 
 	local assets = getOrCreateAssetsFolder(root)
+	setBakeScaleAttributes(assets)
 	assets:SetAttribute("Stale", false)
 	assets:SetAttribute("BakeMode", "primitive")
 	assets:SetAttribute("PrimitiveFallbackReason", tostring(reason or "asset upload unavailable"))
@@ -807,60 +820,23 @@ local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reas
 
 	clearPreviewMeshes(root)
 	setStatus(string.format(
-		"Asset upload API unavailable, so baked %s as saved WedgePart geometry: %d visible parts, %d collision parts, %d minimap parts. No package or mesh asset IDs were uploaded. Save the place; runtime will use this persistent fallback.%s",
+		"Asset upload API unavailable, so baked %s at %s as saved WedgePart geometry: %d visible parts, %d collision parts, %d minimap parts. No package or mesh asset IDs were uploaded. Save the place; runtime will use this persistent fallback.%s",
 		BAKED_RUNTIME_NAME,
+		scaleSummary(),
 		#result.visibleParts,
 		#result.collisionParts,
 		minimapResult and #minimapResult.visibleParts or 0,
 		minimapErr and ("\nMinimap warning: " .. tostring(minimapErr)) or ""
 	))
+	result.bakeMode = "primitive"
 	return result, nil
-end
-
-local function rebuildGraphMesh(options)
-	options = options or {}
-	local RoadGraphData, RoadGraphMesher, RoadMeshBuilder, moduleErr = getSharedModules()
-	if moduleErr then
-		setStatus(moduleErr)
-		return nil
-	end
-
-	local root = getOrCreateRoot()
-	local graph, graphErr = RoadGraphData.collectGraph(root)
-	if not graph then
-		setStatus("No valid RoadGraph found: " .. tostring(graphErr or "import graph JSON first"))
-		return nil
-	end
-
-	if options.markBakedStale == true then
-		markBakedAssetsStale(root, "preview rebuilt")
-	end
-
-	local meshData = RoadGraphMesher.buildNetworkMesh(graph, graph.settings)
-	local result = RoadMeshBuilder.createClassifiedMeshes(root, meshData, {
-		meshFolderName = ROAD_GRAPH_SURFACES_NAME,
-		collisionFolderName = ROAD_GRAPH_COLLISION_NAME,
-		generatedBy = GRAPH_MESH_GENERATOR_NAME,
-		collisionThickness = 0.2,
-		collisionSurfaceOffset = 0,
-	})
-
-	setStatus(string.format(
-		"Built graph mesh: %d road tris, %d sidewalk tris, %d crosswalk tris, %d visible parts, %d collision parts.%s",
-		#(meshData.roadTriangles or {}),
-		#(meshData.sidewalkTriangles or {}),
-		#(meshData.crosswalkTriangles or {}),
-		#result.visibleParts,
-		#result.collisionParts,
-		#result.errors > 0 and ("\nSkipped: " .. table.concat(result.errors, " | ")) or ""
-	))
-	return result
 end
 
 local function bakeMeshAssets()
 	if not refreshMapId() then
 		return nil
 	end
+	refreshImportScales()
 
 	local RoadGraphData, RoadGraphMesher, RoadMeshBuilder, moduleErr = getSharedModules()
 	if moduleErr then
@@ -875,8 +851,18 @@ local function bakeMeshAssets()
 		return nil
 	end
 
-	local meshData = RoadGraphMesher.buildNetworkMesh(graph, graph.settings)
+	local scaledGraph = RoadGraphData.scaleGraph(graph, {
+		pointScale = importPointScale,
+		widthScale = importWidthScale,
+	})
+	if not scaledGraph then
+		setStatus("Bake failed: could not apply import scale settings.")
+		return nil
+	end
+
+	local meshData = RoadGraphMesher.buildNetworkMesh(scaledGraph, scaledGraph.settings)
 	local assets = getOrCreateAssetsFolder(root)
+	setBakeScaleAttributes(assets)
 	local oldBakedRuntime = root:FindFirstChild(BAKED_RUNTIME_NAME)
 	local oldBakedSurfaces = root:FindFirstChild(BAKED_SURFACES_NAME)
 	local oldBakedCollision = root:FindFirstChild(BAKED_COLLISION_NAME)
@@ -895,6 +881,8 @@ local function bakeMeshAssets()
 	end
 	local bakedSurfaces = createFolder(root, BAKED_SURFACES_NAME)
 	local bakedCollision = createFolder(root, BAKED_COLLISION_NAME)
+	setBakeScaleAttributes(bakedSurfaces)
+	setBakeScaleAttributes(bakedCollision)
 
 	local created = 0
 	local updated = 0
@@ -978,8 +966,9 @@ local function bakeMeshAssets()
 	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
 
 	setStatus(string.format(
-		"Baked map %s: %d mesh assets created, %d updated, %d asset-backed parts, %d minimap parts.%s",
+		"Baked map %s at %s: %d mesh assets created, %d updated, %d asset-backed parts, %d minimap parts.%s",
 		mapId,
+		scaleSummary(),
 		created,
 		updated,
 		bakedParts,
@@ -992,83 +981,11 @@ local function bakeMeshAssets()
 		updated = updated,
 		bakedParts = bakedParts,
 		minimapParts = minimapResult and #minimapResult.visibleParts or 0,
+		pointScale = importPointScale,
+		widthScale = importWidthScale,
+		bakeMode = "meshAsset",
 		errors = errors,
 	}
-end
-
-local function countBaseParts(container)
-	local count = 0
-	if not container then
-		return count
-	end
-
-	for _, descendant in ipairs(container:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			count += 1
-		end
-	end
-	return count
-end
-
-local function hasGeneratedGraphMesh(container)
-	if not container then
-		return false
-	end
-
-	for _, descendant in ipairs(container:GetDescendants()) do
-		if descendant:IsA("MeshPart") and descendant:GetAttribute("GeneratedBy") == GRAPH_MESH_GENERATOR_NAME then
-			return true
-		end
-	end
-	return false
-end
-
-local function shouldRestoreGraphMesh(root)
-	if not root then
-		return false
-	end
-
-	local RoadGraphData, _RoadGraphMesher, _RoadMeshBuilder, moduleErr = getSharedModules()
-	if moduleErr or not RoadGraphData.hasGraph(root) then
-		return false
-	end
-
-	local bakedSurfaces = root:FindFirstChild(BAKED_SURFACES_NAME)
-	local bakedCollision = root:FindFirstChild(BAKED_COLLISION_NAME)
-	local bakedRuntime = root:FindFirstChild(BAKED_RUNTIME_NAME)
-	local bakedRuntimeSurfaces = bakedRuntime and bakedRuntime:FindFirstChild(BAKED_SURFACES_NAME)
-	local bakedRuntimeCollision = bakedRuntime and bakedRuntime:FindFirstChild(BAKED_COLLISION_NAME)
-	if countBaseParts(bakedRuntimeSurfaces) > 0 and countBaseParts(bakedRuntimeCollision) > 0 then
-		return false
-	end
-	if countBaseParts(bakedSurfaces) > 0 and countBaseParts(bakedCollision) > 0 then
-		return false
-	end
-
-	local surfaces = root:FindFirstChild(ROAD_GRAPH_SURFACES_NAME)
-	local collision = root:FindFirstChild(ROAD_GRAPH_COLLISION_NAME)
-	return countBaseParts(surfaces) == 0
-		or countBaseParts(collision) == 0
-		or hasGeneratedGraphMesh(surfaces)
-		or hasGeneratedGraphMesh(collision)
-end
-
-local function restoreGraphMeshIfNeeded()
-	local root = Workspace:FindFirstChild(ROOT_NAME)
-	if not shouldRestoreGraphMesh(root) then
-		return
-	end
-
-	local ok, resultOrErr = pcall(rebuildGraphMesh)
-	if ok and resultOrErr then
-		setStatus(string.format(
-			"Restored graph mesh from saved RoadGraph: %d visible parts, %d collision parts.",
-			#resultOrErr.visibleParts,
-			#resultOrErr.collisionParts
-		))
-	else
-		setStatus("Graph mesh restore failed: " .. tostring(resultOrErr))
-	end
 end
 
 local function forkAsNewMap()
@@ -1095,20 +1012,7 @@ local function clearAuthoredRoadEditorRoot()
 		root:SetAttribute(attributeName, nil)
 	end
 	Selection:Set({ root })
-	setStatus("Cleared all authored road data. Import graph or curve JSON and rebuild when ready.")
-end
-
-local autoRestoreScheduled = false
-
-local function scheduleGraphMeshRestore()
-	if autoRestoreScheduled then
-		return
-	end
-	autoRestoreScheduled = true
-	task.defer(function()
-		restoreGraphMeshIfNeeded()
-		autoRestoreScheduled = false
-	end)
+	setStatus("Cleared all authored road data. Import graph or curve JSON and bake when ready.")
 end
 
 local function importGraphJson()
@@ -1143,32 +1047,37 @@ local function importGraphJson()
 
 	local graph, parseErr = RoadGraphData.decodeJson(contents, {
 		planeY = importPlaneY,
-		pointScale = importPointScale,
-		widthScale = importWidthScale,
 	})
 	if not graph then
 		setStatus("Graph import failed: " .. tostring(parseErr))
 		return
 	end
+	graph.importPointScale = importPointScale
+	graph.importWidthScale = importWidthScale
 
 	ChangeHistoryService:SetWaypoint("cab87 road graph before import")
 	local root = getOrCreateRoot()
 	RoadGraphData.writeGraph(root, graph)
 	markBakedAssetsStale(root, "graph imported")
-	local okBuild, buildErr = pcall(rebuildGraphMesh)
+	local okBake, bakeResultOrErr = pcall(bakeMeshAssets)
 	ChangeHistoryService:SetWaypoint("cab87 road graph after import")
-	if not okBuild then
-		setStatus("Imported graph, but mesh rebuild failed: " .. tostring(buildErr))
+	if not okBake then
+		setStatus("Imported graph, but runtime bake failed: " .. tostring(bakeResultOrErr))
+		return
+	end
+	if not bakeResultOrErr then
+		return
+	end
+	if bakeResultOrErr.bakeMode == "primitive" then
 		return
 	end
 
 	setStatus(string.format(
-		"Imported graph: %d nodes, %d edges at Y=%s, point scale=%sx, width scale=%sx.",
+		"Imported and baked graph: %d nodes, %d edges at Y=%s, %s.",
 		#graph.nodes,
 		#graph.edges,
 		tostring(importPlaneY),
-		formatImportScale(importPointScale),
-		formatImportScale(importWidthScale)
+		scaleSummary()
 	))
 end
 
@@ -1265,24 +1174,11 @@ end)
 
 widget:GetPropertyChangedSignal("Enabled"):Connect(function()
 	toggleButton:SetActive(widget.Enabled)
-	if widget.Enabled then
-		scheduleGraphMeshRestore()
-	end
 end)
 
 importPlaneInput.FocusLost:Connect(refreshImportPlane)
 mapIdInput.FocusLost:Connect(refreshMapId)
 importButton.MouseButton1Click:Connect(importGraphJson)
-rebuildButton.MouseButton1Click:Connect(function()
-	ChangeHistoryService:SetWaypoint("cab87 road graph before rebuild")
-	local ok, err = pcall(function()
-		return rebuildGraphMesh({ markBakedStale = true })
-	end)
-	ChangeHistoryService:SetWaypoint("cab87 road graph after rebuild")
-	if not ok then
-		setStatus("Graph rebuild failed: " .. tostring(err))
-	end
-end)
 bakeAssetsButton.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 road graph before bake")
 	local ok, err = pcall(bakeMeshAssets)
@@ -1340,5 +1236,3 @@ end)
 selectPlayerSpawnButton.MouseButton1Click:Connect(function()
 	selectMarker(PLAYER_SPAWN_NAME)
 end)
-
-scheduleGraphMeshRestore()
