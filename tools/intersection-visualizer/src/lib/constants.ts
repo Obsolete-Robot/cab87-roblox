@@ -3,9 +3,16 @@ export const ROAD_NETWORK_SCHEMA = 'cab87-road-network';
 export const ROAD_NETWORK_VERSION = 1;
 export const DEFAULT_CHAMFER_ANGLE = 70;
 export const DEFAULT_MESH_RESOLUTION = 20;
+export const DEFAULT_LANE_WIDTH = 30;
 
 export function sanitizeMeshResolution(value: unknown): number {
   const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
   if (!Number.isFinite(parsed)) return DEFAULT_MESH_RESOLUTION;
   return Math.max(5, Math.min(100, Math.round(parsed)));
+}
+
+export function sanitizeLaneWidth(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_LANE_WIDTH;
+  return Math.max(10, Math.min(100, Math.round(parsed)));
 }

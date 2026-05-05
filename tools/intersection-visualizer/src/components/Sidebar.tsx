@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2 } from 'lucide-react';
 import { Node, Edge } from '../lib/types';
-import { sanitizeMeshResolution } from '../lib/constants';
+import { sanitizeLaneWidth, sanitizeMeshResolution } from '../lib/constants';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -198,7 +198,7 @@ export default function Sidebar({
                   min="10"
                   max="100"
                   value={laneWidth}
-                  onChange={(e) => setLaneWidth(parseInt(e.target.value))}
+                  onChange={(e) => setLaneWidth(sanitizeLaneWidth(e.target.value))}
                   className="flex-grow min-w-0"
                 />
                 <input
@@ -206,7 +206,7 @@ export default function Sidebar({
                   min="10"
                   max="100"
                   value={laneWidth}
-                  onChange={(e) => setLaneWidth(parseInt(e.target.value) || 30)}
+                  onChange={(e) => setLaneWidth(sanitizeLaneWidth(e.target.value))}
                   className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
                 />
               </div>

@@ -9,7 +9,8 @@ import Header from './components/Header';
 import { drawNetwork2D } from './lib/render2d';
 import {
   COLORS, ROAD_NETWORK_SCHEMA, ROAD_NETWORK_VERSION,
-  DEFAULT_CHAMFER_ANGLE, DEFAULT_MESH_RESOLUTION, sanitizeMeshResolution
+  DEFAULT_CHAMFER_ANGLE, DEFAULT_MESH_RESOLUTION, DEFAULT_LANE_WIDTH,
+  sanitizeMeshResolution, sanitizeLaneWidth
 } from './lib/constants';
 
 export default function App() {
@@ -63,7 +64,7 @@ export default function App() {
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
   const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
-  const [laneWidth, setLaneWidth] = useState(30);
+  const [laneWidth, setLaneWidth] = useState(DEFAULT_LANE_WIDTH);
   const [is3DMode, setIs3DMode] = useState(false);
   const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
   const [softSelectionRadius, setSoftSelectionRadius] = useState(200);
@@ -117,9 +118,9 @@ export default function App() {
             setMeshResolution(DEFAULT_MESH_RESOLUTION);
           }
           if (typeof data.settings?.laneWidth === 'number') {
-            setLaneWidth(data.settings.laneWidth);
+            setLaneWidth(sanitizeLaneWidth(data.settings.laneWidth));
           } else {
-            setLaneWidth(30);
+            setLaneWidth(DEFAULT_LANE_WIDTH);
           }
           setSelectedEdges([]);
           setSelectedNode(null);

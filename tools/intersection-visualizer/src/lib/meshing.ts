@@ -2,6 +2,7 @@ import { Point, Node, Edge, MeshData } from "./types";
 import { getDir } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
+import { DEFAULT_LANE_WIDTH, sanitizeLaneWidth } from "./constants";
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
   const corners = nodeCorners.get(node.id);
@@ -11,7 +12,8 @@ export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource:
   return [bases[0], bases[1]];
 }
 
-export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20, laneWidth: number = 30): MeshData {
+export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20, laneWidth: number = DEFAULT_LANE_WIDTH): MeshData {
+  const safeLaneWidth = sanitizeLaneWidth(laneWidth);
   const mesh: MeshData = {
     vertices: [],
     triangles: [],
@@ -279,11 +281,11 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
          if (hasCrosswalk(edge.id, true, nodes, edges)) {
            mesh.crosswalks.push({ edgeId: edge.id, nodeId: sourceNode.id, polygon: [bL, bR, new_bR, new_bL] });
+           mesh.crosswalkTriangles.push([bL, bR, new_bR], [bL, new_bR, new_bL]);
          }
          mesh.sidewalkPolygons.push([obL, bL, new_bL, new_obL]);
          mesh.sidewalkPolygons.push([bR, obR, new_obR, new_bR]);
 
-         mesh.crosswalkTriangles.push([bL, bR, new_bR], [bL, new_bR, new_bL]);
          mesh.sidewalkTriangles.push([obL, bL, new_bL], [obL, new_bL, new_obL]);
          mesh.sidewalkTriangles.push([bR, obR, new_obR], [bR, new_obR, new_bR]);
          mesh.triangles.push([bL, bR, new_bR], [bL, new_bR, new_bL]);
@@ -319,11 +321,11 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
              if (hasCrosswalk(edge.id, false, nodes, edges)) {
                mesh.crosswalks.push({ edgeId: edge.id, nodeId: targetNode!.id, polygon: [tbL, tbR, new_tbR, new_tbL] });
+               mesh.crosswalkTriangles.push([tbL, tbR, new_tbR], [tbL, new_tbR, new_tbL]);
              }
              mesh.sidewalkPolygons.push([otbL, tbL, new_tbL, new_otbL]);
              mesh.sidewalkPolygons.push([tbR, otbR, new_otbR, new_tbR]);
 
-             mesh.crosswalkTriangles.push([tbL, tbR, new_tbR], [tbL, new_tbR, new_tbL]);
              mesh.sidewalkTriangles.push([otbL, tbL, new_tbL], [otbL, new_tbL, new_otbL]);
              mesh.sidewalkTriangles.push([tbR, otbR, new_otbR], [tbR, new_otbR, new_tbR]);
              mesh.triangles.push([tbL, tbR, new_tbR], [tbL, new_tbR, new_tbL]);
@@ -373,11 +375,11 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        const isOneWay = !!edge.oneWay;
 
        if (isOneWay) {
-           numLanesForward = Math.max(1, Math.floor(edge.width / laneWidth));
+           numLanesForward = Math.max(1, Math.floor(edge.width / safeLaneWidth));
            numLanesBackward = 0;
        } else {
-           numLanesForward = Math.max(1, Math.floor((edge.width / 2) / laneWidth));
-           numLanesBackward = Math.max(1, Math.floor((edge.width / 2) / laneWidth));
+           numLanesForward = Math.max(1, Math.floor((edge.width / 2) / safeLaneWidth));
+           numLanesBackward = Math.max(1, Math.floor((edge.width / 2) / safeLaneWidth));
        }
 
        const laneCenters: { offset: number, dir: number }[] = [];
@@ -385,23 +387,23 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
        if (isOneWay) {
            const N = numLanesForward;
-           const startOffset = - (N - 1) * laneWidth / 2;
+           const startOffset = - (N - 1) * safeLaneWidth / 2;
            for (let i = 0; i < N; i++) {
-               laneCenters.push({ offset: startOffset + i * laneWidth, dir: 1 });
+               laneCenters.push({ offset: startOffset + i * safeLaneWidth, dir: 1 });
            }
            for (let i = 0; i < N - 1; i++) {
-               laneDividers.push({ offset: startOffset + i * laneWidth + laneWidth / 2, type: 'dashed' });
+               laneDividers.push({ offset: startOffset + i * safeLaneWidth + safeLaneWidth / 2, type: 'dashed' });
            }
        } else {
            const N = numLanesForward;
            for (let i = 0; i < N; i++) {
-               laneCenters.push({ offset: laneWidth / 2 + i * laneWidth, dir: 1 });
-               laneCenters.push({ offset: - (laneWidth / 2 + i * laneWidth), dir: -1 });
+               laneCenters.push({ offset: safeLaneWidth / 2 + i * safeLaneWidth, dir: 1 });
+               laneCenters.push({ offset: - (safeLaneWidth / 2 + i * safeLaneWidth), dir: -1 });
            }
            laneDividers.push({ offset: 0, type: 'double_yellow' });
            for (let i = 1; i < N; i++) {
-               laneDividers.push({ offset: i * laneWidth, type: 'dashed' });
-               laneDividers.push({ offset: - i * laneWidth, type: 'dashed' });
+               laneDividers.push({ offset: i * safeLaneWidth, type: 'dashed' });
+               laneDividers.push({ offset: - i * safeLaneWidth, type: 'dashed' });
            }
        }
 
