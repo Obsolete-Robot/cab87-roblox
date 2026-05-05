@@ -1,6 +1,9 @@
 export type Point = {
   x: number;
   y: number;
+  z?: number;
+  u?: number;
+  v?: number;
   linked?: boolean;
   linear?: boolean;
   curveIndex?: number;
@@ -26,14 +29,23 @@ export type Edge = {
   transitionSmoothness?: number;
   color: string;
   name?: string;
+  oneWay?: boolean;
 };
 
 export type MeshData = {
   vertices: Point[];
   triangles: Triangle[];
+  roadTriangles: Triangle[];
+  hubTriangles: Triangle[];
+  sidewalkTriangles: Triangle[];
+  crosswalkTriangles: Triangle[];
   hubs: { id: string; polygon: Point[]; corners: { points: Point[]; sidewalkWidth: number }[]; outerPolygon: Point[]; outerCorners: Point[][] }[];
   roadPolygons: { id: string; polygon: Point[]; leftCurve: Point[]; rightCurve: Point[]; outerPolygon: Point[]; outerLeftCurve: Point[]; outerRightCurve: Point[]; sidewalkWidth: number }[];
   crosswalks: { edgeId: string; nodeId: string; polygon: Point[] }[];
   sidewalkPolygons: Point[][];
-  centerLines: Point[][];
+  dashedLines: Point[][];
+  solidYellowLines: Point[][];
+  dashedLineTriangles: Triangle[];
+  solidLineTriangles: Triangle[];
+  laneArrows: { position: Point; dir: Point }[];
 };

@@ -11,6 +11,7 @@ for (let angle = 350; angle <= 350; angle += 10) {
 
   const center = { x: 0, y: 0 };
 
+  // Custom manual calc for t and ot
   const cross = dir1.x * dir2.y - dir1.y * dir2.x;
   const right1 = { x: -dir1.y, y: dir1.x };
   const left2 = { x: dir2.y, y: -dir2.x };

@@ -16,6 +16,7 @@ RoadGraphData.EDGE_POINTS_NAME = "Points"
 local DEFAULT_CHAMFER_ANGLE_DEG = 70
 local DEFAULT_SIDEWALK_WIDTH = 12
 local DEFAULT_MESH_RESOLUTION = 20
+local DEFAULT_IMPORT_SCALE = 1
 
 local function finiteNumber(value)
 	local number = tonumber(value)
@@ -46,30 +47,56 @@ local function sanitizeColor(value)
 	return nil
 end
 
-local function graphPointToVector(point, planeY)
+local function sanitizeScale(value)
+	local number = finiteNumber(value) or DEFAULT_IMPORT_SCALE
+	return math.max(number, 0.001)
+end
+
+local function scaleNumber(value, scale)
+	local number = finiteNumber(value)
+	if number then
+		return number * scale
+	end
+	return nil
+end
+
+local function graphPointToVector(point, planeY, pointScale)
 	if type(point) ~= "table" then
 		return nil
 	end
 
+	local scale = sanitizeScale(pointScale)
 	local x = finiteNumber(point.x)
-	local z = finiteNumber(point.y)
-	if not z then
-		z = finiteNumber(point.z)
+	local horizontalZ = finiteNumber(point.y)
+	local elevation = finiteNumber(point.elevation)
+	if horizontalZ then
+		if elevation == nil then
+			elevation = finiteNumber(point.z) or 0
+		end
+	else
+		horizontalZ = finiteNumber(point.z)
+		elevation = elevation or 0
 	end
-	if not (x and z) then
+	if not (x and horizontalZ) then
 		return nil
 	end
 
-	local y = finiteNumber(point.elevation) or 0
-	return Vector3.new(x, (finiteNumber(planeY) or 0) + y, z)
+	return Vector3.new(x * scale, (finiteNumber(planeY) or 0) + elevation * scale, horizontalZ * scale)
 end
 
 local function vectorToGraphPoint(position, planeY)
+	local elevation = position.Y - (finiteNumber(planeY) or 0)
 	return {
 		x = position.X,
 		y = position.Z,
-		elevation = position.Y - (finiteNumber(planeY) or 0),
+		z = elevation,
+		elevation = elevation,
 	}
+end
+
+local function scaleVectorFromPlane(position, planeY, pointScale)
+	local baseY = finiteNumber(planeY) or 0
+	return Vector3.new(position.X * pointScale, baseY + (position.Y - baseY) * pointScale, position.Z * pointScale)
 end
 
 local function childFolders(parent, name)
@@ -156,6 +183,8 @@ function RoadGraphData.normalizePayload(payload, options)
 	end
 
 	local planeY = finiteNumber(options.planeY) or finiteNumber(payload.importPlaneY) or 0
+	local pointScale = sanitizeScale(options.pointScale)
+	local widthScale = sanitizeScale(options.widthScale)
 	local settings = RoadGraphData.defaultSettings(options.config)
 	if type(payload.settings) == "table" then
 		settings.chamferAngleDeg = finiteNumber(payload.settings.chamferAngleDeg) or settings.chamferAngleDeg
@@ -223,14 +252,100 @@ function RoadGraphData.normalizePayload(payload, options)
 		return nil, "Road graph did not include any valid edges"
 	end
 
-	return {
+	local graph = {
 		schema = RoadGraphData.SCHEMA,
 		version = RoadGraphData.VERSION,
 		planeY = planeY,
+		importPointScale = pointScale,
+		importWidthScale = widthScale,
 		settings = settings,
 		nodes = normalizedNodes,
 		edges = normalizedEdges,
-	}, nil
+	}
+
+	if pointScale ~= DEFAULT_IMPORT_SCALE or widthScale ~= DEFAULT_IMPORT_SCALE then
+		return RoadGraphData.scaleGraph(graph, {
+			pointScale = pointScale,
+			widthScale = widthScale,
+		}), nil
+	end
+
+	return graph, nil
+end
+
+function RoadGraphData.scaleGraph(graph, options)
+	options = options or {}
+	if type(graph) ~= "table" then
+		return nil
+	end
+
+	local pointScale = sanitizeScale(options.pointScale or graph.importPointScale)
+	local widthScale = sanitizeScale(options.widthScale or graph.importWidthScale)
+	local planeY = finiteNumber(graph.planeY) or 0
+	local settings = RoadGraphData.defaultSettings(options.config)
+	if type(graph.settings) == "table" then
+		settings.chamferAngleDeg = finiteNumber(graph.settings.chamferAngleDeg) or settings.chamferAngleDeg
+		settings.crosswalkWidth = finiteNumber(graph.settings.crosswalkWidth) or settings.crosswalkWidth
+		settings.sidewalkWidth = finiteNumber(graph.settings.sidewalkWidth) or settings.sidewalkWidth
+		settings.meshResolution = finiteNumber(graph.settings.meshResolution)
+			or finiteNumber(graph.settings.splineSegments)
+			or settings.meshResolution
+	end
+	settings.crosswalkWidth *= widthScale
+	settings.sidewalkWidth *= widthScale
+
+	local nodes = {}
+	local nodeLookup = {}
+	for index, node in ipairs(graph.nodes or {}) do
+		if type(node) == "table" and typeof(node.point) == "Vector3" then
+			local nodeId = sanitizeId(node.id, "n", index)
+			local scaledNode = {
+				id = nodeId,
+				point = scaleVectorFromPlane(node.point, planeY, pointScale),
+			}
+			table.insert(nodes, scaledNode)
+			nodeLookup[nodeId] = scaledNode
+		end
+	end
+
+	local edges = {}
+	for index, edge in ipairs(graph.edges or {}) do
+		if type(edge) == "table" then
+			local points = {}
+			for _, point in ipairs(edge.points or {}) do
+				if typeof(point) == "Vector3" then
+					table.insert(points, scaleVectorFromPlane(point, planeY, pointScale))
+				end
+			end
+
+			local edgeSidewalk = scaleNumber(edge.sidewalk, widthScale) or settings.sidewalkWidth
+			table.insert(edges, {
+				id = sanitizeId(edge.id, "e", index),
+				source = edge.source,
+				target = edge.target,
+				points = points,
+				width = RoadSampling.sanitizeRoadWidth((finiteNumber(edge.width) or RoadSampling.DEFAULT_ROAD_WIDTH) * widthScale),
+				sidewalk = math.max(edgeSidewalk, 0),
+				sidewalkLeft = scaleNumber(edge.sidewalkLeft, widthScale),
+				sidewalkRight = scaleNumber(edge.sidewalkRight, widthScale),
+				transitionSmoothness = scaleNumber(edge.transitionSmoothness, pointScale),
+				color = sanitizeColor(edge.color),
+				name = sanitizeName(edge.name, nil),
+			})
+		end
+	end
+
+	return {
+		schema = graph.schema or RoadGraphData.SCHEMA,
+		version = tonumber(graph.version) or RoadGraphData.VERSION,
+		planeY = planeY,
+		importPointScale = pointScale,
+		importWidthScale = widthScale,
+		settings = settings,
+		nodes = nodes,
+		edges = edges,
+		nodeLookup = nodeLookup,
+	}
 end
 
 function RoadGraphData.hasGraph(root)
@@ -264,6 +379,8 @@ function RoadGraphData.writeGraph(root, graph, name)
 	graphFolder:SetAttribute("Schema", graph.schema or RoadGraphData.SCHEMA)
 	graphFolder:SetAttribute("Version", tonumber(graph.version) or RoadGraphData.VERSION)
 	graphFolder:SetAttribute("PlaneY", finiteNumber(graph.planeY) or 0)
+	graphFolder:SetAttribute("ImportPointScale", sanitizeScale(graph.importPointScale))
+	graphFolder:SetAttribute("ImportWidthScale", sanitizeScale(graph.importWidthScale))
 	graphFolder:SetAttribute("ChamferAngleDeg", finiteNumber(graph.settings and graph.settings.chamferAngleDeg) or DEFAULT_CHAMFER_ANGLE_DEG)
 	graphFolder:SetAttribute("CrosswalkWidth", finiteNumber(graph.settings and graph.settings.crosswalkWidth) or 14)
 	graphFolder:SetAttribute("DefaultSidewalkWidth", finiteNumber(graph.settings and graph.settings.sidewalkWidth) or DEFAULT_SIDEWALK_WIDTH)
@@ -403,6 +520,8 @@ function RoadGraphData.collectGraph(root, config)
 		schema = graphFolder:GetAttribute("Schema") or RoadGraphData.SCHEMA,
 		version = tonumber(graphFolder:GetAttribute("Version")) or RoadGraphData.VERSION,
 		planeY = finiteNumber(graphFolder:GetAttribute("PlaneY")) or 0,
+		importPointScale = sanitizeScale(graphFolder:GetAttribute("ImportPointScale")),
+		importWidthScale = sanitizeScale(graphFolder:GetAttribute("ImportWidthScale")),
 		settings = settings,
 		nodes = nodes,
 		edges = edges,

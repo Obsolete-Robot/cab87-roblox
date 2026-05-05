@@ -7,6 +7,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Selection = game:GetService("Selection")
 local StudioService = game:GetService("StudioService")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local ROOT_NAME = "Cab87RoadEditor"
@@ -23,7 +24,6 @@ local BAKED_SURFACES_NAME = "RoadGraphBakedSurfaces"
 local BAKED_COLLISION_NAME = "RoadGraphBakedCollision"
 local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
 local ASSETS_NAME = "RoadGraphAssets"
-local GRAPH_MESH_GENERATOR_NAME = "Cab87RoadGraphBuilder"
 local BAKED_MESH_GENERATOR_NAME = "Cab87RoadGraphBake"
 local MINIMAP_MESH_GENERATOR_NAME = "Cab87MinimapRoadMeshBake"
 local MINIMAP_MESH_VERSION = 2
@@ -31,8 +31,14 @@ local MINIMAP_MESH_CHUNK_STUDS = 1024
 local MINIMAP_MESH_MAX_PARTS = 256
 local IMPORT_FILE_FILTER = { "json" }
 local IMPORT_PLANE_Y_SETTING = "cab87_road_graph_import_plane_y"
+local IMPORT_POINT_SCALE_SETTING = "cab87_road_graph_import_point_scale"
+local IMPORT_WIDTH_SCALE_SETTING = "cab87_road_graph_import_width_scale"
 local MAP_ID_SETTING = "cab87_road_graph_map_id"
 local DEFAULT_MAP_ID = "cab87_map"
+local DEFAULT_IMPORT_SCALE = 1
+local MIN_IMPORT_SCALE = 0.1
+local MAX_IMPORT_SCALE = 4
+local IMPORT_SCALE_STEP = 0.05
 
 local MARKER_DESCRIPTIONS = {
 	CabCompany = "Cab spawn marker",
@@ -257,12 +263,154 @@ local function makeInputRow(labelText, defaultText)
 	return input
 end
 
+local function sanitizeImportScale(value)
+	local text = tostring(value or "")
+	text = string.gsub(text, "[xX]", "")
+	local number = tonumber(text) or DEFAULT_IMPORT_SCALE
+	local stepped = math.floor((math.clamp(number, MIN_IMPORT_SCALE, MAX_IMPORT_SCALE) - MIN_IMPORT_SCALE) / IMPORT_SCALE_STEP + 0.5)
+		* IMPORT_SCALE_STEP
+		+ MIN_IMPORT_SCALE
+	return math.clamp(stepped, MIN_IMPORT_SCALE, MAX_IMPORT_SCALE)
+end
+
+local function formatImportScale(value)
+	local text = string.format("%.2f", sanitizeImportScale(value))
+	text = string.gsub(text, "0+$", "")
+	text = string.gsub(text, "%.$", "")
+	return text
+end
+
+local function makeSliderRow(labelText, defaultValue)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 52)
+	row.BackgroundTransparency = 1
+	row.Parent = rootFrame
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(0, 90, 0, 24)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 12
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextColor3 = Color3.fromRGB(206, 212, 218)
+	label.Text = labelText
+	label.Parent = row
+
+	local input = Instance.new("TextBox")
+	input.Position = UDim2.new(1, -58, 0, 0)
+	input.Size = UDim2.new(0, 58, 0, 24)
+	input.BackgroundColor3 = Color3.fromRGB(35, 39, 46)
+	input.BorderSizePixel = 0
+	input.ClearTextOnFocus = false
+	input.Font = Enum.Font.Gotham
+	input.TextSize = 12
+	input.TextColor3 = Color3.fromRGB(245, 245, 245)
+	input.Parent = row
+
+	local inputCorner = Instance.new("UICorner")
+	inputCorner.CornerRadius = UDim.new(0, 6)
+	inputCorner.Parent = input
+
+	local track = Instance.new("Frame")
+	track.Position = UDim2.new(0, 98, 0, 34)
+	track.Size = UDim2.new(1, -106, 0, 8)
+	track.BackgroundColor3 = Color3.fromRGB(35, 39, 46)
+	track.BorderSizePixel = 0
+	track.Parent = row
+
+	local trackCorner = Instance.new("UICorner")
+	trackCorner.CornerRadius = UDim.new(1, 0)
+	trackCorner.Parent = track
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.new(0, 0, 1, 0)
+	fill.BackgroundColor3 = Color3.fromRGB(255, 190, 86)
+	fill.BorderSizePixel = 0
+	fill.Parent = track
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(1, 0)
+	fillCorner.Parent = fill
+
+	local knob = Instance.new("TextButton")
+	knob.AnchorPoint = Vector2.new(0.5, 0.5)
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.BackgroundColor3 = Color3.fromRGB(255, 230, 160)
+	knob.BorderSizePixel = 0
+	knob.Text = ""
+	knob.Parent = track
+
+	local knobCorner = Instance.new("UICorner")
+	knobCorner.CornerRadius = UDim.new(1, 0)
+	knobCorner.Parent = knob
+
+	local slider = {}
+	local currentValue = sanitizeImportScale(defaultValue)
+
+	local function ratioFor(value)
+		return (sanitizeImportScale(value) - MIN_IMPORT_SCALE) / (MAX_IMPORT_SCALE - MIN_IMPORT_SCALE)
+	end
+
+	local function setValue(value)
+		currentValue = sanitizeImportScale(value)
+		local ratio = ratioFor(currentValue)
+		input.Text = formatImportScale(currentValue)
+		fill.Size = UDim2.new(ratio, 0, 1, 0)
+		knob.Position = UDim2.new(ratio, 0, 0.5, 0)
+	end
+
+	local function setFromInputPosition(inputObject)
+		local width = math.max(track.AbsoluteSize.X, 1)
+		local ratio = math.clamp((inputObject.Position.X - track.AbsolutePosition.X) / width, 0, 1)
+		setValue(MIN_IMPORT_SCALE + ratio * (MAX_IMPORT_SCALE - MIN_IMPORT_SCALE))
+	end
+
+	local dragging = false
+	local function beginDrag(inputObject)
+		if inputObject.UserInputType == Enum.UserInputType.MouseButton1 or inputObject.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			setFromInputPosition(inputObject)
+		end
+	end
+
+	track.InputBegan:Connect(beginDrag)
+	knob.InputBegan:Connect(beginDrag)
+	UserInputService.InputChanged:Connect(function(inputObject)
+		if dragging and (inputObject.UserInputType == Enum.UserInputType.MouseMovement or inputObject.UserInputType == Enum.UserInputType.Touch) then
+			setFromInputPosition(inputObject)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(inputObject)
+		if inputObject.UserInputType == Enum.UserInputType.MouseButton1 or inputObject.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	input.FocusLost:Connect(function()
+		setValue(input.Text)
+	end)
+
+	function slider.getValue()
+		setValue(input.Text)
+		return currentValue
+	end
+
+	function slider.setValue(value)
+		setValue(value)
+	end
+
+	setValue(currentValue)
+	return slider
+end
+
 local importPlaneY = tonumber(plugin:GetSetting(IMPORT_PLANE_Y_SETTING)) or 0
+local importPointScale = sanitizeImportScale(plugin:GetSetting(IMPORT_POINT_SCALE_SETTING))
+local importWidthScale = sanitizeImportScale(plugin:GetSetting(IMPORT_WIDTH_SCALE_SETTING))
 local mapId = tostring(plugin:GetSetting(MAP_ID_SETTING) or DEFAULT_MAP_ID)
 local importPlaneInput = makeInputRow("Import Y", tostring(importPlaneY))
+local importPointScaleSlider = makeSliderRow("Point Scale", importPointScale)
+local importWidthScaleSlider = makeSliderRow("Width Scale", importWidthScale)
 local mapIdInput = makeInputRow("Map ID", mapId)
 local importButton = makeButton("Import Graph JSON")
-local rebuildButton = makeButton("Rebuild Preview Mesh")
 local bakeAssetsButton = makeButton("Bake Runtime Geometry")
 local forkMapButton = makeButton("Fork As New Map")
 local clearAllButton = makeButton("Clear All Road Data")
@@ -362,6 +510,20 @@ local function refreshImportPlane()
 	return true
 end
 
+local function refreshImportScales()
+	importPointScale = sanitizeImportScale(importPointScaleSlider.getValue())
+	importWidthScale = sanitizeImportScale(importWidthScaleSlider.getValue())
+	importPointScaleSlider.setValue(importPointScale)
+	importWidthScaleSlider.setValue(importWidthScale)
+	plugin:SetSetting(IMPORT_POINT_SCALE_SETTING, importPointScale)
+	plugin:SetSetting(IMPORT_WIDTH_SCALE_SETTING, importWidthScale)
+	return true
+end
+
+local function scaleSummary()
+	return string.format("point scale=%sx, width scale=%sx", formatImportScale(importPointScale), formatImportScale(importWidthScale))
+end
+
 local function sanitizeMapId(value)
 	local text = tostring(value or "")
 	text = string.gsub(text, "^%s+", "")
@@ -431,6 +593,14 @@ local function createFolder(parent, name)
 	folder.Name = name
 	folder.Parent = parent
 	return folder
+end
+
+local function setBakeScaleAttributes(instance)
+	if not instance then
+		return
+	end
+	instance:SetAttribute("PointScale", importPointScale)
+	instance:SetAttribute("WidthScale", importWidthScale)
 end
 
 local function assetAttr(spec, suffix)
@@ -606,6 +776,7 @@ local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reas
 	bakedRoot:SetAttribute("BakedRoadGraphRuntime", true)
 	bakedRoot:SetAttribute("BakeMode", "primitive")
 	bakedRoot:SetAttribute("UploadReason", tostring(reason or "asset upload unavailable"))
+	setBakeScaleAttributes(bakedRoot)
 	bakedRoot.Parent = root
 
 	local result = RoadMeshBuilder.createClassifiedPrimitiveMeshes(bakedRoot, meshData, {
@@ -636,6 +807,7 @@ local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reas
 	local minimapResult, minimapErr = createBakedMinimapRoadMesh(bakedRoot, meshData, RoadMeshBuilder)
 
 	local assets = getOrCreateAssetsFolder(root)
+	setBakeScaleAttributes(assets)
 	assets:SetAttribute("Stale", false)
 	assets:SetAttribute("BakeMode", "primitive")
 	assets:SetAttribute("PrimitiveFallbackReason", tostring(reason or "asset upload unavailable"))
@@ -648,60 +820,23 @@ local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reas
 
 	clearPreviewMeshes(root)
 	setStatus(string.format(
-		"Asset upload API unavailable, so baked %s as saved WedgePart geometry: %d visible parts, %d collision parts, %d minimap parts. No package or mesh asset IDs were uploaded. Save the place; runtime will use this persistent fallback.%s",
+		"Asset upload API unavailable, so baked %s at %s as saved WedgePart geometry: %d visible parts, %d collision parts, %d minimap parts. No package or mesh asset IDs were uploaded. Save the place; runtime will use this persistent fallback.%s",
 		BAKED_RUNTIME_NAME,
+		scaleSummary(),
 		#result.visibleParts,
 		#result.collisionParts,
 		minimapResult and #minimapResult.visibleParts or 0,
 		minimapErr and ("\nMinimap warning: " .. tostring(minimapErr)) or ""
 	))
+	result.bakeMode = "primitive"
 	return result, nil
-end
-
-local function rebuildGraphMesh(options)
-	options = options or {}
-	local RoadGraphData, RoadGraphMesher, RoadMeshBuilder, moduleErr = getSharedModules()
-	if moduleErr then
-		setStatus(moduleErr)
-		return nil
-	end
-
-	local root = getOrCreateRoot()
-	local graph, graphErr = RoadGraphData.collectGraph(root)
-	if not graph then
-		setStatus("No valid RoadGraph found: " .. tostring(graphErr or "import graph JSON first"))
-		return nil
-	end
-
-	if options.markBakedStale == true then
-		markBakedAssetsStale(root, "preview rebuilt")
-	end
-
-	local meshData = RoadGraphMesher.buildNetworkMesh(graph, graph.settings)
-	local result = RoadMeshBuilder.createClassifiedMeshes(root, meshData, {
-		meshFolderName = ROAD_GRAPH_SURFACES_NAME,
-		collisionFolderName = ROAD_GRAPH_COLLISION_NAME,
-		generatedBy = GRAPH_MESH_GENERATOR_NAME,
-		collisionThickness = 0.2,
-		collisionSurfaceOffset = 0,
-	})
-
-	setStatus(string.format(
-		"Built graph mesh: %d road tris, %d sidewalk tris, %d crosswalk tris, %d visible parts, %d collision parts.%s",
-		#(meshData.roadTriangles or {}),
-		#(meshData.sidewalkTriangles or {}),
-		#(meshData.crosswalkTriangles or {}),
-		#result.visibleParts,
-		#result.collisionParts,
-		#result.errors > 0 and ("\nSkipped: " .. table.concat(result.errors, " | ")) or ""
-	))
-	return result
 end
 
 local function bakeMeshAssets()
 	if not refreshMapId() then
 		return nil
 	end
+	refreshImportScales()
 
 	local RoadGraphData, RoadGraphMesher, RoadMeshBuilder, moduleErr = getSharedModules()
 	if moduleErr then
@@ -716,8 +851,18 @@ local function bakeMeshAssets()
 		return nil
 	end
 
-	local meshData = RoadGraphMesher.buildNetworkMesh(graph, graph.settings)
+	local scaledGraph = RoadGraphData.scaleGraph(graph, {
+		pointScale = importPointScale,
+		widthScale = importWidthScale,
+	})
+	if not scaledGraph then
+		setStatus("Bake failed: could not apply import scale settings.")
+		return nil
+	end
+
+	local meshData = RoadGraphMesher.buildNetworkMesh(scaledGraph, scaledGraph.settings)
 	local assets = getOrCreateAssetsFolder(root)
+	setBakeScaleAttributes(assets)
 	local oldBakedRuntime = root:FindFirstChild(BAKED_RUNTIME_NAME)
 	local oldBakedSurfaces = root:FindFirstChild(BAKED_SURFACES_NAME)
 	local oldBakedCollision = root:FindFirstChild(BAKED_COLLISION_NAME)
@@ -736,6 +881,8 @@ local function bakeMeshAssets()
 	end
 	local bakedSurfaces = createFolder(root, BAKED_SURFACES_NAME)
 	local bakedCollision = createFolder(root, BAKED_COLLISION_NAME)
+	setBakeScaleAttributes(bakedSurfaces)
+	setBakeScaleAttributes(bakedCollision)
 
 	local created = 0
 	local updated = 0
@@ -819,8 +966,9 @@ local function bakeMeshAssets()
 	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
 
 	setStatus(string.format(
-		"Baked map %s: %d mesh assets created, %d updated, %d asset-backed parts, %d minimap parts.%s",
+		"Baked map %s at %s: %d mesh assets created, %d updated, %d asset-backed parts, %d minimap parts.%s",
 		mapId,
+		scaleSummary(),
 		created,
 		updated,
 		bakedParts,
@@ -833,83 +981,11 @@ local function bakeMeshAssets()
 		updated = updated,
 		bakedParts = bakedParts,
 		minimapParts = minimapResult and #minimapResult.visibleParts or 0,
+		pointScale = importPointScale,
+		widthScale = importWidthScale,
+		bakeMode = "meshAsset",
 		errors = errors,
 	}
-end
-
-local function countBaseParts(container)
-	local count = 0
-	if not container then
-		return count
-	end
-
-	for _, descendant in ipairs(container:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			count += 1
-		end
-	end
-	return count
-end
-
-local function hasGeneratedGraphMesh(container)
-	if not container then
-		return false
-	end
-
-	for _, descendant in ipairs(container:GetDescendants()) do
-		if descendant:IsA("MeshPart") and descendant:GetAttribute("GeneratedBy") == GRAPH_MESH_GENERATOR_NAME then
-			return true
-		end
-	end
-	return false
-end
-
-local function shouldRestoreGraphMesh(root)
-	if not root then
-		return false
-	end
-
-	local RoadGraphData, _RoadGraphMesher, _RoadMeshBuilder, moduleErr = getSharedModules()
-	if moduleErr or not RoadGraphData.hasGraph(root) then
-		return false
-	end
-
-	local bakedSurfaces = root:FindFirstChild(BAKED_SURFACES_NAME)
-	local bakedCollision = root:FindFirstChild(BAKED_COLLISION_NAME)
-	local bakedRuntime = root:FindFirstChild(BAKED_RUNTIME_NAME)
-	local bakedRuntimeSurfaces = bakedRuntime and bakedRuntime:FindFirstChild(BAKED_SURFACES_NAME)
-	local bakedRuntimeCollision = bakedRuntime and bakedRuntime:FindFirstChild(BAKED_COLLISION_NAME)
-	if countBaseParts(bakedRuntimeSurfaces) > 0 and countBaseParts(bakedRuntimeCollision) > 0 then
-		return false
-	end
-	if countBaseParts(bakedSurfaces) > 0 and countBaseParts(bakedCollision) > 0 then
-		return false
-	end
-
-	local surfaces = root:FindFirstChild(ROAD_GRAPH_SURFACES_NAME)
-	local collision = root:FindFirstChild(ROAD_GRAPH_COLLISION_NAME)
-	return countBaseParts(surfaces) == 0
-		or countBaseParts(collision) == 0
-		or hasGeneratedGraphMesh(surfaces)
-		or hasGeneratedGraphMesh(collision)
-end
-
-local function restoreGraphMeshIfNeeded()
-	local root = Workspace:FindFirstChild(ROOT_NAME)
-	if not shouldRestoreGraphMesh(root) then
-		return
-	end
-
-	local ok, resultOrErr = pcall(rebuildGraphMesh)
-	if ok and resultOrErr then
-		setStatus(string.format(
-			"Restored graph mesh from saved RoadGraph: %d visible parts, %d collision parts.",
-			#resultOrErr.visibleParts,
-			#resultOrErr.collisionParts
-		))
-	else
-		setStatus("Graph mesh restore failed: " .. tostring(resultOrErr))
-	end
 end
 
 local function forkAsNewMap()
@@ -936,26 +1012,14 @@ local function clearAuthoredRoadEditorRoot()
 		root:SetAttribute(attributeName, nil)
 	end
 	Selection:Set({ root })
-	setStatus("Cleared all authored road data. Import graph or curve JSON and rebuild when ready.")
-end
-
-local autoRestoreScheduled = false
-
-local function scheduleGraphMeshRestore()
-	if autoRestoreScheduled then
-		return
-	end
-	autoRestoreScheduled = true
-	task.defer(function()
-		restoreGraphMeshIfNeeded()
-		autoRestoreScheduled = false
-	end)
+	setStatus("Cleared all authored road data. Import graph or curve JSON and bake when ready.")
 end
 
 local function importGraphJson()
 	if not refreshImportPlane() then
 		return
 	end
+	refreshImportScales()
 
 	local RoadGraphData, _RoadGraphMesher, _RoadMeshBuilder, moduleErr = getSharedModules()
 	if moduleErr then
@@ -981,24 +1045,40 @@ local function importGraphJson()
 		return
 	end
 
-	local graph, parseErr = RoadGraphData.decodeJson(contents, { planeY = importPlaneY })
+	local graph, parseErr = RoadGraphData.decodeJson(contents, {
+		planeY = importPlaneY,
+	})
 	if not graph then
 		setStatus("Graph import failed: " .. tostring(parseErr))
 		return
 	end
+	graph.importPointScale = importPointScale
+	graph.importWidthScale = importWidthScale
 
 	ChangeHistoryService:SetWaypoint("cab87 road graph before import")
 	local root = getOrCreateRoot()
 	RoadGraphData.writeGraph(root, graph)
 	markBakedAssetsStale(root, "graph imported")
-	local okBuild, buildErr = pcall(rebuildGraphMesh)
+	local okBake, bakeResultOrErr = pcall(bakeMeshAssets)
 	ChangeHistoryService:SetWaypoint("cab87 road graph after import")
-	if not okBuild then
-		setStatus("Imported graph, but mesh rebuild failed: " .. tostring(buildErr))
+	if not okBake then
+		setStatus("Imported graph, but runtime bake failed: " .. tostring(bakeResultOrErr))
+		return
+	end
+	if not bakeResultOrErr then
+		return
+	end
+	if bakeResultOrErr.bakeMode == "primitive" then
 		return
 	end
 
-	setStatus(string.format("Imported graph: %d nodes, %d edges at Y=%s.", #graph.nodes, #graph.edges, tostring(importPlaneY)))
+	setStatus(string.format(
+		"Imported and baked graph: %d nodes, %d edges at Y=%s, %s.",
+		#graph.nodes,
+		#graph.edges,
+		tostring(importPlaneY),
+		scaleSummary()
+	))
 end
 
 local function raycastFromCamera(maxDistance)
@@ -1094,24 +1174,11 @@ end)
 
 widget:GetPropertyChangedSignal("Enabled"):Connect(function()
 	toggleButton:SetActive(widget.Enabled)
-	if widget.Enabled then
-		scheduleGraphMeshRestore()
-	end
 end)
 
 importPlaneInput.FocusLost:Connect(refreshImportPlane)
 mapIdInput.FocusLost:Connect(refreshMapId)
 importButton.MouseButton1Click:Connect(importGraphJson)
-rebuildButton.MouseButton1Click:Connect(function()
-	ChangeHistoryService:SetWaypoint("cab87 road graph before rebuild")
-	local ok, err = pcall(function()
-		return rebuildGraphMesh({ markBakedStale = true })
-	end)
-	ChangeHistoryService:SetWaypoint("cab87 road graph after rebuild")
-	if not ok then
-		setStatus("Graph rebuild failed: " .. tostring(err))
-	end
-end)
 bakeAssetsButton.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 road graph before bake")
 	local ok, err = pcall(bakeMeshAssets)
@@ -1169,5 +1236,3 @@ end)
 selectPlayerSpawnButton.MouseButton1Click:Connect(function()
 	selectMarker(PLAYER_SPAWN_NAME)
 end)
-
-scheduleGraphMeshRestore()
