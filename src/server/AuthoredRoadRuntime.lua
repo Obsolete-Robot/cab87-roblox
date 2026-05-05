@@ -457,6 +457,23 @@ local function buildGraphMeshes(root, world, graph)
 	error("Baked road graph geometry was not found. Click Bake Runtime Geometry in the Road Graph Builder plugin before Play.", 0)
 end
 
+local function applyImportScale(graph)
+	if not graph then
+		return nil
+	end
+
+	local scaledGraph = RoadGraphData.scaleGraph(graph, {
+		pointScale = graph.importPointScale,
+		widthScale = graph.importWidthScale,
+		config = Config,
+	})
+	if scaledGraph then
+		scaledGraph.importPointScale = 1
+		scaledGraph.importWidthScale = 1
+	end
+	return scaledGraph
+end
+
 local function useBakedMinimapRoadMesh(root, world)
 	local existing = world:FindFirstChild(MINIMAP_ROAD_MESH_NAME)
 	if existing then
@@ -829,7 +846,7 @@ function AuthoredRoadRuntime.createWorld(root, roadSource)
 		return createLegacyCurveWorld(root)
 	end
 
-	local graph = RoadGraphData.collectGraph(root, Config)
+	local graph = applyImportScale(RoadGraphData.collectGraph(root, Config))
 	if graph then
 		return createGraphWorld(root, graph)
 	end

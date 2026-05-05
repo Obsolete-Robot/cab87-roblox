@@ -359,9 +359,58 @@ local function makeSliderRow(labelText, defaultValue)
 		knob.Position = UDim2.new(ratio, 0, 0.5, 0)
 	end
 
-	local function setFromInputPosition(inputObject)
+	local function ratioForX(x)
 		local width = math.max(track.AbsoluteSize.X, 1)
-		local ratio = math.clamp((inputObject.Position.X - track.AbsolutePosition.X) / width, 0, 1)
+		return (x - track.AbsolutePosition.X) / width
+	end
+
+	local function distanceOutsideUnit(ratio)
+		if ratio < 0 then
+			return -ratio
+		elseif ratio > 1 then
+			return ratio - 1
+		end
+		return 0
+	end
+
+	local function getWidgetMouseX()
+		local ok, relativePosition = pcall(function()
+			return widget:GetRelativeMousePosition()
+		end)
+		if ok and typeof(relativePosition) == "Vector2" then
+			return relativePosition.X
+		end
+		return nil
+	end
+
+	local pointerSource = "input"
+	local function choosePointerSource(inputObject)
+		local widgetX = getWidgetMouseX()
+		if not widgetX then
+			return "input"
+		end
+
+		-- Docked plugin GUIs may report drag motion in a different coordinate space than the track.
+		local inputRatio = ratioForX(inputObject.Position.X)
+		local widgetRatio = ratioForX(widgetX)
+		if distanceOutsideUnit(widgetRatio) <= distanceOutsideUnit(inputRatio) then
+			return "widget"
+		end
+		return "input"
+	end
+
+	local function getPointerX(inputObject)
+		if pointerSource == "widget" then
+			local widgetX = getWidgetMouseX()
+			if widgetX then
+				return widgetX
+			end
+		end
+		return inputObject.Position.X
+	end
+
+	local function setFromInputPosition(inputObject)
+		local ratio = math.clamp(ratioForX(getPointerX(inputObject)), 0, 1)
 		setValue(MIN_IMPORT_SCALE + ratio * (MAX_IMPORT_SCALE - MIN_IMPORT_SCALE))
 	end
 
@@ -369,6 +418,7 @@ local function makeSliderRow(labelText, defaultValue)
 	local function beginDrag(inputObject)
 		if inputObject.UserInputType == Enum.UserInputType.MouseButton1 or inputObject.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
+			pointerSource = choosePointerSource(inputObject)
 			setFromInputPosition(inputObject)
 		end
 	end
@@ -601,6 +651,16 @@ local function setBakeScaleAttributes(instance)
 	end
 	instance:SetAttribute("PointScale", importPointScale)
 	instance:SetAttribute("WidthScale", importWidthScale)
+end
+
+local function setGraphImportScaleAttributes(root, RoadGraphData)
+	local graphFolder = root and root:FindFirstChild(RoadGraphData.ROAD_GRAPH_NAME)
+	if not (graphFolder and graphFolder:IsA("Folder")) then
+		return
+	end
+
+	graphFolder:SetAttribute("ImportPointScale", importPointScale)
+	graphFolder:SetAttribute("ImportWidthScale", importWidthScale)
 end
 
 local function assetAttr(spec, suffix)
@@ -933,7 +993,11 @@ local function bakeMeshAssets()
 	if uploadUnavailableReason then
 		bakedSurfaces:Destroy()
 		bakedCollision:Destroy()
-		return createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, uploadUnavailableReason)
+		local result, err = createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, uploadUnavailableReason)
+		if result then
+			setGraphImportScaleAttributes(root, RoadGraphData)
+		end
+		return result, err
 	end
 
 	if bakedParts == 0 then
@@ -958,6 +1022,7 @@ local function bakeMeshAssets()
 	assets:SetAttribute("RoadTriangles", #(meshData.roadTriangles or {}))
 	assets:SetAttribute("SidewalkTriangles", #(meshData.sidewalkTriangles or {}))
 	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
+	setGraphImportScaleAttributes(root, RoadGraphData)
 
 	setStatus(string.format(
 		"Baked map %s at %s: %d mesh assets created, %d updated, %d asset-backed parts, %d minimap parts.%s",
