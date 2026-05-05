@@ -240,6 +240,28 @@ export default function App() {
     return () => observer.disconnect();
   }, []);
 
+  // Automatic junction unlinking
+  useEffect(() => {
+    setNodes(prev => {
+      let changed = false;
+      const newNodes = prev.map(n => {
+        if (n.point.linked) {
+          let nonLinearCount = 0;
+          edges.forEach(e => {
+            if (e.source === n.id && e.points.length > 0 && !e.points[0].linear) nonLinearCount++;
+            if (e.target === n.id && e.points.length > 0 && !e.points[e.points.length - 1].linear) nonLinearCount++;
+          });
+          if (nonLinearCount < 2) {
+            changed = true;
+            return { ...n, point: { ...n.point, linked: false } };
+          }
+        }
+        return n;
+      });
+      return changed ? newNodes : prev;
+    });
+  }, [edges]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1079,7 +1101,7 @@ export default function App() {
     setIsMergeMode(false);
   };
 
-  const enforceLinear = (edge: Edge, currentNodes: Node[], oldEdge?: Edge, oldNodes?: Node[]) => {
+  const enforceLinear = (edge: Edge, currentNodes: Node[], oldEdge?: Edge, oldNodes?: Node[], draggingPointId?: number) => {
       const newPts = [...edge.points];
       let changed = false;
       const sourceNode = currentNodes.find(n => n.id === edge.source);
@@ -1095,54 +1117,61 @@ export default function App() {
           
           const oldHandle = oldPts[j] || handle;
 
-          if (j % 3 === 0) {
-              const anchorA = j === 0 ? sourceNode?.point : newPts[j - 1];
-              const anchorB = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
-              
-              const oldAnchorA = j === 0 ? oldSourceNode?.point : oldPts[j - 1];
-              const oldAnchorB = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
+        if (j % 3 === 0) {
+            const anchorA = j === 0 ? sourceNode?.point : newPts[j - 1];
+            const anchorB = j + 1 >= newPts.length ? targetNode?.point : newPts[j + 1];
+            
+            const oldAnchorA = j === 0 ? oldSourceNode?.point : oldPts[j - 1];
 
-              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
-              
-              const dx = anchorB.x - anchorA.x;
-              const dy = anchorB.y - anchorA.y;
-              
-              const oldDx = oldAnchorB.x - oldAnchorA.x;
-              const oldDy = oldAnchorB.y - oldAnchorA.y;
-              const oldLenSq = oldDx * oldDx + oldDy * oldDy;
-              
-              if (oldLenSq > 0.0001) {
-                  const hx = oldHandle.x - oldAnchorA.x;
-                  const hy = oldHandle.y - oldAnchorA.y;
-                  let t = (hx * oldDx + hy * oldDy) / oldLenSq;
-                  t = Math.max(0, t);
-                  newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
-                  changed = true;
-              }
-          } else if (j % 3 === 1) {
-              const anchorA = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
-              const anchorB = j - 1 < 0 ? (sourceNode ? sourceNode.point : newPts[j]) : newPts[j - 1];
-              
-              const oldAnchorA = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
-              const oldAnchorB = j - 1 < 0 ? (oldSourceNode ? oldSourceNode.point : oldPts[j]) : oldPts[j - 1];
+            if (!anchorA || !anchorB || !oldAnchorA) continue;
+            
+            let dx, dy;
+            if (j === draggingPointId) {
+                dx = oldHandle.x - oldAnchorA.x;
+                dy = oldHandle.y - oldAnchorA.y;
+            } else {
+                dx = anchorB.x - anchorA.x;
+                dy = anchorB.y - anchorA.y;
+            }
+            
+            const lenSq = dx * dx + dy * dy;
+            
+            if (lenSq > 0.0001) {
+                const hx = handle.x - anchorA.x;
+                const hy = handle.y - anchorA.y;
+                let t = (hx * dx + hy * dy) / lenSq;
+                t = Math.max(0, t);
+                newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
+                changed = true;
+            }
+        } else if (j % 3 === 1) {
+            const anchorA = j + 1 >= newPts.length ? targetNode?.point : newPts[j + 1];
+            const anchorB = j - 1 < 0 ? sourceNode?.point : newPts[j - 1];
+            
+            const oldAnchorA = j + 1 >= oldPts.length ? oldTargetNode?.point : oldPts[j + 1];
 
-              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
-              const dx = anchorB.x - anchorA.x;
-              const dy = anchorB.y - anchorA.y;
-              
-              const oldDx = oldAnchorB.x - oldAnchorA.x;
-              const oldDy = oldAnchorB.y - oldAnchorA.y;
-              const oldLenSq = oldDx * oldDx + oldDy * oldDy;
-              
-              if (oldLenSq > 0.0001) {
-                  const hx = oldHandle.x - oldAnchorA.x;
-                  const hy = oldHandle.y - oldAnchorA.y;
-                  let t = (hx * oldDx + hy * oldDy) / oldLenSq;
-                  t = Math.max(0, t);
-                  newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
-                  changed = true;
-              }
-          }
+            if (!anchorA || !anchorB || !oldAnchorA) continue;
+            
+            let dx, dy;
+            if (j === draggingPointId) {
+                dx = oldHandle.x - oldAnchorA.x;
+                dy = oldHandle.y - oldAnchorA.y;
+            } else {
+                dx = anchorB.x - anchorA.x;
+                dy = anchorB.y - anchorA.y;
+            }
+            
+            const lenSq = dx * dx + dy * dy;
+            
+            if (lenSq > 0.0001) {
+                const hx = handle.x - anchorA.x;
+                const hy = handle.y - anchorA.y;
+                let t = (hx * dx + hy * dy) / lenSq;
+                t = Math.max(0, t);
+                newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
+                changed = true;
+            }
+        }
       }
       return changed ? { ...edge, points: newPts } : edge;
   };
@@ -1395,8 +1424,7 @@ export default function App() {
               });
           }
 
-          const passOldEdge = (pid % 3 === 2);
-          return changed ? enforceLinear({ ...e, points: newPoints }, newNodes, passOldEdge ? e : undefined, passOldEdge ? nodes : undefined) : e;
+          return changed ? enforceLinear({ ...e, points: newPoints }, newNodes, e, nodes, pid) : e;
         });
       });
     }
