@@ -7,6 +7,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Selection = game:GetService("Selection")
 local StudioService = game:GetService("StudioService")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local ROOT_NAME = "Cab87RoadEditor"
@@ -31,8 +32,14 @@ local MINIMAP_MESH_CHUNK_STUDS = 1024
 local MINIMAP_MESH_MAX_PARTS = 256
 local IMPORT_FILE_FILTER = { "json" }
 local IMPORT_PLANE_Y_SETTING = "cab87_road_graph_import_plane_y"
+local IMPORT_POINT_SCALE_SETTING = "cab87_road_graph_import_point_scale"
+local IMPORT_WIDTH_SCALE_SETTING = "cab87_road_graph_import_width_scale"
 local MAP_ID_SETTING = "cab87_road_graph_map_id"
 local DEFAULT_MAP_ID = "cab87_map"
+local DEFAULT_IMPORT_SCALE = 1
+local MIN_IMPORT_SCALE = 0.1
+local MAX_IMPORT_SCALE = 4
+local IMPORT_SCALE_STEP = 0.05
 
 local MARKER_DESCRIPTIONS = {
 	CabCompany = "Cab spawn marker",
@@ -257,9 +264,151 @@ local function makeInputRow(labelText, defaultText)
 	return input
 end
 
+local function sanitizeImportScale(value)
+	local text = tostring(value or "")
+	text = string.gsub(text, "[xX]", "")
+	local number = tonumber(text) or DEFAULT_IMPORT_SCALE
+	local stepped = math.floor((math.clamp(number, MIN_IMPORT_SCALE, MAX_IMPORT_SCALE) - MIN_IMPORT_SCALE) / IMPORT_SCALE_STEP + 0.5)
+		* IMPORT_SCALE_STEP
+		+ MIN_IMPORT_SCALE
+	return math.clamp(stepped, MIN_IMPORT_SCALE, MAX_IMPORT_SCALE)
+end
+
+local function formatImportScale(value)
+	local text = string.format("%.2f", sanitizeImportScale(value))
+	text = string.gsub(text, "0+$", "")
+	text = string.gsub(text, "%.$", "")
+	return text
+end
+
+local function makeSliderRow(labelText, defaultValue)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 52)
+	row.BackgroundTransparency = 1
+	row.Parent = rootFrame
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(0, 90, 0, 24)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 12
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextColor3 = Color3.fromRGB(206, 212, 218)
+	label.Text = labelText
+	label.Parent = row
+
+	local input = Instance.new("TextBox")
+	input.Position = UDim2.new(1, -58, 0, 0)
+	input.Size = UDim2.new(0, 58, 0, 24)
+	input.BackgroundColor3 = Color3.fromRGB(35, 39, 46)
+	input.BorderSizePixel = 0
+	input.ClearTextOnFocus = false
+	input.Font = Enum.Font.Gotham
+	input.TextSize = 12
+	input.TextColor3 = Color3.fromRGB(245, 245, 245)
+	input.Parent = row
+
+	local inputCorner = Instance.new("UICorner")
+	inputCorner.CornerRadius = UDim.new(0, 6)
+	inputCorner.Parent = input
+
+	local track = Instance.new("Frame")
+	track.Position = UDim2.new(0, 98, 0, 34)
+	track.Size = UDim2.new(1, -106, 0, 8)
+	track.BackgroundColor3 = Color3.fromRGB(35, 39, 46)
+	track.BorderSizePixel = 0
+	track.Parent = row
+
+	local trackCorner = Instance.new("UICorner")
+	trackCorner.CornerRadius = UDim.new(1, 0)
+	trackCorner.Parent = track
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.new(0, 0, 1, 0)
+	fill.BackgroundColor3 = Color3.fromRGB(255, 190, 86)
+	fill.BorderSizePixel = 0
+	fill.Parent = track
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(1, 0)
+	fillCorner.Parent = fill
+
+	local knob = Instance.new("TextButton")
+	knob.AnchorPoint = Vector2.new(0.5, 0.5)
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.BackgroundColor3 = Color3.fromRGB(255, 230, 160)
+	knob.BorderSizePixel = 0
+	knob.Text = ""
+	knob.Parent = track
+
+	local knobCorner = Instance.new("UICorner")
+	knobCorner.CornerRadius = UDim.new(1, 0)
+	knobCorner.Parent = knob
+
+	local slider = {}
+	local currentValue = sanitizeImportScale(defaultValue)
+
+	local function ratioFor(value)
+		return (sanitizeImportScale(value) - MIN_IMPORT_SCALE) / (MAX_IMPORT_SCALE - MIN_IMPORT_SCALE)
+	end
+
+	local function setValue(value)
+		currentValue = sanitizeImportScale(value)
+		local ratio = ratioFor(currentValue)
+		input.Text = formatImportScale(currentValue)
+		fill.Size = UDim2.new(ratio, 0, 1, 0)
+		knob.Position = UDim2.new(ratio, 0, 0.5, 0)
+	end
+
+	local function setFromInputPosition(inputObject)
+		local width = math.max(track.AbsoluteSize.X, 1)
+		local ratio = math.clamp((inputObject.Position.X - track.AbsolutePosition.X) / width, 0, 1)
+		setValue(MIN_IMPORT_SCALE + ratio * (MAX_IMPORT_SCALE - MIN_IMPORT_SCALE))
+	end
+
+	local dragging = false
+	local function beginDrag(inputObject)
+		if inputObject.UserInputType == Enum.UserInputType.MouseButton1 or inputObject.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			setFromInputPosition(inputObject)
+		end
+	end
+
+	track.InputBegan:Connect(beginDrag)
+	knob.InputBegan:Connect(beginDrag)
+	UserInputService.InputChanged:Connect(function(inputObject)
+		if dragging and (inputObject.UserInputType == Enum.UserInputType.MouseMovement or inputObject.UserInputType == Enum.UserInputType.Touch) then
+			setFromInputPosition(inputObject)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(inputObject)
+		if inputObject.UserInputType == Enum.UserInputType.MouseButton1 or inputObject.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	input.FocusLost:Connect(function()
+		setValue(input.Text)
+	end)
+
+	function slider.getValue()
+		return currentValue
+	end
+
+	function slider.setValue(value)
+		setValue(value)
+	end
+
+	setValue(currentValue)
+	return slider
+end
+
 local importPlaneY = tonumber(plugin:GetSetting(IMPORT_PLANE_Y_SETTING)) or 0
+local importPointScale = sanitizeImportScale(plugin:GetSetting(IMPORT_POINT_SCALE_SETTING))
+local importWidthScale = sanitizeImportScale(plugin:GetSetting(IMPORT_WIDTH_SCALE_SETTING))
 local mapId = tostring(plugin:GetSetting(MAP_ID_SETTING) or DEFAULT_MAP_ID)
 local importPlaneInput = makeInputRow("Import Y", tostring(importPlaneY))
+local importPointScaleSlider = makeSliderRow("Point Scale", importPointScale)
+local importWidthScaleSlider = makeSliderRow("Width Scale", importWidthScale)
 local mapIdInput = makeInputRow("Map ID", mapId)
 local importButton = makeButton("Import Graph JSON")
 local rebuildButton = makeButton("Rebuild Preview Mesh")
@@ -359,6 +508,16 @@ local function refreshImportPlane()
 	importPlaneY = math.clamp(planeY, -5000, 5000)
 	importPlaneInput.Text = tostring(importPlaneY)
 	plugin:SetSetting(IMPORT_PLANE_Y_SETTING, importPlaneY)
+	return true
+end
+
+local function refreshImportScales()
+	importPointScale = sanitizeImportScale(importPointScaleSlider.getValue())
+	importWidthScale = sanitizeImportScale(importWidthScaleSlider.getValue())
+	importPointScaleSlider.setValue(importPointScale)
+	importWidthScaleSlider.setValue(importWidthScale)
+	plugin:SetSetting(IMPORT_POINT_SCALE_SETTING, importPointScale)
+	plugin:SetSetting(IMPORT_WIDTH_SCALE_SETTING, importWidthScale)
 	return true
 end
 
@@ -956,6 +1115,7 @@ local function importGraphJson()
 	if not refreshImportPlane() then
 		return
 	end
+	refreshImportScales()
 
 	local RoadGraphData, _RoadGraphMesher, _RoadMeshBuilder, moduleErr = getSharedModules()
 	if moduleErr then
@@ -981,7 +1141,11 @@ local function importGraphJson()
 		return
 	end
 
-	local graph, parseErr = RoadGraphData.decodeJson(contents, { planeY = importPlaneY })
+	local graph, parseErr = RoadGraphData.decodeJson(contents, {
+		planeY = importPlaneY,
+		pointScale = importPointScale,
+		widthScale = importWidthScale,
+	})
 	if not graph then
 		setStatus("Graph import failed: " .. tostring(parseErr))
 		return
@@ -998,7 +1162,14 @@ local function importGraphJson()
 		return
 	end
 
-	setStatus(string.format("Imported graph: %d nodes, %d edges at Y=%s.", #graph.nodes, #graph.edges, tostring(importPlaneY)))
+	setStatus(string.format(
+		"Imported graph: %d nodes, %d edges at Y=%s, point scale=%sx, width scale=%sx.",
+		#graph.nodes,
+		#graph.edges,
+		tostring(importPlaneY),
+		formatImportScale(importPointScale),
+		formatImportScale(importWidthScale)
+	))
 end
 
 local function raycastFromCamera(maxDistance)
