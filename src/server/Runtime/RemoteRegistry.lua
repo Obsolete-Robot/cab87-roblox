@@ -33,7 +33,6 @@ local function getRemoteNames()
 		cameraEvent = Remotes.getServerToClientName("cameraEvent"),
 		debugTune = Remotes.getClientToServerName("debugTune"),
 		gameplayStateUpdated = Remotes.getServerToClientName("gameplayStateUpdated"),
-		shiftStateUpdated = Remotes.getServerToClientName("shiftStateUpdated"),
 		vehicleInventoryUpdated = Remotes.getServerToClientName("vehicleInventoryUpdated"),
 		fuelStateUpdated = Remotes.getServerToClientName("fuelStateUpdated"),
 	}
@@ -76,7 +75,6 @@ function RemoteRegistry.ensure(options)
 			then getOrCreateRemoteEvent(remoteNames.debugTune)
 			else nil,
 		gameplayStateUpdated = getOrCreateRemoteEvent(remoteNames.gameplayStateUpdated),
-		shiftStateUpdated = getOrCreateRemoteEvent(remoteNames.shiftStateUpdated),
 		vehicleInventoryUpdated = getOrCreateRemoteEvent(remoteNames.vehicleInventoryUpdated),
 		fuelStateUpdated = getOrCreateRemoteEvent(remoteNames.fuelStateUpdated),
 	}

@@ -10,37 +10,6 @@ local PHASE_PREPARING = "Preparing"
 local PHASE_ACTIVE = "Active"
 local PHASE_ENDING = "Ending"
 local PHASE_INTERMISSION = "Intermission"
-local SHIFT_STATE_ACTION = "State"
-local SHIFT_SNAPSHOT_ACTION = "Snapshot"
-local SHIFT_PAYOUT_ACTION = "PayoutSummary"
-
-local function loadRemoteActions()
-	local shared = ReplicatedStorage:FindFirstChild("Shared")
-	local remotesModule = shared and shared:FindFirstChild("Remotes")
-	if not remotesModule then
-		return
-	end
-
-	local ok, Remotes = pcall(require, remotesModule)
-	if not ok then
-		warn("[cab87] Remotes module failed to load; using default shift remote actions: " .. tostring(Remotes))
-		return
-	end
-
-	if type(Remotes.actions) == "table" then
-		if type(Remotes.actions.shiftStateUpdated) == "string" then
-			SHIFT_STATE_ACTION = Remotes.actions.shiftStateUpdated
-		end
-		if type(Remotes.actions.shiftStateSnapshot) == "string" then
-			SHIFT_SNAPSHOT_ACTION = Remotes.actions.shiftStateSnapshot
-		end
-		if type(Remotes.actions.shiftPayoutSummary) == "string" then
-			SHIFT_PAYOUT_ACTION = Remotes.actions.shiftPayoutSummary
-		end
-	end
-end
-
-loadRemoteActions()
 
 local function getConfigNumber(config, key, fallback)
 	local value = config[key]
@@ -71,7 +40,6 @@ function ShiftService.new(options)
 	return setmetatable({
 		config = options.config or {},
 		players = options.players or Players,
-		remote = options.remotes and options.remotes.shiftStateUpdated or nil,
 		stateReplicator = options.stateReplicator,
 		connections = {},
 		playerStates = {},
@@ -178,16 +146,6 @@ function ShiftService:_publishPayoutSummary(player, summary)
 		stateSummary.serverTime = Workspace:GetServerTimeNow()
 		self.stateReplicator:publishPayoutSummary(player, stateSummary)
 	end
-
-	if not self.remote then
-		return
-	end
-
-	self.remote:FireClient(player, SHIFT_PAYOUT_ACTION, {
-		shiftId = self.shiftId,
-		serverTime = Workspace:GetServerTimeNow(),
-		payoutSummary = summary,
-	})
 end
 
 function ShiftService:_finalizeShiftPayouts()
@@ -248,7 +206,7 @@ function ShiftService:_setReplicatedAttributes(snapshot)
 	setAttributeIfNamed(ReplicatedStorage, self.config.shiftDurationAttribute, snapshot.duration)
 end
 
-function ShiftService:_publish(action, targetPlayer)
+function ShiftService:_publish(targetPlayer)
 	local snapshot = self:_getSnapshot()
 	self:_setReplicatedAttributes(snapshot)
 
@@ -261,24 +219,14 @@ function ShiftService:_publish(action, targetPlayer)
 			end
 		end
 	end
-
-	if not self.remote then
-		return
-	end
-
-	if targetPlayer then
-		self.remote:FireClient(targetPlayer, action, snapshot)
-	else
-		self.remote:FireAllClients(action, snapshot)
-	end
 end
 
 function ShiftService:_publishState(targetPlayer)
-	self:_publish(SHIFT_STATE_ACTION, targetPlayer)
+	self:_publish(targetPlayer)
 end
 
 function ShiftService:_publishSnapshot(targetPlayer)
-	self:_publish(SHIFT_SNAPSHOT_ACTION, targetPlayer)
+	self:_publish(targetPlayer)
 end
 
 function ShiftService:_beginPhase(phase, duration)

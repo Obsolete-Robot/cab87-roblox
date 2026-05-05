@@ -176,32 +176,41 @@ local function collectRoadPartsFromContainer(container)
 	return parts
 end
 
-local function collectMeshRoadData(world, dedicatedOnly)
+local function appendSource(sources, source)
+	if source then
+		table.insert(sources, source)
+	end
+end
+
+local function appendBakedGraphSurfaceSources(sources, world, editorRoot)
+	local bakedRuntime = editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_RUNTIME_NAME)
+	local worldBakedRuntime = world and world:FindFirstChild(BAKED_ROAD_GRAPH_RUNTIME_NAME)
+
+	appendSource(sources, bakedRuntime and bakedRuntime:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME))
+	appendSource(sources, worldBakedRuntime and worldBakedRuntime:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME))
+	appendSource(sources, editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME))
+	appendSource(sources, world and world:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME))
+	appendSource(sources, editorRoot and editorRoot:FindFirstChild(ROAD_GRAPH_SURFACES_NAME))
+	appendSource(sources, world and world:FindFirstChild(ROAD_GRAPH_SURFACES_NAME))
+end
+
+local function collectMeshRoadData(world, hasGraphRoadData)
 	if not world then
 		return nil
 	end
 
 	local editorRoot = Workspace:FindFirstChild(ROAD_EDITOR_ROOT_NAME)
-	local bakedRuntime = editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_RUNTIME_NAME)
-	local worldBakedRuntime = world:FindFirstChild(BAKED_ROAD_GRAPH_RUNTIME_NAME)
-	local sources = if dedicatedOnly
-		then {
-			world:FindFirstChild(MINIMAP_ROAD_MESH_NAME),
-		}
-		else {
-			world:FindFirstChild(MINIMAP_ROAD_MESH_NAME),
-			bakedRuntime and bakedRuntime:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
-			worldBakedRuntime and worldBakedRuntime:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
-			editorRoot and editorRoot:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
-			editorRoot and editorRoot:FindFirstChild(ROAD_GRAPH_SURFACES_NAME),
-			world:FindFirstChild(BAKED_ROAD_GRAPH_SURFACES_NAME),
-			world:FindFirstChild(ROAD_GRAPH_SURFACES_NAME),
-			world:FindFirstChild(LEGACY_ROAD_NETWORK_NAME),
-			world:FindFirstChild(CLIENT_VISUALS_NAME),
-			world:FindFirstChild(RUNTIME_MESH_NAME),
-			editorRoot and editorRoot:FindFirstChild(LEGACY_ROAD_NETWORK_NAME),
-			world:FindFirstChild(GENERATED_ROADS_NAME),
-		}
+	local sources = {}
+	appendSource(sources, world:FindFirstChild(MINIMAP_ROAD_MESH_NAME))
+	appendBakedGraphSurfaceSources(sources, world, editorRoot)
+
+	if not hasGraphRoadData then
+		appendSource(sources, world:FindFirstChild(LEGACY_ROAD_NETWORK_NAME))
+		appendSource(sources, world:FindFirstChild(CLIENT_VISUALS_NAME))
+		appendSource(sources, world:FindFirstChild(RUNTIME_MESH_NAME))
+		appendSource(sources, editorRoot and editorRoot:FindFirstChild(LEGACY_ROAD_NETWORK_NAME))
+		appendSource(sources, world:FindFirstChild(GENERATED_ROADS_NAME))
+	end
 
 	for _, source in ipairs(sources) do
 		local parts = collectRoadPartsFromContainer(source)

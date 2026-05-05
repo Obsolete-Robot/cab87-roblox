@@ -26,7 +26,7 @@ local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
 local ASSETS_NAME = "RoadGraphAssets"
 local BAKED_MESH_GENERATOR_NAME = "Cab87RoadGraphBake"
 local MINIMAP_MESH_GENERATOR_NAME = "Cab87MinimapRoadMeshBake"
-local MINIMAP_MESH_VERSION = 2
+local MINIMAP_MESH_VERSION = 3
 local MINIMAP_MESH_CHUNK_STUDS = 1024
 local MINIMAP_MESH_MAX_PARTS = 256
 local IMPORT_FILE_FILTER = { "json" }
@@ -707,19 +707,13 @@ end
 local function createBakedMinimapRoadMesh(parent, meshData, RoadMeshBuilder)
 	clearChild(parent, MINIMAP_ROAD_MESH_NAME)
 
-	local minimapMeshData = {
-		roadTriangles = if #(meshData.roadEdgeTriangles or {}) > 0
-			then meshData.roadEdgeTriangles
-			else meshData.roadTriangles,
-	}
-	local result = RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, minimapMeshData, {
+	local result = RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, meshData, {
 		meshFolderName = MINIMAP_ROAD_MESH_NAME,
 		generatedBy = MINIMAP_MESH_GENERATOR_NAME,
 		chunkSize = MINIMAP_MESH_CHUNK_STUDS,
-		surfaceKeys = { "roads" },
 		color = Color3.fromRGB(255, 255, 255),
 		material = Enum.Material.SmoothPlastic,
-		transparency = 0.15,
+		transparency = 1,
 	})
 	local folder = result.meshFolder
 	if not folder then
@@ -742,7 +736,7 @@ local function createBakedMinimapRoadMesh(parent, meshData, RoadMeshBuilder)
 		part.CanTouch = false
 		part.CanQuery = false
 		part.CastShadow = false
-		part.Transparency = 0.15
+		part.Transparency = 1
 		part.Color = Color3.fromRGB(255, 255, 255)
 		part.Material = Enum.Material.SmoothPlastic
 		part:SetAttribute("MapId", mapId)
@@ -755,7 +749,7 @@ local function createBakedMinimapRoadMesh(parent, meshData, RoadMeshBuilder)
 	folder:SetAttribute("BakedMinimapRoadMesh", true)
 	folder:SetAttribute("GeneratedBy", MINIMAP_MESH_GENERATOR_NAME)
 	folder:SetAttribute("Version", MINIMAP_MESH_VERSION)
-	folder:SetAttribute("MeshMode", "roadEdges")
+	folder:SetAttribute("MeshMode", "bakedGraphSurfaces")
 	folder:SetAttribute("SurfacePartCount", #result.visibleParts)
 	folder:SetAttribute("ChunkSize", MINIMAP_MESH_CHUNK_STUDS)
 	if #result.errors > 0 then
