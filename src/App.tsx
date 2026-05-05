@@ -68,6 +68,8 @@ export default function App() {
   const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
   const [softSelectionRadius, setSoftSelectionRadius] = useState(200);
 
+  const [polygonFills, setPolygonFills] = useState<{ id: string; points: string[]; color: string }[]>([]);
+
   const handleExport = () => {
     const data = JSON.stringify({
       schema: ROAD_NETWORK_SCHEMA,
@@ -79,6 +81,7 @@ export default function App() {
       },
       nodes,
       edges,
+      polygonFills,
     }, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -121,6 +124,11 @@ export default function App() {
           } else {
             setLaneWidth(30);
           }
+          if (Array.isArray(data.polygonFills)) {
+            setPolygonFills(data.polygonFills);
+          } else {
+            setPolygonFills([]);
+          }
           setSelectedEdges([]);
           setSelectedNode(null);
           setSelectedPointIndex(null);
@@ -162,6 +170,16 @@ export default function App() {
         setIsMergeMode(prev => !prev);
         setIsConnectMode(false);
       }
+      if (e.key.toLowerCase() === 'p' && !e.ctrlKey) {
+        if (selectedNodes.length >= 3) {
+           const id = Math.random().toString(36).substring(2, 9);
+           const color = '#10b981'; // default fill color (emerald)
+           setPolygonFills(prev => [...prev, { id, points: [...selectedNodes], color }]);
+           setSelectedNodes([]);
+        } else {
+           alert("Select at least 3 nodes to create a polygon fill constraint.");
+        }
+      }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedEdges.length > 0 && selectedPointIndex !== null && selectedNodes.length === 0 && selectedEdges.length === 1) {
           setEdges(prev => prev.map(edge => {
@@ -185,9 +203,12 @@ export default function App() {
           setSelectedNodes([]);
           setSelectedEdges([]);
           setSelectedPointIndex(null);
+        } else {
+          // If nothing else is deleted, clear the last polygon
+          setPolygonFills(prev => prev.length > 0 ? prev.slice(0, prev.length - 1) : prev);
         }
       }
-      if (e.key.toLowerCase() === 'f') {
+      if (e.key.toLowerCase() === 'f' && !e.ctrlKey && e.key !== 'F') {
         if (nodes.length > 0) {
           let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
           nodes.forEach(n => {
@@ -309,12 +330,12 @@ export default function App() {
     drawNetwork2D(
       ctx, size, nodes, edges, selectedEdges, selectedNodes, selectedNode,
       showMesh, showControlPoints, isConnectMode, isMergeMode,
-      chamferAngle, meshResolution, laneWidth,
+      chamferAngle, meshResolution, laneWidth, polygonFills,
       softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex,
       view
     );
     ctx.restore();
-  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
     if (e.__scenePos) return e.__scenePos;
@@ -1605,6 +1626,7 @@ export default function App() {
             <ThreeScene 
               nodes={nodes} 
               edges={edges} 
+              polygonFills={polygonFills}
               chamferAngle={chamferAngle} 
               meshResolution={meshResolution} 
               laneWidth={laneWidth}
@@ -1667,6 +1689,7 @@ export default function App() {
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Middle Drag / 2 Fingers</span> Pan</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Scroll</span> Zoom</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Click Edge</span> Add Point</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">P</span> (with 3+ nodes) Fill Polygon</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Esc</span> Deselect</div>
               </div>
             </>

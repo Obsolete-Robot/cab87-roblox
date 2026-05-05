@@ -7,6 +7,7 @@ import { SceneContent } from './components/three/SceneContent';
 interface ThreeSceneProps {
   nodes: Node[];
   edges: Edge[];
+  polygonFills: any[];
   chamferAngle: number;
   meshResolution: number;
   laneWidth?: number;
@@ -33,14 +34,14 @@ interface ThreeSceneProps {
 }
 
 export default function ThreeScene({ 
-    nodes, edges, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
+    nodes, edges, polygonFills, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
     setNodes, setEdges, 
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
     isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPointIndex,
     softSelectionEnabled, softSelectionRadius,
     view, setView, containerRef 
 }: ThreeSceneProps) {
-  const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth || 30), [nodes, edges, chamferAngle, meshResolution, laneWidth]);
+  const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth || 30, polygonFills), [nodes, edges, chamferAngle, meshResolution, laneWidth, polygonFills]);
 
   const initialCameraParams = useMemo(() => {
     const cW = containerRef.current?.clientWidth || 800;

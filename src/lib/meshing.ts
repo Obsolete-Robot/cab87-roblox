@@ -1,7 +1,9 @@
-import { Point, Node, Edge, MeshData } from "./types";
+import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
 import { getDir } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
+import * as THREE from 'three';
+import Delaunator from 'delaunator';
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
   const corners = nodeCorners.get(node.id);
@@ -11,7 +13,7 @@ export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource:
   return [bases[0], bases[1]];
 }
 
-export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20, laneWidth: number = 30): MeshData {
+export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20, laneWidth: number = 30, polygonFills: PolygonFill[] = []): MeshData {
   const mesh: MeshData = {
     vertices: [],
     triangles: [],
@@ -27,7 +29,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     solidYellowLines: [],
     dashedLineTriangles: [],
     solidLineTriangles: [],
-    laneArrows: []
+    laneArrows: [],
+    polygonTriangles: []
   };
 
   const edgeSplines = new Map<string, Point[]>();
@@ -571,5 +574,158 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     }
   }
 
+  // 3. Build Polygon Fills
+  for (const poly of polygonFills) {
+    if (poly.points.length < 3) continue;
+
+    const boundaryPoints: Point[] = [];
+    
+    for (let i = 0; i < poly.points.length; i++) {
+        const n1_id = poly.points[i];
+        const n2_id = poly.points[(i + 1) % poly.points.length];
+        
+        const n1 = nodes.find(n => n.id === n1_id);
+        const n2 = nodes.find(n => n.id === n2_id);
+        if (!n1 || !n2) continue;
+        
+        const edge = edges.find(e => (e.source === n1.id && e.target === n2.id) || (e.source === n2.id && e.target === n1.id));
+        if (edge) {
+            const spline = edgeSplines.get(edge.id);
+            if (spline) {
+                if (edge.source === n1.id) {
+                    for (let j = 0; j < spline.length; j++) {
+                        boundaryPoints.push(spline[j]);
+                    }
+                } else {
+                    for (let j = spline.length - 1; j >= 0; j--) {
+                        boundaryPoints.push(spline[j]);
+                    }
+                }
+            } else {
+                boundaryPoints.push(n1.point);
+            }
+        } else {
+            boundaryPoints.push(n1.point);
+        }
+    }
+
+    if (boundaryPoints.length < 3) continue;
+
+    // Filter consecutive duplicate points (ShapeUtils doesn't like duplicates)
+    const uniqueBoundaryPoints: Point[] = [];
+    for (let i = 0; i < boundaryPoints.length; i++) {
+        const p = boundaryPoints[i];
+        const next = boundaryPoints[(i + 1) % boundaryPoints.length];
+        if (Math.hypot(p.x - next.x, p.y - next.y) > 0.01) {
+            uniqueBoundaryPoints.push(p);
+        }
+    }
+    
+    if (uniqueBoundaryPoints.length < 3) continue;
+
+    const fillTriangles = buildGridMesh(uniqueBoundaryPoints);
+    
+    mesh.polygonTriangles.push({ triangles: fillTriangles, color: poly.color });
+  }
+
   return mesh;
+}
+
+function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
+    let totalLen = 0;
+    for (let i = 0; i < boundaryPoints.length; i++) {
+        const next = boundaryPoints[(i + 1) % boundaryPoints.length];
+        totalLen += Math.hypot(next.x - boundaryPoints[i].x, next.y - boundaryPoints[i].y);
+    }
+    const S = totalLen / boundaryPoints.length;
+    
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of boundaryPoints) {
+        minX = Math.min(minX, p.x);
+        maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y);
+        maxY = Math.max(maxY, p.y);
+    }
+    
+    const internalPoints: Point[] = [];
+    for (let x = minX + S / 2; x < maxX; x += S) {
+        for (let y = minY + S / 2; y < maxY; y += S) {
+            const pt = { x, y, z: 0 };
+            if (pointInPolygon(pt, boundaryPoints)) {
+                let tooClose = false;
+                for (const bp of boundaryPoints) {
+                    if (Math.hypot(bp.x - x, bp.y - y) < S * 0.4) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+                if (!tooClose) {
+                    internalPoints.push(pt);
+                }
+            }
+        }
+    }
+    
+    for (const pt of internalPoints) {
+        let sumZ = 0;
+        let sumW = 0;
+        for (const bp of boundaryPoints) {
+            const d = Math.hypot(bp.x - pt.x, bp.y - pt.y);
+            const w = 1.0 / (d * d + 0.0001);
+            sumZ += (bp.z ?? 0) * w;
+            sumW += w;
+        }
+        pt.z = sumZ / sumW;
+    }
+    
+    const allPoints = [...boundaryPoints, ...internalPoints];
+    
+    const coords = [];
+    for (const p of allPoints) {
+        coords.push(p.x, p.y);
+    }
+    
+    const delaunay = new Delaunator(coords);
+    const triangles = delaunay.triangles;
+    
+    const result: Triangle[] = [];
+    for (let i = 0; i < triangles.length; i += 3) {
+        const i0 = triangles[i];
+        const i1 = triangles[i + 1];
+        const i2 = triangles[i + 2];
+        const p0 = allPoints[i0];
+        const p1 = allPoints[i1];
+        const p2 = allPoints[i2];
+        
+        const cx = (p0.x + p1.x + p2.x) / 3;
+        const cy = (p0.y + p1.y + p2.y) / 3;
+        
+        if (pointInPolygon({ x: cx, y: cy }, boundaryPoints)) {
+            result.push([p0, p1, p2]);
+        }
+    }
+    
+    return result;
+}
+
+function pointInPolygon(p: { x: number, y: number }, polygon: Point[]): boolean {
+    let isInside = false;
+    let minX = polygon[0].x, maxX = polygon[0].x;
+    let minY = polygon[0].y, maxY = polygon[0].y;
+    for (let n = 1; n < polygon.length; n++) {
+        minX = Math.min(minX, polygon[n].x);
+        maxX = Math.max(maxX, polygon[n].x);
+        minY = Math.min(minY, polygon[n].y);
+        maxY = Math.max(maxY, polygon[n].y);
+    }
+    if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) {
+        return false;
+    }
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        if ((polygon[i].y > p.y) !== (polygon[j].y > p.y) &&
+            p.x < (polygon[j].x - polygon[i].x) * (p.y - polygon[i].y) / (polygon[j].y - polygon[i].y) + polygon[i].x) {
+            isInside = !isInside;
+        }
+    }
+    return isInside;
 }

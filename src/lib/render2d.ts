@@ -17,6 +17,7 @@ export const drawNetwork2D = (
   chamferAngle: number,
   meshResolution: number,
   laneWidth: number,
+  polygonFills: any[],
   softSelectionEnabled: boolean,
   softSelectionRadius: number,
   draggingPoint: Point | null,
@@ -75,7 +76,7 @@ export const drawNetwork2D = (
 
   if (nodes.length === 0) return;
 
-  const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth);
+  const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth, polygonFills);
 
   if (showMesh) {
     mesh.triangles.forEach((tri, idx) => {
@@ -90,6 +91,23 @@ export const drawNetwork2D = (
       ctx.lineWidth = 1;
       ctx.fill();
       ctx.stroke();
+    });
+  }
+
+  if (showMesh && mesh.polygonTriangles) {
+    mesh.polygonTriangles.forEach(pg => {
+      pg.triangles.forEach(tri => {
+        ctx.beginPath();
+        ctx.moveTo(tri[0].x, tri[0].y);
+        ctx.lineTo(tri[1].x, tri[1].y);
+        ctx.lineTo(tri[2].x, tri[2].y);
+        ctx.closePath();
+        ctx.fillStyle = pg.color;
+        ctx.fill();
+        ctx.strokeStyle = pg.color;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      });
     });
   }
 
@@ -121,6 +139,35 @@ export const drawNetwork2D = (
     ctx.shadowOffsetY = 4;
     
     const renderables: { z: number, priority: number, paths: Point[], draw: () => void }[] = [];
+
+    if (mesh.polygonTriangles) {
+        mesh.polygonTriangles.forEach(pg => {
+            if (pg.triangles.length === 0) return;
+            renderables.push({
+                z: getAvgZ(pg.triangles[0]) - 1000,
+                priority: -100, // Lowest priority to render under everything
+                paths: [],
+                draw: () => {
+                    ctx.save();
+                    ctx.shadowColor = 'transparent';
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = pg.color;
+                    ctx.strokeStyle = pg.color;
+                    ctx.lineWidth = 0.5; // thinner lines to prevent ugly thick borders per triangle
+                    ctx.beginPath();
+                    pg.triangles.forEach(tri => {
+                        ctx.moveTo(tri[0].x, tri[0].y);
+                        ctx.lineTo(tri[1].x, tri[1].y);
+                        ctx.lineTo(tri[2].x, tri[2].y);
+                        ctx.lineTo(tri[0].x, tri[0].y);
+                    });
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            });
+        });
+    }
 
     mesh.roadPolygons.forEach(rp => {
       if (rp.outerLeftCurve && rp.outerRightCurve && rp.outerLeftCurve.length === rp.outerRightCurve.length && rp.outerLeftCurve.length > 0) {
