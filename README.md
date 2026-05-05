@@ -109,7 +109,7 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
    - If Studio allows programmatic mesh uploads, the plugin uploads or updates permanent mesh assets and stores their IDs in `Cab87RoadEditor/RoadGraphAssets`.
    - If Studio reports that `CreateAssetAsync` is not available, the plugin builds persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead. This creates no package or mesh asset IDs, but it survives save/reopen and Play.
    - The bake also creates a hidden `MinimapRoadMesh` for the GPS viewport so Play mode does not generate minimap geometry at runtime.
-   - If Studio cannot persist that minimap MeshPart, Play mode generates the same road-edge minimap MeshParts once on the server instead of cloning the primitive fallback.
+   - If an older bake does not include a current `MinimapRoadMesh`, the GPS viewport uses the existing pregenerated `RoadGraphBakedSurfaces` as its fallback.
    - The bake clears disposable preview mesh folders so Play mode does not render overlapping preview/runtime geometry.
 8. Press Play and test traversal.
 

@@ -5,7 +5,6 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
 local RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
-local RoadMeshBuilder = require(Shared:WaitForChild("RoadMeshBuilder"))
 local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
@@ -22,7 +21,7 @@ local LEGACY_COLLISION_NAME = "RoadNetworkCollision"
 local LEGACY_RUNTIME_COLLISION_GENERATOR = "Cab87LegacyRoadRuntimeCollision"
 local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
 local MINIMAP_ROAD_MESH_GENERATOR = "Cab87MinimapRoadMesh"
-local MINIMAP_ROAD_MESH_VERSION = 2
+local MINIMAP_ROAD_MESH_VERSION = 3
 local MARKER_TYPE_ATTR = "Cab87MarkerType"
 local ROAD_SOURCE_AUTO = "Auto"
 local ROAD_SOURCE_ROAD_GRAPH = "RoadGraph"
@@ -483,18 +482,12 @@ local function useBakedMinimapRoadMesh(root, world)
 	local maxSurfaceParts = math.max(math.floor(tonumber(Config.minimapViewportMaxMeshParts) or 256), 1)
 	local sourceParts = {}
 	collectBaseParts(sourceFolder, sourceParts)
-	local roadSourceParts = {}
-	for _, part in ipairs(sourceParts) do
-		if part:GetAttribute("SurfaceType") == "road" then
-			table.insert(roadSourceParts, part)
-		end
-	end
 
-	if #roadSourceParts == 0 then
-		return nil, { "baked minimap mesh has no road BasePart descendants" }
-	elseif #roadSourceParts > maxSurfaceParts then
+	if #sourceParts == 0 then
+		return nil, { "baked minimap mesh has no BasePart descendants" }
+	elseif #sourceParts > maxSurfaceParts then
 		return nil, {
-			string.format("baked minimap mesh has %d road parts, above limit %d", #roadSourceParts, maxSurfaceParts),
+			string.format("baked minimap mesh has %d surface parts, above limit %d", #sourceParts, maxSurfaceParts),
 		}
 	end
 
@@ -503,12 +496,12 @@ local function useBakedMinimapRoadMesh(root, world)
 	folder:SetAttribute("GeneratedBy", MINIMAP_ROAD_MESH_GENERATOR)
 	folder:SetAttribute("MinimapRoadMesh", true)
 	folder:SetAttribute("Version", MINIMAP_ROAD_MESH_VERSION)
-	folder:SetAttribute("MeshMode", tostring(sourceFolder:GetAttribute("MeshMode") or "roadEdges"))
+	folder:SetAttribute("MeshMode", tostring(sourceFolder:GetAttribute("MeshMode") or "bakedGraphSurfaces"))
 	folder.Parent = world
 
 	local errors = {}
 	local clonedParts = 0
-	for _, sourcePart in ipairs(roadSourceParts) do
+	for _, sourcePart in ipairs(sourceParts) do
 		local ok, cloneOrErr = pcall(function()
 			return sourcePart:Clone()
 		end)
@@ -534,67 +527,8 @@ local function useBakedMinimapRoadMesh(root, world)
 	end
 
 	folder:SetAttribute("SurfacePartCount", clonedParts)
-	roadDebugLog("using baked minimap road mesh: roadParts=%d", clonedParts)
+	roadDebugLog("using baked minimap road mesh: surfaceParts=%d", clonedParts)
 	return folder, errors
-end
-
-local function configureRuntimeMinimapPart(part)
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanTouch = false
-	part.CanQuery = false
-	part.CastShadow = false
-	part.Transparency = 1
-	part:SetAttribute("MinimapRoadMesh", true)
-end
-
-local function createRuntimeMinimapRoadMesh(world, meshData)
-	local existing = world:FindFirstChild(MINIMAP_ROAD_MESH_NAME)
-	if existing then
-		existing:Destroy()
-	end
-
-	local minimapMeshData = {
-		roadTriangles = if #(meshData.roadEdgeTriangles or {}) > 0
-			then meshData.roadEdgeTriangles
-			else meshData.roadTriangles,
-	}
-	local build = RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(world, minimapMeshData, {
-		meshFolderName = MINIMAP_ROAD_MESH_NAME,
-		generatedBy = MINIMAP_ROAD_MESH_GENERATOR,
-		chunkSize = Config.minimapRoadMeshChunkStuds,
-		surfaceKeys = { "roads" },
-		color = Color3.fromRGB(255, 255, 255),
-		material = Enum.Material.SmoothPlastic,
-		transparency = 1,
-	})
-	local folder = build.meshFolder
-	if not folder then
-		return nil, build.errors
-	end
-
-	local maxSurfaceParts = math.max(math.floor(tonumber(Config.minimapViewportMaxMeshParts) or 256), 1)
-	if #build.visibleParts > maxSurfaceParts then
-		local errors = table.clone(build.errors)
-		table.insert(
-			errors,
-			string.format("runtime minimap mesh has %d road parts, above limit %d", #build.visibleParts, maxSurfaceParts)
-		)
-		folder:Destroy()
-		return nil, errors
-	end
-
-	for _, part in ipairs(build.visibleParts) do
-		configureRuntimeMinimapPart(part)
-	end
-
-	folder:SetAttribute("GeneratedBy", MINIMAP_ROAD_MESH_GENERATOR)
-	folder:SetAttribute("MinimapRoadMesh", true)
-	folder:SetAttribute("Version", MINIMAP_ROAD_MESH_VERSION)
-	folder:SetAttribute("MeshMode", "runtimeRoadEdges")
-	folder:SetAttribute("SurfacePartCount", #build.visibleParts)
-	roadDebugLog("generated runtime minimap road mesh: roadParts=%d", #build.visibleParts)
-	return folder, build.errors
 end
 
 local function hasLegacyCurveRoadData(root)
@@ -804,17 +738,6 @@ local function createGraphWorld(root, graph)
 
 	local meshData, meshBuild = buildGraphMeshes(root, world, graph)
 	local minimapMesh, minimapMeshErrors = useBakedMinimapRoadMesh(root, world)
-	if not minimapMesh then
-		local runtimeMinimapMesh, runtimeMinimapErrors = createRuntimeMinimapRoadMesh(world, meshData)
-		minimapMesh = runtimeMinimapMesh
-		if runtimeMinimapErrors and #runtimeMinimapErrors > 0 then
-			if minimapMeshErrors then
-				appendAll(minimapMeshErrors, runtimeMinimapErrors)
-			else
-				minimapMeshErrors = runtimeMinimapErrors
-			end
-		end
-	end
 	local driveSurfaces = {}
 	local crashObstacles = {}
 	appendAll(driveSurfaces, meshBuild.driveSurfaces)
@@ -842,7 +765,9 @@ local function createGraphWorld(root, graph)
 	world:SetAttribute("AuthoredRoadMeshSource", meshBuild.source or "runtime")
 	world:SetAttribute("AuthoredRoadServerCollisionSource", BAKED_COLLISION_NAME)
 	world:SetAttribute("AuthoredRoadServerMeshError", "")
-	world:SetAttribute("MinimapRoadMeshSource", minimapMesh and MINIMAP_ROAD_MESH_NAME or "")
+	world:SetAttribute("MinimapRoadMeshSource", minimapMesh and MINIMAP_ROAD_MESH_NAME or BAKED_SURFACES_NAME)
+	world:SetAttribute("MinimapRoadMeshPregenerated", true)
+	world:SetAttribute("MinimapRoadMeshDedicated", minimapMesh ~= nil)
 
 	roadDebugLog(
 		"road graph world built: nodes=%d edges=%d roadTris=%d sidewalkTris=%d crosswalkTris=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
