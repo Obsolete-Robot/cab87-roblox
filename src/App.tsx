@@ -415,6 +415,11 @@ export default function App() {
                 
                 setNodes(prev => [...prev, newNode]);
                 setEdges(prev => [...prev.filter(e => e.id !== edge.id), ...newEdges]);
+                setSelectedNode(newNodeId);
+                setSelectedEdges([]);
+                setSelectedPointIndex(null);
+                setIsConnectMode(false);
+                setIsMergeMode(false);
                 return;
             }
         }
@@ -492,6 +497,11 @@ export default function App() {
 
             setNodes(prev => [...prev, newNode]);
             setEdges(prev => [...prev.filter(e => e.id !== edge.id), ...newEdges]);
+            setSelectedNode(newNodeId);
+            setSelectedEdges([]);
+            setSelectedPointIndex(null);
+            setIsConnectMode(false);
+            setIsMergeMode(false);
             return;
         }
     }

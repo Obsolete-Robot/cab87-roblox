@@ -15,6 +15,7 @@ export type Triangle = [Point, Point, Point];
 export type Node = {
   id: string;
   point: Point;
+  transitionSmoothness?: number;
 };
 
 export type Edge = {

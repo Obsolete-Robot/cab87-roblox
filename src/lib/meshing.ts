@@ -87,8 +87,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         } else {
             const [innerPts, outerPts] = calculateBothCornerPoints(
               node.point, 
-              r1.dir, r1.edge.width, sw1, r1.edge.transitionSmoothness ?? 0,
-              r2.dir, r2.edge.width, sw2, r2.edge.transitionSmoothness ?? 0,
+              r1.dir, r1.edge.width, sw1, (r1.edge.transitionSmoothness ?? 0) + (node.transitionSmoothness ?? 0),
+              r2.dir, r2.edge.width, sw2, (r2.edge.transitionSmoothness ?? 0) + (node.transitionSmoothness ?? 0),
               chamferAngleDeg
             );
             corners.push({
