@@ -11,6 +11,34 @@ npm ci
 npm run dev
 ```
 
+On Windows, `run.bat` installs Node.js LTS with `winget` if needed, installs
+project dependencies, and starts the dev server.
+
+If Vite fails with a missing package such as `@rollup/rollup-win32-x64-msvc`,
+the local `node_modules` was usually installed from a different OS/runtime, such
+as WSL/Linux, then reused from Windows. Keep one `node_modules` install per
+runtime: reinstall from the same shell you use to run the visualizer.
+
+Windows Command Prompt or PowerShell:
+
+```bat
+cd /d E:\Projects\cab87-roblox\tools\intersection-visualizer
+rmdir /s /q node_modules
+npm ci
+npm run dev
+```
+
+WSL:
+
+```sh
+cd /mnt/e/Projects/cab87-roblox/tools/intersection-visualizer
+rm -rf node_modules
+npm ci
+npm run dev
+```
+
+Keep `package-lock.json` unless you are intentionally updating dependencies.
+
 Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for distance-based mesh density, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. In Studio, import the JSON, set a stable map ID, then use **Bake Runtime Geometry** so runtime uses baked road, sidewalk, crosswalk, and collision geometry. If Roblox Studio has not enabled programmatic mesh asset upload yet, the plugin falls back to persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead of uploading package or mesh asset IDs.
 
 ## Export Format
