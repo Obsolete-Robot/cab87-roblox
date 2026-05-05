@@ -272,6 +272,25 @@ export default function Sidebar({
                         />
                       </div>
                     </div>
+                    <div className="mt-2 pointer-events-auto">
+                      <div className="flex justify-between text-xs text-slate-400 mb-1">
+                        <span>Junction Smoothing</span>
+                        <span>{n.transitionSmoothness ?? 0}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="200"
+                        step="5"
+                        value={n.transitionSmoothness ?? 0}
+                        onChange={(evt) =>
+                          setNodes((prev) =>
+                            prev.map((pn) => (pn.id === n.id ? { ...pn, transitionSmoothness: parseInt(evt.target.value) } : pn))
+                          )
+                        }
+                        className="w-full accent-blue-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
                   </div>
                 ))}
 
