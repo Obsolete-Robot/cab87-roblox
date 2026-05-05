@@ -1675,6 +1675,7 @@ export default function App() {
               selectedNodes={selectedNodes}
               selectedEdges={selectedEdges}
               selectedPointIndex={selectedPointIndex}
+              selectedPolygonFillId={selectedPolygonFillId}
             />
           ) : (
             <>

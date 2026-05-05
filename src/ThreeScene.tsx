@@ -25,6 +25,7 @@ interface ThreeSceneProps {
   selectedNodes: string[];
   selectedEdges: string[];
   selectedPointIndex: number | null;
+  selectedPolygonFillId: string | null;
   view: { x: number, y: number, zoom: number };
   setView: React.Dispatch<React.SetStateAction<{ x: number, y: number, zoom: number }>>;
   containerRef: React.RefObject<HTMLDivElement>;
@@ -37,7 +38,7 @@ export default function ThreeScene({
     nodes, edges, polygonFills, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
     setNodes, setEdges, 
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
-    isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPointIndex,
+    isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPointIndex, selectedPolygonFillId,
     softSelectionEnabled, softSelectionRadius,
     view, setView, containerRef 
 }: ThreeSceneProps) {
@@ -67,6 +68,7 @@ export default function ThreeScene({
       <Canvas camera={{ position: initialCameraParams.position, fov: initialCameraParams.fov, far: 50000 }} style={{ touchAction: 'none' }}>
         <SceneContent 
           mesh={mesh} 
+          polygonFills={polygonFills}
           showMesh={showMesh}
           showControlPoints={showControlPoints}
           nodes={nodes} 
@@ -83,6 +85,7 @@ export default function ThreeScene({
           selectedNodes={selectedNodes}
           selectedEdges={selectedEdges}
           selectedPointIndex={selectedPointIndex}
+          selectedPolygonFillId={selectedPolygonFillId}
           initialCameraParams={initialCameraParams}
           softSelectionEnabled={softSelectionEnabled}
           softSelectionRadius={softSelectionRadius}
