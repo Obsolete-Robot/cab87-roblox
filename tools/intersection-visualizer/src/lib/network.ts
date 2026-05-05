@@ -31,7 +31,8 @@ export function isTrueJunction(nodeId: string, nodes: Node[], edges: Edge[]): bo
     const isSrc = c.isSource;
     const controlPts = getEdgeControlPoints(c.edge, nodes);
     const p1 = nodes.find(n => n.id === nodeId)!.point;
-    const p2 = isSrc ? controlPts[1] : controlPts[controlPts.length - 2];
+    let p2 = isSrc ? controlPts[1] : controlPts[controlPts.length - 2];
+    if (!p2) p2 = p1; // Fallback if controlPts is too short
 
     const dx = p2.x - p1.x;
     const dy = p2.y - p1.y;
@@ -57,7 +58,8 @@ export function hasCrosswalk(edgeId: string, isSource: boolean, nodes: Node[], e
     const isSrc = c.isSource;
     const controlPts = getEdgeControlPoints(c.edge, nodes);
     const p1 = nodes.find(n => n.id === nodeId)!.point;
-    const p2 = isSrc ? controlPts[1] : controlPts[controlPts.length - 2];
+    let p2 = isSrc ? controlPts[1] : controlPts[controlPts.length - 2];
+    if (!p2) p2 = p1; // Fallback if controlPts is too short
 
     const dx = p2.x - p1.x;
     const dy = p2.y - p1.y;

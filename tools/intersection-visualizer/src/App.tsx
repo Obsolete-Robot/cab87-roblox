@@ -648,13 +648,15 @@ export default function App() {
                     if (N === 1) {
                          targetAngles = [connections[0].angle];
                     } else if (N === 2) {
-                         let base = connections[0].angle;
+                         let base1 = connections[0].angle;
                          let base2 = connections[1].angle;
-                         // Check which bisector is closer to current
-                         let diff = base2 - base;
-                         if (diff < 0) diff += Math.PI * 2;
-                         const isCurrentCloserToStraight = Math.abs(diff - Math.PI) < Math.PI / 4;
-                         targetAngles = [base, base + Math.PI];
+
+                         let angDiff = (base2 + Math.PI) - base1;
+                         while (angDiff > Math.PI) angDiff -= 2 * Math.PI;
+                         while (angDiff < -Math.PI) angDiff += 2 * Math.PI;
+
+                         let avgAngle = base1 + angDiff / 2;
+                         targetAngles = [avgAngle, avgAngle + Math.PI];
                     } else if (N === 3) {
                          const diff1 = (connections[1].angle - connections[0].angle + 2 * Math.PI) % (2 * Math.PI);
                          const diff2 = (connections[2].angle - connections[0].angle + 2 * Math.PI) % (2 * Math.PI);
@@ -903,11 +905,17 @@ export default function App() {
                 } else if (j - 1 >= 0 && j + 1 < newPts.length) {
                     const h1 = newPts[j - 1];
                     const h2 = newPts[j + 1];
-                    const angle = Math.atan2(h2.y - h1.y, h2.x - h1.x);
+                    const a1 = Math.atan2(h1.y - anchor.y, h1.x - anchor.x);
+                    const a2 = Math.atan2(h2.y - anchor.y, h2.x - anchor.x);
+                    let angDiff = (a2 + Math.PI) - a1;
+                    while (angDiff > Math.PI) angDiff -= 2 * Math.PI;
+                    while (angDiff < -Math.PI) angDiff += 2 * Math.PI;
+                    let avgAngle = a1 + angDiff / 2;
+
                     const d1 = Math.hypot(h1.x - anchor.x, h1.y - anchor.y);
                     const d2 = Math.hypot(h2.x - anchor.x, h2.y - anchor.y);
-                    newPts[j - 1] = { ...h1, x: anchor.x - Math.cos(angle) * d1, y: anchor.y - Math.sin(angle) * d1, linear: false };
-                    newPts[j + 1] = { ...h2, x: anchor.x + Math.cos(angle) * d2, y: anchor.y + Math.sin(angle) * d2, linear: false };
+                    newPts[j - 1] = { ...h1, x: anchor.x + Math.cos(avgAngle) * d1, y: anchor.y + Math.sin(avgAngle) * d1, linear: false };
+                    newPts[j + 1] = { ...h2, x: anchor.x + Math.cos(avgAngle + Math.PI) * d2, y: anchor.y + Math.sin(avgAngle + Math.PI) * d2, linear: false };
                     newPts[j] = { ...anchor, linked: true };
                 }
               } else if (j % 3 === 0 || j % 3 === 1) {
@@ -922,10 +930,17 @@ export default function App() {
                     } else {
                         const h1 = newPts[j];
                         const h2 = newPts[oppositeIdx];
-                        const angle = Math.atan2(h1.y - anchor.y, h1.x - anchor.x);
+                        const a1 = Math.atan2(h1.y - anchor.y, h1.x - anchor.x);
+                        const a2 = Math.atan2(h2.y - anchor.y, h2.x - anchor.x);
+                        let angDiff = (a2 + Math.PI) - a1;
+                        while (angDiff > Math.PI) angDiff -= 2 * Math.PI;
+                        while (angDiff < -Math.PI) angDiff += 2 * Math.PI;
+                        let avgAngle = a1 + angDiff / 2;
+
+                        const d1 = Math.hypot(h1.x - anchor.x, h1.y - anchor.y);
                         const d2 = Math.hypot(h2.x - anchor.x, h2.y - anchor.y);
-                        const oppAngle = angle + Math.PI;
-                        newPts[oppositeIdx] = { ...h2, x: anchor.x + Math.cos(oppAngle) * d2, y: anchor.y + Math.sin(oppAngle) * d2 };
+                        newPts[j] = { ...h1, x: anchor.x + Math.cos(avgAngle) * d1, y: anchor.y + Math.sin(avgAngle) * d1, linear: false };
+                        newPts[oppositeIdx] = { ...h2, x: anchor.x + Math.cos(avgAngle + Math.PI) * d2, y: anchor.y + Math.sin(avgAngle + Math.PI) * d2, linear: false };
                         newPts[anchorIdx] = { ...anchor, linked: true };
                     }
                 }

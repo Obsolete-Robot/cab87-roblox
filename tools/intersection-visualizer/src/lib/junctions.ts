@@ -135,7 +135,8 @@ export function getEdgeClearance(nodeId: string, edge: Edge, isSourceQuery: bool
     const e = c.edge;
     const controlPts = getEdgeControlPoints(e, nodes);
     const p1 = node.point;
-    const p2 = isSource ? controlPts[1] : controlPts[controlPts.length - 2];
+    let p2 = isSource ? controlPts[1] : controlPts[controlPts.length - 2];
+    if (!p2) p2 = p1; // Fallback if controlPts is too short
     const dir = getDir(p1, p2);
     const angle = Math.atan2(dir.y, dir.x);
     return { edge: e, angle, isSource, dir };
