@@ -672,28 +672,25 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                 if (d2 < minDStart) { minDStart = d2; iStart = k; }
             }
             
-            if (iEnd !== -1 && iStart !== -1 && minDEnd < 10 && minDStart < 10) {
-                const path1 = [];
+            if (iEnd !== -1 && iStart !== -1 && minDEnd < 20 && minDStart < 20) {
+                const path1 = [hub.outerPolygon[iEnd]];
                 let k1 = iEnd;
-                while (k1 !== iStart && path1.length < hub.outerPolygon.length) {
+                while (k1 !== iStart && path1.length < hub.outerPolygon.length + 2) {
                     k1 = (k1 + 1) % hub.outerPolygon.length;
                     path1.push(hub.outerPolygon[k1]);
                 }
                 
-                const path2 = [];
+                const path2 = [hub.outerPolygon[iEnd]];
                 let k2 = iEnd;
-                while (k2 !== iStart && path2.length < hub.outerPolygon.length) {
+                while (k2 !== iStart && path2.length < hub.outerPolygon.length + 2) {
                     k2 = (k2 - 1 + hub.outerPolygon.length) % hub.outerPolygon.length;
                     path2.push(hub.outerPolygon[k2]);
                 }
                 
                 if (path1.length > 0 || path2.length > 0) {
-                    const chosenPath = isClockwise ? path1 : path2;
-                    if (chosenPath.length > 0) {
-                        chosenPath.pop(); // remove p_start to avoid duplicate
-                        for (let j = 0; j < chosenPath.length; j++) {
-                            boundaryPoints.push(chosenPath[j]);
-                        }
+                    const chosenPath = isClockwise ? path2 : path1;
+                    for (let j = 0; j < chosenPath.length; j++) {
+                        boundaryPoints.push(chosenPath[j]);
                     }
                 }
             }
