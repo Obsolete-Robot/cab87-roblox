@@ -61,6 +61,7 @@ export default function App() {
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+  const [selectedPolygonFillId, setSelectedPolygonFillId] = useState<string | null>(null);
   const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
   const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
   const [laneWidth, setLaneWidth] = useState(30);
@@ -181,6 +182,11 @@ export default function App() {
         }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedPolygonFillId) {
+            setPolygonFills(prev => prev.filter(p => p.id !== selectedPolygonFillId));
+            setSelectedPolygonFillId(null);
+            return;
+        }
         if (selectedEdges.length > 0 && selectedPointIndex !== null && selectedNodes.length === 0 && selectedEdges.length === 1) {
           setEdges(prev => prev.map(edge => {
             if (selectedEdges.includes(edge.id)) {
@@ -332,10 +338,10 @@ export default function App() {
       showMesh, showControlPoints, isConnectMode, isMergeMode,
       chamferAngle, meshResolution, laneWidth, polygonFills,
       softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex,
-      view
+      selectedPolygonFillId, view
     );
     ctx.restore();
-  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, selectedPolygonFillId, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
     if (e.__scenePos) return e.__scenePos;
@@ -637,6 +643,25 @@ export default function App() {
     }
 
     const pos = getMousePos(e);
+    
+    setSelectedPolygonFillId(null);
+    for (const pg of polygonFills) {
+      let cx = 0, cy = 0, count = 0;
+      pg.points.forEach(nid => {
+         const n = nodes.find(nn => nn.id === nid);
+         if (n) { cx += n.point.x; cy += n.point.y; count++; }
+      });
+      if (count > 0) {
+          cx /= count; cy /= count;
+          if (Math.hypot(pos.x - cx, pos.y - cy) < 20) {
+              setSelectedPolygonFillId(pg.id);
+              setSelectedNodes([]);
+              setSelectedEdges([]);
+              setSelectedPointIndex(null);
+              return;
+          }
+      }
+    }
 
     // Click nodes
     for (const n of nodes) {

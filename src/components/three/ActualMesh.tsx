@@ -68,7 +68,7 @@ export function ActualMesh({ mesh, showMesh }: { mesh: any, showMesh: boolean })
     <group>
       {polygonGeos.map((pg: any, i: number) => (
         <mesh key={`poly-${i}`} geometry={pg.geo} position={[0, -1.5, 0]}>
-          <meshStandardMaterial color={wireColor || pg.color} side={THREE.DoubleSide} wireframe={showMesh} />
+          <meshStandardMaterial color={wireColor || pg.color} side={THREE.DoubleSide} wireframe={showMesh} transparent={true} opacity={0.7} />
         </mesh>
       ))}
       <mesh geometry={roadGeo} position={[0, 0, 0]}>
