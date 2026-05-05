@@ -1,22 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Settings2, Trash2, Plus, Bug, Menu, X, Layers, Download, Upload } from 'lucide-react';
-import { Point, Node, Edge, MeshData } from './lib/types';
-import { getEdgeControlPoints, getExtendedEdgeControlPoints, sampleEdgeSpline } from './lib/network';
-import { buildNetworkMesh } from './lib/meshing';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Point, Node, Edge } from './lib/types';
+import { getExtendedEdgeControlPoints, sampleEdgeSpline } from './lib/network';
 import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
-
-const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-const ROAD_NETWORK_SCHEMA = 'cab87-road-network';
-const ROAD_NETWORK_VERSION = 1;
-const DEFAULT_CHAMFER_ANGLE = 70;
-const DEFAULT_MESH_RESOLUTION = 20;
-
-function sanitizeMeshResolution(value: unknown): number {
-  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
-  if (!Number.isFinite(parsed)) return DEFAULT_MESH_RESOLUTION;
-  return Math.max(5, Math.min(100, Math.round(parsed)));
-}
+import ThreeScene from './ThreeScene';
+import Sidebar from './components/Sidebar';
+import Header from './components/Header';
+import { drawNetwork2D } from './lib/render2d';
+import {
+  COLORS, ROAD_NETWORK_SCHEMA, ROAD_NETWORK_VERSION,
+  DEFAULT_CHAMFER_ANGLE, DEFAULT_MESH_RESOLUTION, sanitizeMeshResolution
+} from './lib/constants';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -31,27 +25,48 @@ export default function App() {
   ]);
 
   const [edges, setEdges] = useState<Edge[]>([
-    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250}, {x: 533, y: 200}], width: 60, sidewalk: 12, color: '#ef4444' },
-    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333}, {x: 266, y: 366}], width: 60, sidewalk: 12, color: '#10b981' },
-    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233}, {x: 333, y: 166}], width: 80, sidewalk: 12, color: '#3b82f6' },
+    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: 60, sidewalk: 12, color: '#ef4444' },
+    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: 60, sidewalk: 12, color: '#10b981' },
+    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: 12, color: '#3b82f6' },
   ]);
 
-  const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [selectedEdges, setSelectedEdges] = useState<string[]>([]);
+  const lastDragPosRef = useRef<Point | null>(null);
+  const startDragPosRef = useRef<Point | null>(null);
+  const addedToSelectionRef = useRef<boolean>(false);
+  const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
+  const selectedNode = selectedNodes.length > 0 ? selectedNodes[selectedNodes.length - 1] : null;
+
+  const setSelectedNode = (id: string | null) => {
+    setSelectedNodes(id ? [id] : []);
+  };
   const [isConnectMode, setIsConnectMode] = useState(false);
+
+  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan'; id: string; pointId?: number } | null>(null);
+
+  const draggingPoint = useMemo(() => {
+    if (!dragging) return null;
+    if (dragging.type === 'node') return nodes.find(n => n.id === dragging.id)?.point || null;
+    if (dragging.type === 'edge') {
+        const edge = edges.find(e => e.id === dragging.id);
+        if (dragging.pointId != null) return edge ? edge.points[dragging.pointId] : null;
+        else if (lastDragPosRef.current) return lastDragPosRef.current;
+    }
+    return null;
+  }, [dragging, nodes, edges]);
+
   const [isMergeMode, setIsMergeMode] = useState(false);
   const [showMesh, setShowMesh] = useState(false);
   const [showControlPoints, setShowControlPoints] = useState(true);
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
-  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan'; id: string; pointId?: number } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
-  const [editingEdgeName, setEditingEdgeName] = useState<string | null>(null);
-  const [editingNameValue, setEditingNameValue] = useState("");
   const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
   const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [laneWidth, setLaneWidth] = useState(30);
+  const [is3DMode, setIs3DMode] = useState(false);
+  const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
+  const [softSelectionRadius, setSoftSelectionRadius] = useState(200);
 
   const handleExport = () => {
     const data = JSON.stringify({
@@ -60,6 +75,7 @@ export default function App() {
       settings: {
         chamferAngleDeg: chamferAngle,
         meshResolution,
+        laneWidth,
       },
       nodes,
       edges,
@@ -100,12 +116,17 @@ export default function App() {
           } else {
             setMeshResolution(DEFAULT_MESH_RESOLUTION);
           }
-          setSelectedEdge(null);
+          if (typeof data.settings?.laneWidth === 'number') {
+            setLaneWidth(data.settings.laneWidth);
+          } else {
+            setLaneWidth(30);
+          }
+          setSelectedEdges([]);
           setSelectedNode(null);
           setSelectedPointIndex(null);
           setIsConnectMode(false);
-          setIsMergeMode(false);
           setDragging(null);
+          setIsMergeMode(false);
         } else {
           alert('Invalid file format. Must contain nodes and edges arrays.');
         }
@@ -114,7 +135,7 @@ export default function App() {
       }
     };
     reader.readAsText(file);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    e.target.value = '';
   };
 
   const pointersRef = useRef<Map<number, Point>>(new Map());
@@ -127,7 +148,7 @@ export default function App() {
 
       if (e.key === 'Escape') {
         setSelectedNode(null);
-        setSelectedEdge(null);
+        setSelectedEdges([]);
         setSelectedPointIndex(null);
         setDragging(null);
         setIsConnectMode(false);
@@ -142,18 +163,14 @@ export default function App() {
         setIsConnectMode(false);
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedNode) {
-          setNodes(prev => prev.filter(n => n.id !== selectedNode));
-          setEdges(prev => prev.filter(edge => edge.source !== selectedNode && edge.target !== selectedNode));
-          setSelectedNode(null);
-        } else if (selectedEdge && selectedPointIndex !== null) {
+        if (selectedEdges.length > 0 && selectedPointIndex !== null && selectedNodes.length === 0 && selectedEdges.length === 1) {
           setEdges(prev => prev.map(edge => {
-            if (edge.id === selectedEdge) {
+            if (selectedEdges.includes(edge.id)) {
               const newPoints = [...edge.points];
-              const anchorIndex = selectedPointIndex % 3 === 2 
-                ? selectedPointIndex 
+              const anchorIndex = selectedPointIndex % 3 === 2
+                ? selectedPointIndex
                 : (selectedPointIndex % 3 === 1 ? selectedPointIndex + 1 : selectedPointIndex - 1);
-              
+
               if (anchorIndex > 0 && anchorIndex < newPoints.length - 1) {
                 newPoints.splice(anchorIndex - 1, 3);
               }
@@ -162,9 +179,11 @@ export default function App() {
             return edge;
           }));
           setSelectedPointIndex(null);
-        } else if (selectedEdge) {
-          setEdges(prev => prev.filter(edge => edge.id !== selectedEdge));
-          setSelectedEdge(null);
+        } else if (selectedNodes.length > 0 || selectedEdges.length > 0) {
+          setNodes(prev => prev.filter(n => !selectedNodes.includes(n.id)));
+          setEdges(prev => prev.filter(edge => !selectedEdges.includes(edge.id) && !selectedNodes.includes(edge.source) && (!edge.target || !selectedNodes.includes(edge.target))));
+          setSelectedNodes([]);
+          setSelectedEdges([]);
           setSelectedPointIndex(null);
         }
       }
@@ -185,7 +204,7 @@ export default function App() {
               maxY = Math.max(maxY, p.y);
             });
           });
-          
+
           if (minX !== Infinity) {
             const padding = 100;
             const w = Math.max(maxX - minX, 1);
@@ -193,10 +212,10 @@ export default function App() {
             const zoomX = size.w / (w + padding * 2);
             const zoomY = size.h / (h + padding * 2);
             const newZoom = Math.min(zoomX, zoomY, 3); // Max zoom level
-            
+
             const centerX = minX + w / 2;
             const centerY = minY + h / 2;
-            
+
             setView({
               zoom: newZoom,
               x: size.w / 2 - centerX * newZoom,
@@ -208,7 +227,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNode, selectedEdge, selectedPointIndex, nodes, edges, size, isMergeMode, isConnectMode]);
+  }, [selectedNode, selectedEdges, selectedPointIndex, nodes, edges, size, isMergeMode, isConnectMode]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -232,11 +251,11 @@ export default function App() {
 
       const delta = -e.deltaY * 0.001;
       const zoomFactor = Math.exp(delta);
-      
+
       setView(prev => {
           const newZoom = Math.max(0.1, Math.min(5, prev.zoom * zoomFactor));
           const effectiveFactor = newZoom / prev.zoom;
-          
+
           return {
               ...prev,
               zoom: newZoom,
@@ -247,7 +266,7 @@ export default function App() {
     };
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
-  }, []);
+  }, [is3DMode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -265,208 +284,18 @@ export default function App() {
     ctx.save();
     ctx.translate(view.x, view.y);
     ctx.scale(view.zoom, view.zoom);
-    draw(ctx, size, nodes, edges, selectedEdge, selectedNode, showMesh, chamferAngle, meshResolution);
+    drawNetwork2D(
+      ctx, size, nodes, edges, selectedEdges, selectedNodes, selectedNode,
+      showMesh, showControlPoints, isConnectMode, isMergeMode,
+      chamferAngle, meshResolution, laneWidth,
+      softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex,
+      view
+    );
     ctx.restore();
-  }, [size, nodes, edges, selectedEdge, selectedNode, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
 
-  const draw = (ctx: CanvasRenderingContext2D, size: { w: number; h: number }, nodes: Node[], edges: Edge[], selectedEdge: string | null, selectedNode: string | null, showMesh: boolean, chamferAngle: number, meshResolution: number) => {
-    ctx.clearRect(0, 0, size.w, size.h);
-
-    if (nodes.length === 0 || edges.length === 0) return;
-
-    const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution);
-
-    if (showMesh) {
-      mesh.triangles.forEach((tri, idx) => {
-        ctx.beginPath();
-        ctx.moveTo(tri[0].x, tri[0].y);
-        ctx.lineTo(tri[1].x, tri[1].y);
-        ctx.lineTo(tri[2].x, tri[2].y);
-        ctx.closePath();
-        
-        ctx.fillStyle = `hsla(${(idx * 137) % 360}, 70%, 50%, 0.3)`;
-        ctx.strokeStyle = `hsla(${(idx * 137) % 360}, 70%, 50%, 0.9)`;
-        ctx.lineWidth = 1;
-        ctx.fill();
-        ctx.stroke();
-      });
-    }
-
-    if (!showMesh) {
-      // Background polygons
-      ctx.fillStyle = '#1e293b'; 
-      ctx.shadowColor = 'rgba(0,0,0,0.5)';
-      ctx.shadowBlur = 15;
-      ctx.shadowOffsetY = 4;
-      
-      // Draw outer polygons (sidewalks)
-      ctx.fillStyle = '#94a3b8';
-
-      mesh.roadPolygons.forEach(rp => {
-        if (rp.outerPolygon && rp.outerPolygon.length > 0) {
-            ctx.beginPath();
-            ctx.moveTo(rp.outerPolygon[0].x, rp.outerPolygon[0].y);
-            rp.outerPolygon.forEach(p => ctx.lineTo(p.x, p.y));
-            ctx.closePath();
-            ctx.fill();
-        }
-      });
-      mesh.sidewalkPolygons.forEach(poly => {
-        if (poly.length === 0) return;
-        ctx.beginPath();
-        ctx.moveTo(poly[0].x, poly[0].y);
-        poly.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fill();
-      });
-      ctx.shadowColor = 'transparent';
-
-      // Draw inner polygons (road surface)
-      ctx.fillStyle = '#1e293b';
-      mesh.hubs.forEach(hub => {
-        if (hub.polygon.length === 0) return;
-        ctx.beginPath();
-        ctx.moveTo(hub.polygon[0].x, hub.polygon[0].y);
-        hub.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fill();
-      });
-
-      mesh.roadPolygons.forEach(rp => {
-        if (rp.polygon.length === 0) return;
-        ctx.beginPath();
-        ctx.moveTo(rp.polygon[0].x, rp.polygon[0].y);
-        rp.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fill();
-      });
-
-      // Crosswalks
-      ctx.fillStyle = '#334155'; // crosswalk background color
-      mesh.crosswalks.forEach(cw => {
-         if (cw.polygon.length === 0) return;
-         ctx.beginPath();
-         ctx.moveTo(cw.polygon[0].x, cw.polygon[0].y);
-         cw.polygon.forEach(p => ctx.lineTo(p.x, p.y));
-         ctx.closePath();
-         ctx.fill();
-      });
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.lineWidth = 10;
-      ctx.setLineDash([4, 6]); 
-      ctx.beginPath();
-      mesh.crosswalks.forEach(cw => {
-         if (cw.polygon.length < 4) return;
-         const p0 = cw.polygon[0]; // bL
-         const p1 = cw.polygon[1]; // bR
-         const p2 = cw.polygon[2]; // new_bR
-         const p3 = cw.polygon[3]; // new_bL
-         const midLeft = { x: (p0.x + p3.x)/2, y: (p0.y + p3.y)/2 };
-         const midRight = { x: (p1.x + p2.x)/2, y: (p1.y + p2.y)/2 };
-         ctx.moveTo(midLeft.x, midLeft.y);
-         ctx.lineTo(midRight.x, midRight.y);
-      });
-      ctx.stroke();
-
-      // Dashed CenterLines
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([15, 15]);
-      ctx.beginPath();
-      mesh.centerLines.forEach(cl => {
-          if (cl.length > 0) {
-            ctx.moveTo(cl[0].x, cl[0].y);
-            for (let i = 1; i < cl.length; i++) ctx.lineTo(cl[i].x, cl[i].y);
-          }
-      });
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Nodes and control points
-    nodes.forEach(n => {
-        ctx.beginPath();
-        ctx.arc(n.point.x, n.point.y, 8, 0, Math.PI * 2);
-        ctx.fillStyle = selectedNode === n.id ? '#ffffff' : '#60a5fa';
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#fff';
-        ctx.stroke();
-
-        if (selectedNode === n.id) {
-          ctx.beginPath();
-          ctx.arc(n.point.x, n.point.y, 16, 0, Math.PI * 2);
-          ctx.strokeStyle = isConnectMode ? 'rgba(52, 211, 153, 0.8)' : isMergeMode ? 'rgba(239, 68, 68, 0.8)' : 'rgba(255, 255, 255, 0.4)';
-          ctx.lineWidth = (isConnectMode || isMergeMode) ? 3 : 2;
-          ctx.stroke();
-        }
-    });
-
-    edges.forEach((e) => {
-        if (showControlPoints) {
-            const controlPts = getExtendedEdgeControlPoints(e, nodes, edges, chamferAngle);
-            if (controlPts.length > 0) {
-                const cubicPts = controlPts;
-
-                ctx.beginPath();
-                ctx.strokeStyle = '#475569';
-                ctx.lineWidth = 2;
-                for (let i = 0; i < cubicPts.length - 1; i += 3) {
-                    ctx.moveTo(cubicPts[i].x, cubicPts[i].y);
-                    ctx.lineTo(cubicPts[i+1].x, cubicPts[i+1].y);
-                    ctx.moveTo(cubicPts[i+2].x, cubicPts[i+2].y);
-                    ctx.lineTo(cubicPts[i+3].x, cubicPts[i+3].y);
-                }
-                ctx.stroke();
-                
-                // Draw the invisible automatic nodes (indices 3, 6, 9 etc if they are anchors)
-                // Actually, all anchors are at index i % 3 === 0
-                ctx.fillStyle = '#94a3b8'; // light slate for automatic
-                for (let i = 3; i < cubicPts.length - 1; i += 3) {
-                    // Only draw if it's not a user-editable anchor.
-                    // User anchors are normally at index 6, 12... wait.
-                    // In getExtendedEdgeControlPoints, CW0 is at 3.
-                    // then U1 is 4, U2 is 5, CW1 is 6!
-                    // But wait, if there's a middle anchor A1, in extended it is:
-                    // 3: CW0
-                    // 4: U1
-                    // 5: U2
-                    // 6: A1 (user)
-                    // 7: U3
-                    // 8: U4
-                    // 9: CW1
-                    ctx.beginPath();
-                    // Check if this anchor corresponds to a user anchor
-                    // User points start at edge.points[0]. 
-                    // In extended, index 4 is edge.points[0].
-                    // So user points are at index 4, 5, 6, ...
-                    // Is this index `i` an automatic point? 
-                    // `i` is 3 (CW0) or `cubicPts.length - 4` (CW1).
-                    // The other anchors (i=6, etc) are user anchors if there are multiple segments!
-                    if (i === 3 || i === cubicPts.length - 4) {
-                        ctx.arc(cubicPts[i].x, cubicPts[i].y, 4, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-                }
-            }
-        }
-
-        e.points.forEach((pt, j) => {
-            const isAnchor = (j % 3 === 2);
-            if (!showControlPoints && !isAnchor) return;
-
-            ctx.beginPath();
-            const isSelectedPoint = selectedEdge === e.id && selectedPointIndex === j;
-            ctx.arc(pt.x, pt.y, isAnchor ? 8 : 5, 0, Math.PI * 2);
-            ctx.fillStyle = selectedEdge === e.id ? (isSelectedPoint ? '#ef4444' : (isAnchor ? (pt.linked ? '#10b981' : '#fbbf24') : (pt.linear ? '#0ea5e9' : '#ffffff'))) : '#64748b';
-            ctx.fill();
-            ctx.stroke();
-        });
-    });
-  };
-
-  const getMousePos = (e: React.PointerEvent | React.MouseEvent) => {
+  const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
+    if (e.__scenePos) return e.__scenePos;
     const rect = canvasRef.current!.getBoundingClientRect();
     return {
       x: (e.clientX - rect.left - view.x) / view.zoom,
@@ -474,9 +303,100 @@ export default function App() {
     };
   };
 
-    const onContextMenu = (e: React.MouseEvent) => {
+    const onContextMenu = (e: React.MouseEvent | any) => {
     e.preventDefault();
     const pos = getMousePos(e);
+
+    const getNewEdgeParams = (sn: Node, targetPt: Point) => {
+        let params: any = {
+            width: 60,
+            sidewalk: 12,
+            color: COLORS[edges.length % COLORS.length]
+        };
+
+        const conns = edges.filter(e => e.source === sn.id || e.target === sn.id);
+        if (conns.length > 0) {
+            const dx = targetPt.x - sn.point.x;
+            const dy = targetPt.y - sn.point.y;
+            const lenN = Math.hypot(dx, dy);
+
+            let bestEdge: Edge | null = null;
+            let minError = Infinity;
+
+            if (lenN > 0) {
+                for (const c of conns) {
+                    const isSource = c.source === sn.id;
+                    let nextPt: Point | undefined;
+                    if (isSource) {
+                        nextPt = c.points.length > 0 ? c.points[0] : nodes.find(n => n.id === c.target)?.point;
+                    } else {
+                        nextPt = c.points.length > 0 ? c.points[c.points.length - 1] : nodes.find(n => n.id === c.source)?.point;
+                    }
+
+                    if (nextPt) {
+                        const odx = nextPt.x - sn.point.x;
+                        const ody = nextPt.y - sn.point.y;
+                        const lenC = Math.hypot(odx, ody);
+
+                        if (lenC > 0) {
+                            const dot = ((odx/lenC) * (dx/lenN) + (ody/lenC) * (dy/lenN));
+                            const error = dot + 1; // 0 when perfectly opposite
+                            if (error < minError) {
+                                minError = error;
+                                bestEdge = c;
+                            }
+                        }
+                    }
+                }
+
+                if (bestEdge) {
+                    params = {
+                        width: bestEdge.width,
+                        sidewalk: bestEdge.sidewalk,
+                        sidewalkLeft: bestEdge.sidewalkLeft,
+                        sidewalkRight: bestEdge.sidewalkRight,
+                        transitionSmoothness: bestEdge.transitionSmoothness,
+                        color: bestEdge.color,
+                        oneWay: bestEdge.oneWay
+                    };
+                    Object.keys(params).forEach(key => params[key] === undefined && delete params[key]);
+                }
+            }
+        }
+        return params;
+    };
+
+    // Right click existing node
+    for (const n of nodes) {
+        if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < 25) {
+            if (selectedNode && selectedNode !== n.id) {
+                const sn = nodes.find(nn => nn.id === selectedNode)!;
+                const newEdgeId = Math.random().toString(36).substring(2, 9);
+                const edgeParams = getNewEdgeParams(sn, n.point);
+                const newEdge: Edge = {
+                    id: newEdgeId,
+                    source: selectedNode,
+                    target: n.id,
+                    points: [
+                      { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
+                      { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
+                    ],
+                    ...edgeParams
+                };
+                setEdges(prev => [...prev, newEdge]);
+                setSelectedNode(n.id);
+                setSelectedEdges([newEdgeId]);
+                setSelectedPointIndex(null);
+                setIsConnectMode(false);
+                setIsMergeMode(false);
+            } else {
+                setSelectedNode(n.id);
+                setSelectedEdges([]);
+                setSelectedPointIndex(null);
+            }
+            return;
+        }
+    }
 
     // Right click point to turn to node
     for (let i = edges.length - 1; i >= 0; i--) {
@@ -489,10 +409,10 @@ export default function App() {
                 const newNode: Node = { id: newNodeId, point: edge.points[j] };
                 const edge1: Edge = { ...edge, target: newNodeId, points: edge.points.slice(0, j) };
                 const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: edge.points.slice(j + 1) };
-                
+
                 const newEdges = [edge1];
                 if (edge2.points.length > 0 || edge2.target) newEdges.push(edge2);
-                
+
                 setNodes(prev => [...prev, newNode]);
                 setEdges(prev => [...prev.filter(e => e.id !== edge.id), ...newEdges]);
                 return;
@@ -509,7 +429,7 @@ export default function App() {
         for (let j = 0; j < pts.length - 1; j++) {
             // Skip hitting exact hubs to allow node selection/creation near hubs
             if (nodes.some(n => Math.hypot(n.point.x - pts[j].x, n.point.y - pts[j].y) < 40)) continue;
-            
+
             const d = distToSegment(pos, pts[j], pts[j+1]);
             if (d < minDist && d < threshold) {
                 minDist = d;
@@ -519,48 +439,55 @@ export default function App() {
 
         if (hitIndex !== -1) {
             // Split edge at new position
-            const hitPoint = pts[hitIndex];
-            const curveIndex = hitPoint.curveIndex ?? 0;
-            
+            const hitPt = pts[hitIndex];
+            const curveIndex = hitPt.curveIndex ?? 0;
+
             const controlPoints = getExtendedEdgeControlPoints(edge, nodes, edges, chamferAngle);
             const cubicPts = controlPoints;
-            
+
             const numCurves = (cubicPts.length - 1) / 3;
             if (curveIndex === 0 || curveIndex === numCurves - 1) {
                 continue;
             }
-            
+
             const p0 = cubicPts[curveIndex * 3];
             const p1 = cubicPts[curveIndex * 3 + 1];
             const p2 = cubicPts[curveIndex * 3 + 2];
             const p3 = cubicPts[curveIndex * 3 + 3];
 
-            let t = hitPoint.t ?? 0.5;
+            let t = hitPt.t ?? 0.5;
             if (t < 0.1) t = 0.1;
             if (t > 0.9) t = 0.9;
-            
+
             const { p01, p12, p23, p012, p123, pMid } = splitBezier(p0, p1, p2, p3, t);
 
             const newNodeId = Math.random().toString(36).substring(2, 9);
             const newNode: Node = { id: newNodeId, point: pMid };
 
-            // We need to properly split the original edge logic. 
+            // We need to properly split the original edge logic.
             // The original logic just passed p01, p012 etc to the new edge, but wait, those are interior points.
             // Edge points array only stores the user control points, so for edge1 it needs the first part of the split, and edge2 needs the second.
             // We should reconstruct the points arrays for the two new edges.
-            
+
             const userCurveIndex = curveIndex - 1;
-            
+
             const originalPoints = [...edge.points];
             const leftPoints = originalPoints.slice(0, userCurveIndex * 3);
             const rightPoints = originalPoints.slice(userCurveIndex * 3 + 2);
-            
-            leftPoints.push(p01, p012);
-            rightPoints.unshift(p123, p23);
+
+            const isLinear = originalPoints.length >= 2 ? !!originalPoints[userCurveIndex * 3]?.linear : true;
+
+            const hp01 = { ...p01, linear: isLinear };
+            const hp012 = { ...p012, linear: isLinear };
+            const hp123 = { ...p123, linear: isLinear };
+            const hp23 = { ...p23, linear: isLinear };
+
+            leftPoints.push(hp01, hp012);
+            rightPoints.unshift(hp123, hp23);
 
             const edge1: Edge = { ...edge, target: newNodeId, points: leftPoints };
             const edge2: Edge = { ...edge, id: Math.random().toString(36).substring(2, 9), source: newNodeId, points: rightPoints };
-            
+
             const newEdges = [edge1, edge2];
 
             setNodes(prev => [...prev, newNode]);
@@ -569,67 +496,249 @@ export default function App() {
         }
     }
 
-    // Create free node
+    // Right click Empty Space
     const newNodeId = Math.random().toString(36).substring(2, 9);
-    setNodes(prev => [...prev, { id: newNodeId, point: pos }]);
+
+    let spawnPos = { ...pos };
+    if (selectedNode) {
+        const sn = nodes.find(n => n.id === selectedNode);
+        if (sn) {
+            spawnPos.z = sn.point.z;
+            if (e.__ray && Math.abs(e.__ray.direction.y) > 0.0001) {
+                const zTarget = sn.point.z ?? 4;
+                const t = (zTarget - e.__ray.origin.y) / e.__ray.direction.y;
+                spawnPos.x = e.__ray.origin.x + e.__ray.direction.x * t;
+                spawnPos.y = e.__ray.origin.z + e.__ray.direction.z * t;
+            }
+        }
+    }
+
+    setNodes(prev => [...prev, { id: newNodeId, point: spawnPos }]);
+
+    if (selectedNode) {
+        const sn = nodes.find(n => n.id === selectedNode);
+        if (sn) {
+            const newEdgeId = Math.random().toString(36).substring(2, 9);
+            const edgeParams = getNewEdgeParams(sn, spawnPos);
+            const newEdge: Edge = {
+                id: newEdgeId, source: selectedNode, target: newNodeId, points: [
+                  { x: sn.point.x + (spawnPos.x - sn.point.x)/3, y: sn.point.y + (spawnPos.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
+                  { x: sn.point.x + 2*(spawnPos.x - sn.point.x)/3, y: sn.point.y + 2*(spawnPos.y - sn.point.y)/3, z: spawnPos.z ?? 4, linear: true }
+                ], ...edgeParams
+            };
+            setEdges(prev => [...prev, newEdge]);
+            setSelectedEdges([newEdgeId]);
+        }
+    } else {
+        setSelectedEdges([]);
+    }
+
+    setSelectedNode(newNodeId);
+    setSelectedPointIndex(null);
+    setIsConnectMode(false);
+    setIsMergeMode(false);
   };
 
-  const onPointerDown = (e: React.PointerEvent) => {
+  const onPointerDown = (e: React.PointerEvent | any) => {
     if (e.button === 2) return; // ignore right click
 
-    const rect = canvasRef.current!.getBoundingClientRect();
-    const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    pointersRef.current.set(e.pointerId, rawPos);
-    
-    if (e.button === 1) { // middle mouse click
-      e.preventDefault();
-      setDragging({ type: 'pan', id: '' });
-      lastPanMidpointRef.current = rawPos;
-      return;
+    if (is3DMode) {
+      if (e.button !== 0) return;
+    } else {
+        const rect = canvasRef.current!.getBoundingClientRect();
+        const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        pointersRef.current.set(e.pointerId, rawPos);
+
+        if (e.button === 1) { // middle mouse click
+          e.preventDefault();
+          setDragging({ type: 'pan', id: '' });
+          lastPanMidpointRef.current = rawPos;
+          return;
+        }
+
+        if (pointersRef.current.size === 2) {
+          const pts = Array.from(pointersRef.current.values()) as Point[];
+          lastPanMidpointRef.current = {
+            x: (pts[0].x + pts[1].x) / 2,
+            y: (pts[0].y + pts[1].y) / 2,
+          };
+          setDragging(null);
+          return;
+        }
+
+        if (pointersRef.current.size > 1) return;
+
+        if (e.target.setPointerCapture) (e.target as HTMLElement).setPointerCapture(e.pointerId);
     }
 
-    if (pointersRef.current.size === 2) {
-      const pts = Array.from(pointersRef.current.values()) as Point[];
-      lastPanMidpointRef.current = {
-        x: (pts[0].x + pts[1].x) / 2,
-        y: (pts[0].y + pts[1].y) / 2,
-      };
-      setDragging(null);
-      return;
-    }
-
-    if (pointersRef.current.size > 1) return;
-
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
     const pos = getMousePos(e);
 
     // Click nodes
     for (const n of nodes) {
         if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < 25) {
+            if (e.shiftKey) {
+                if (!selectedNodes.includes(n.id)) {
+                    setSelectedNodes(prev => [...prev, n.id]);
+                    addedToSelectionRef.current = true;
+                } else {
+                    addedToSelectionRef.current = false;
+                }
+                setSelectedEdges([]);
+                setSelectedPointIndex(null);
+                startDragPosRef.current = pos;
+                setDragging({ type: 'node', id: n.id });
+                return;
+            }
+
+            if (selectedNodes.includes(n.id) && selectedNodes.length > 1) {
+                startDragPosRef.current = pos;
+                setDragging({ type: 'node', id: n.id });
+                return;
+            }
+
+            if (e.ctrlKey) {
+                if (n.point.linked) {
+                    setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: { ...node.point, linked: false } } : node));
+                    return;
+                }
+
+                let newEdges = [...edges];
+                const incidentCount = newEdges.filter(edge => edge.source === n.id || edge.target === n.id).length;
+                if (incidentCount === 0) return;
+
+                // Ensure all incident edges have handles
+                newEdges = newEdges.map(edge => {
+                    if (edge.source === n.id || edge.target === n.id) {
+                        if (edge.points.length === 0) {
+                            const sourceNode = nodes.find(nn => nn.id === edge.source);
+                            const targetNode = nodes.find(nn => nn.id === edge.target);
+                            if (sourceNode && targetNode) {
+                                return {
+                                    ...edge,
+                                    points: [
+                                        { x: sourceNode.point.x + (targetNode.point.x - sourceNode.point.x) / 3, y: sourceNode.point.y + (targetNode.point.y - sourceNode.point.y) / 3, z: sourceNode.point.z ?? 4, linear: true, linked: false },
+                                        { x: sourceNode.point.x + 2 * (targetNode.point.x - sourceNode.point.x) / 3, y: sourceNode.point.y + 2 * (targetNode.point.y - sourceNode.point.y) / 3, z: targetNode.point.z ?? 4, linear: true, linked: false }
+                                    ]
+                                };
+                            }
+                        }
+                    }
+                    return edge;
+                });
+
+                // Gather current handles attached to this node
+                const connections = newEdges.filter(edge => edge.source === n.id || edge.target === n.id).map(edge => {
+                    const isSource = edge.source === n.id;
+                    const handle = isSource ? edge.points[0] : edge.points[edge.points.length - 1];
+                    const dx = handle.x - n.point.x;
+                    const dy = handle.y - n.point.y;
+                    return {
+                        edgeId: edge.id,
+                        isSource,
+                        dist: Math.hypot(dx, dy) || 1, // avoid division by zero
+                        angle: Math.atan2(dy, dx)
+                    };
+                });
+
+                const N = connections.length;
+                if (N > 0) {
+                    let targetAngles: number[] = [];
+                    connections.sort((a, b) => a.angle - b.angle);
+
+                    if (N === 1) {
+                         targetAngles = [connections[0].angle];
+                    } else if (N === 2) {
+                         let base = connections[0].angle;
+                         let base2 = connections[1].angle;
+                         // Check which bisector is closer to current
+                         let diff = base2 - base;
+                         if (diff < 0) diff += Math.PI * 2;
+                         const isCurrentCloserToStraight = Math.abs(diff - Math.PI) < Math.PI / 4;
+                         targetAngles = [base, base + Math.PI];
+                    } else if (N === 3) {
+                         const diff1 = (connections[1].angle - connections[0].angle + 2 * Math.PI) % (2 * Math.PI);
+                         const diff2 = (connections[2].angle - connections[0].angle + 2 * Math.PI) % (2 * Math.PI);
+
+                         const costY = Math.abs(diff1 - 2*Math.PI/3) + Math.abs(diff2 - 4*Math.PI/3);
+                         const costT1 = Math.abs(diff1 - Math.PI/2) + Math.abs(diff2 - Math.PI);
+                         const costT2 = Math.abs(diff1 - Math.PI/2) + Math.abs(diff2 - 3*Math.PI/2);
+                         const costT3 = Math.abs(diff1 - Math.PI) + Math.abs(diff2 - 3*Math.PI/2);
+
+                         const minCost = Math.min(costY, costT1, costT2, costT3);
+                         let base = connections[0].angle;
+                         if (minCost === costY) {
+                             targetAngles = [base, base + 2*Math.PI/3, base + 4*Math.PI/3];
+                         } else if (minCost === costT1) {
+                             targetAngles = [base, base + Math.PI/2, base + Math.PI];
+                         } else if (minCost === costT2) {
+                             targetAngles = [base, base + Math.PI/2, base + 3*Math.PI/2];
+                         } else {
+                             targetAngles = [base, base + Math.PI, base + 3*Math.PI/2];
+                         }
+                    } else if (N === 4) {
+                         let base = connections[0].angle;
+                         targetAngles = [base, base + Math.PI/2, base + Math.PI, base + 3*Math.PI/2];
+                    } else {
+                         let base = connections[0].angle;
+                         const step = 2 * Math.PI / N;
+                         for (let i = 0; i < N; i++) {
+                             targetAngles.push(base + i * step);
+                         }
+                    }
+
+                    newEdges = newEdges.map(edge => {
+                        const connIdx = connections.findIndex(c => c.edgeId === edge.id);
+                        if (connIdx !== -1) {
+                            const conn = connections[connIdx];
+                            const angle = targetAngles[connIdx];
+                            const newX = n.point.x + Math.cos(angle) * conn.dist;
+                            const newY = n.point.y + Math.sin(angle) * conn.dist;
+
+                            const newPts = [...edge.points];
+                            if (conn.isSource) {
+                                newPts[0] = { ...newPts[0], x: newX, y: newY, linear: false };
+                            } else {
+                                newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: newX, y: newY, linear: false };
+                            }
+                            return { ...edge, points: newPts };
+                        }
+                        return edge;
+                    });
+
+                    setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: { ...node.point, linked: true } } : node));
+                    setEdges(newEdges);
+                }
+
+                setSelectedNode(n.id);
+                setSelectedEdges([]);
+                setSelectedPointIndex(null);
+                setIsConnectMode(false);
+                setIsMergeMode(false);
+                return;
+            }
+
             if (e.altKey) {
                 setEdges(prev => prev.map(edge => {
                     const newPts = [...edge.points];
                     let changed = false;
                     if (edge.source === n.id && newPts.length > 0) {
-                        const targetNode = edge.target ? nodes.find(tn => tn.id === edge.target) : null;
-                        const targetAnchor = newPts.length >= 3 ? newPts[2] : (targetNode ? targetNode.point : newPts[1]);
-                        if (targetAnchor) {
-                            newPts[0] = { ...newPts[0], x: n.point.x + (targetAnchor.x - n.point.x) / 3, y: n.point.y + (targetAnchor.y - n.point.y) / 3, linear: !newPts[0].linear };
+                        const targetHandle = newPts[1];
+                        if (targetHandle) {
+                            newPts[0] = { ...newPts[0], x: n.point.x + (targetHandle.x - n.point.x) / 2, y: n.point.y + (targetHandle.y - n.point.y) / 2, z: !newPts[0].linear ? n.point.z ?? 4 : newPts[0].z, linear: !newPts[0].linear };
                             changed = true;
                         }
                     }
                     if (edge.target === n.id && newPts.length > 1) {
-                        const sourceNode = nodes.find(sn => sn.id === edge.source);
-                        const prevAnchor = newPts.length >= 3 ? newPts[newPts.length - 3] : (sourceNode ? sourceNode.point : newPts[0]);
-                        if (prevAnchor) {
-                            newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: n.point.x + (prevAnchor.x - n.point.x) / 3, y: n.point.y + (prevAnchor.y - n.point.y) / 3, linear: !newPts[newPts.length - 1].linear };
+                        const prevHandle = newPts[newPts.length - 2];
+                        if (prevHandle) {
+                            newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: n.point.x + (prevHandle.x - n.point.x) / 2, y: n.point.y + (prevHandle.y - n.point.y) / 2, z: !newPts[newPts.length - 1].linear ? n.point.z ?? 4 : newPts[newPts.length - 1].z, linear: !newPts[newPts.length - 1].linear };
                             changed = true;
                         }
                     }
                     return changed ? { ...edge, points: newPts } : edge;
                 }));
                 setSelectedNode(n.id);
-                setSelectedEdge(null);
+                setSelectedEdges([]);
                 setSelectedPointIndex(null);
                 setIsConnectMode(false);
                 setIsMergeMode(false);
@@ -647,8 +756,8 @@ export default function App() {
                         source: selectedNode,
                         target: n.id,
                         points: [
-                          { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3 },
-                          { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3 }
+                          { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
+                          { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
                         ],
                         width: 60,
                         sidewalk: 12,
@@ -656,7 +765,7 @@ export default function App() {
                     };
                     setEdges(prev => [...prev, newEdge]);
                     setSelectedNode(n.id);
-                    setSelectedEdge(id);
+                    setSelectedEdges([id]);
                     setSelectedPointIndex(null);
                     setIsConnectMode(false);
                 } else if (isMergeMode) {
@@ -684,7 +793,7 @@ export default function App() {
                                 changed = true;
                             }
                         }
-                        
+
                         if (edge.target === selectedNode) {
                             newEdge.target = n.id;
                             if (newPts.length > 0) {
@@ -705,13 +814,13 @@ export default function App() {
                     }).filter(edge => edge.source !== edge.target));
 
                     setSelectedNode(n.id);
-                    setSelectedEdge(null);
+                    setSelectedEdges([]);
                     setIsMergeMode(false);
                 }
             } else {
                 setDragging({ type: 'node', id: n.id });
                 setSelectedNode(n.id);
-                setSelectedEdge(null);
+                setSelectedEdges([]);
                 setSelectedPointIndex(null);
             }
             return;
@@ -730,36 +839,53 @@ export default function App() {
               const sourceNode = nodes.find(n => n.id === edge.source);
               if (!sourceNode) return edge;
               const targetNode = edge.target ? nodes.find(n => n.id === edge.target) : null;
-              
+
               if (j % 3 === 2) {
-                const prevAnchor = j === 2 ? sourceNode.point : newPts[j - 3];
-                const nextAnchor = j + 3 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 3];
-                newPts[j - 1] = { ...newPts[j - 1], x: newPts[j].x + (prevAnchor.x - newPts[j].x) / 3, y: newPts[j].y + (prevAnchor.y - newPts[j].y) / 3, linear: !newPts[j - 1].linear };
-                if (targetNode || j + 3 < newPts.length) {
-                    newPts[j + 1] = { ...newPts[j + 1], x: newPts[j].x + (nextAnchor.x - newPts[j].x) / 3, y: newPts[j].y + (nextAnchor.y - newPts[j].y) / 3, linear: !newPts[j + 1].linear };
+                const prevHandle = newPts[j - 2];
+                const nextHandle = j + 2 < newPts.length ? newPts[j + 2] : null;
+                if (prevHandle) {
+                  newPts[j - 1] = {
+                      ...newPts[j - 1],
+                      x: newPts[j].x + (prevHandle.x - newPts[j].x) / 2,
+                      y: newPts[j].y + (prevHandle.y - newPts[j].y) / 2,
+                      z: !newPts[j - 1].linear ? newPts[j].z ?? 4 : newPts[j - 1].z,
+                      linear: !newPts[j - 1].linear
+                  };
+                }
+                newPts[j] = { ...newPts[j], linked: false };
+                if ((targetNode || j + 3 < newPts.length) && nextHandle) {
+                    newPts[j + 1] = {
+                        ...newPts[j + 1],
+                        x: newPts[j].x + (nextHandle.x - newPts[j].x) / 2,
+                        y: newPts[j].y + (nextHandle.y - newPts[j].y) / 2,
+                        z: !newPts[j + 1].linear ? newPts[j].z ?? 4 : newPts[j + 1].z,
+                        linear: !newPts[j + 1].linear
+                    };
                 }
               } else if (j % 3 === 0) {
                 if (newPts[j].linear) {
                     newPts[j] = { ...newPts[j], linear: false };
                 } else {
                     const anchorA = j === 0 ? sourceNode.point : newPts[j - 1];
-                    const anchorB = j + 2 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 2];
-                    newPts[j] = { x: anchorA.x + (anchorB.x - anchorA.x) / 3, y: anchorA.y + (anchorB.y - anchorA.y) / 3, linear: true };
+                    const otherHandle = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
+                    newPts[j] = { x: anchorA.x + (otherHandle.x - anchorA.x) / 2, y: anchorA.y + (otherHandle.y - anchorA.y) / 2, z: anchorA.z ?? 4, linear: true };
                 }
+                if (j > 0 && newPts[j - 1]) newPts[j - 1] = { ...newPts[j - 1], linked: false };
               } else if (j % 3 === 1) {
                 if (newPts[j].linear) {
                     newPts[j] = { ...newPts[j], linear: false };
                 } else {
                     const anchorB = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
-                    const anchorA = j === 1 ? sourceNode.point : newPts[j - 2];
-                    newPts[j] = { x: anchorB.x + (anchorA.x - anchorB.x) / 3, y: anchorB.y + (anchorA.y - anchorB.y) / 3, linear: true };
+                    const otherHandle = j - 1 < 0 ? (sourceNode ? sourceNode.point : newPts[j]) : newPts[j - 1];
+                    newPts[j] = { x: anchorB.x + (otherHandle.x - anchorB.x) / 2, y: anchorB.y + (otherHandle.y - anchorB.y) / 2, z: anchorB.z ?? 4, linear: true };
                 }
+                if (j + 1 < newPts.length && newPts[j + 1]) newPts[j + 1] = { ...newPts[j + 1], linked: false };
               }
               return { ...edge, points: newPts };
             }));
-            
+
             setDragging({ type: 'edge', id: edges[i].id, pointId: j });
-            setSelectedEdge(edges[i].id);
+            setSelectedEdges([edges[i].id]);
             setSelectedNode(null);
             return;
           }
@@ -768,7 +894,7 @@ export default function App() {
             setEdges(prev => prev.map(edge => {
               if (edge.id !== edges[i].id) return edge;
               const newPts = [...edge.points];
-              
+
               if (j % 3 === 2) {
                 // Clicked anchor
                 const anchor = newPts[j];
@@ -780,8 +906,8 @@ export default function App() {
                     const angle = Math.atan2(h2.y - h1.y, h2.x - h1.x);
                     const d1 = Math.hypot(h1.x - anchor.x, h1.y - anchor.y);
                     const d2 = Math.hypot(h2.x - anchor.x, h2.y - anchor.y);
-                    newPts[j - 1] = { x: anchor.x - Math.cos(angle) * d1, y: anchor.y - Math.sin(angle) * d1 };
-                    newPts[j + 1] = { x: anchor.x + Math.cos(angle) * d2, y: anchor.y + Math.sin(angle) * d2 };
+                    newPts[j - 1] = { ...h1, x: anchor.x - Math.cos(angle) * d1, y: anchor.y - Math.sin(angle) * d1, linear: false };
+                    newPts[j + 1] = { ...h2, x: anchor.x + Math.cos(angle) * d2, y: anchor.y + Math.sin(angle) * d2, linear: false };
                     newPts[j] = { ...anchor, linked: true };
                 }
               } else if (j % 3 === 0 || j % 3 === 1) {
@@ -799,7 +925,7 @@ export default function App() {
                         const angle = Math.atan2(h1.y - anchor.y, h1.x - anchor.x);
                         const d2 = Math.hypot(h2.x - anchor.x, h2.y - anchor.y);
                         const oppAngle = angle + Math.PI;
-                        newPts[oppositeIdx] = { x: anchor.x + Math.cos(oppAngle) * d2, y: anchor.y + Math.sin(oppAngle) * d2 };
+                        newPts[oppositeIdx] = { ...h2, x: anchor.x + Math.cos(oppAngle) * d2, y: anchor.y + Math.sin(oppAngle) * d2 };
                         newPts[anchorIdx] = { ...anchor, linked: true };
                     }
                 }
@@ -810,7 +936,7 @@ export default function App() {
           }
 
           setDragging({ type: 'edge', id: edges[i].id, pointId: j });
-          setSelectedEdge(edges[i].id);
+          setSelectedEdges([edges[i].id]);
           setSelectedNode(null);
           setSelectedPointIndex(j);
           return;
@@ -831,7 +957,7 @@ export default function App() {
       for (let j = 0; j < pts.length - 1; j++) {
         // Skip hitting exact hubs to allow node selection/creation near hubs
         if (nodes.some(n => Math.hypot(n.point.x - pts[j].x, n.point.y - pts[j].y) < 40)) continue;
-        
+
         const d = distToSegment(pos, pts[j], pts[j+1]);
         if (d < minDist && d < threshold) {
           minDist = d;
@@ -840,123 +966,155 @@ export default function App() {
       }
 
       if (hitIndex !== -1) {
-        const hitPoint = pts[hitIndex];
-        const curveIndex = hitPoint.curveIndex ?? 0;
-        
+        if (e.shiftKey) {
+            if (!selectedEdges.includes(edge.id)) {
+                setSelectedEdges(prev => [...prev, edge.id]);
+                addedToSelectionRef.current = true;
+            } else {
+                addedToSelectionRef.current = false;
+            }
+            setSelectedNode(null);
+            startDragPosRef.current = pos;
+            setDragging({ type: 'edge', id: edge.id, pointId: hitIndex });
+            return;
+        }
+
+        if (selectedEdges.includes(edge.id) && selectedEdges.length > 1) {
+            startDragPosRef.current = pos;
+            setDragging({ type: 'edge', id: edge.id, pointId: hitIndex });
+            return;
+        }
+
+        // Only clear and multi-select edge, don't split unless multi-selection isn't active
+        setSelectedEdges([edge.id]);
+
+        const hitPt = pts[hitIndex];
+        const curveIndex = hitPt.curveIndex ?? 0;
+
         // If clicking on the auto-generated straight segments at the hubs, ignore for inserting points.
         const numCurves = (getExtendedEdgeControlPoints(edge, nodes, edges, chamferAngle).length - 1) / 3;
         if (curveIndex === 0 || curveIndex === numCurves - 1) {
             continue;
         }
-        
+
         const userCurveIndex = curveIndex - 1;
 
         setEdges((prev) => prev.map((e) => {
           if (e.id !== edge.id) return e;
-          
+
           const controlPoints = getExtendedEdgeControlPoints(e, nodes, edges, chamferAngle);
           const cubicPts = controlPoints;
-          
+
           const p0 = cubicPts[curveIndex * 3];
           const p1 = cubicPts[curveIndex * 3 + 1];
           const p2 = cubicPts[curveIndex * 3 + 2];
           const p3 = cubicPts[curveIndex * 3 + 3];
-          
+
           // Split Bezier at t
-          let t = hitPoint.t ?? 0.5;
+          let t = hitPt.t ?? 0.5;
           if (t < 0.1) t = 0.1;
           if (t > 0.9) t = 0.9;
-          
+
           const { p01, p12, p23, p012, p123, pMid } = splitBezier(p0, p1, p2, p3, t);
 
           const newPoints = [...e.points];
-          
+          const isLinear = newPoints.length >= 2 ? !!newPoints[userCurveIndex * 3]?.linear : true;
+
+          const hp01 = { ...p01, linear: isLinear };
+          const hp012 = { ...p012, linear: isLinear };
+          const hp123 = { ...p123, linear: isLinear };
+          const hp23 = { ...p23, linear: isLinear };
+
           if (newPoints.length < 2) {
               // Note: our logic requires at least 2 points for the user curve
-              return { ...e, points: [p01, p012, pMid, p123, p23] };
+              return { ...e, points: [hp01, hp012, pMid, hp123, hp23] };
           } else {
-              const spliceIdx = userCurveIndex * 3; 
-              newPoints.splice(spliceIdx, 2, p01, p012, pMid, p123, p23);
+              const spliceIdx = userCurveIndex * 3;
+              newPoints.splice(spliceIdx, 2, hp01, hp012, pMid, hp123, hp23);
               return { ...e, points: newPoints };
           }
         }));
-        setSelectedEdge(edge.id);
         setSelectedNode(null);
-        
+
         // start dragging the newly created `pMid`
-        const dragPointId = userCurveIndex * 3 + 2; 
+        const dragPointId = userCurveIndex * 3 + 2;
         setSelectedPointIndex(dragPointId);
         setDragging({ type: 'edge', id: edge.id, pointId: dragPointId });
-        
+
         return;
       }
     }
 
     // Click Empty Space
-    if (selectedNode) {
-        const newNodeId = Math.random().toString(36).substring(2, 9);
-        const sn = nodes.find(n => n.id === selectedNode)!;
-        const newEdgeId = Math.random().toString(36).substring(2, 9);
-        const newEdge: Edge = {
-            id: newEdgeId, source: selectedNode, target: newNodeId, points: [
-              { x: sn.point.x + (pos.x - sn.point.x)/3, y: sn.point.y + (pos.y - sn.point.y)/3 },
-              { x: sn.point.x + 2*(pos.x - sn.point.x)/3, y: sn.point.y + 2*(pos.y - sn.point.y)/3 }
-            ], width: 60, sidewalk: 12, color: COLORS[edges.length % COLORS.length]
-        };
-        setNodes(prev => [...prev, { id: newNodeId, point: pos }]);
-        setEdges(prev => [...prev, newEdge]);
-        setSelectedEdge(newEdgeId);
-        setSelectedNode(newNodeId);
-        setSelectedPointIndex(null);
-        setIsConnectMode(false);
-        setIsMergeMode(false);
-        setDragging({ type: 'node', id: newNodeId });
-        return;
-    }
-
     // Default deselect
     setSelectedNode(null);
-    setSelectedEdge(null);
+    setSelectedEdges([]);
     setSelectedPointIndex(null);
     setIsConnectMode(false);
     setIsMergeMode(false);
   };
 
-  const enforceLinear = (edge: Edge, currentNodes: Node[]) => {
+  const enforceLinear = (edge: Edge, currentNodes: Node[], oldEdge?: Edge, oldNodes?: Node[]) => {
       const newPts = [...edge.points];
       let changed = false;
       const sourceNode = currentNodes.find(n => n.id === edge.source);
       const targetNode = edge.target ? currentNodes.find(n => n.id === edge.target) : null;
-      
+
+      const oldSourceNode = oldNodes ? oldNodes.find(n => n.id === edge.source) : sourceNode;
+      const oldTargetNode = oldNodes && edge.target ? oldNodes.find(n => n.id === edge.target) : targetNode;
+      const oldPts = oldEdge ? oldEdge.points : newPts;
+
       for (let j = 0; j < newPts.length; j++) {
           const handle = newPts[j];
           if (!handle.linear) continue;
+
+          const oldHandle = oldPts[j] || handle;
+
           if (j % 3 === 0) {
               const anchorA = j === 0 ? sourceNode?.point : newPts[j - 1];
-              const anchorB = j + 2 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 2];
-              if (!anchorA || !anchorB) continue;
+              const anchorB = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
+
+              const oldAnchorA = j === 0 ? oldSourceNode?.point : oldPts[j - 1];
+              const oldAnchorB = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
+
+              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
+
               const dx = anchorB.x - anchorA.x;
               const dy = anchorB.y - anchorA.y;
-              const distAB = Math.hypot(dx, dy);
-              if (distAB > 0.001) {
-                  const dirX = dx / distAB;
-                  const dirY = dy / distAB;
-                  const hDist = Math.hypot(handle.x - anchorA.x, handle.y - anchorA.y);
-                  newPts[j] = { ...handle, x: anchorA.x + dirX * hDist, y: anchorA.y + dirY * hDist };
+
+              const oldDx = oldAnchorB.x - oldAnchorA.x;
+              const oldDy = oldAnchorB.y - oldAnchorA.y;
+              const oldLenSq = oldDx * oldDx + oldDy * oldDy;
+
+              if (oldLenSq > 0.0001) {
+                  const hx = oldHandle.x - oldAnchorA.x;
+                  const hy = oldHandle.y - oldAnchorA.y;
+                  let t = (hx * oldDx + hy * oldDy) / oldLenSq;
+                  t = Math.max(0, t);
+                  newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
                   changed = true;
               }
           } else if (j % 3 === 1) {
               const anchorA = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
-              const anchorB = j === 1 ? sourceNode?.point : newPts[j - 2];
-              if (!anchorA || !anchorB) continue;
+              const anchorB = j - 1 < 0 ? (sourceNode ? sourceNode.point : newPts[j]) : newPts[j - 1];
+
+              const oldAnchorA = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
+              const oldAnchorB = j - 1 < 0 ? (oldSourceNode ? oldSourceNode.point : oldPts[j]) : oldPts[j - 1];
+
+              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
               const dx = anchorB.x - anchorA.x;
               const dy = anchorB.y - anchorA.y;
-              const distAB = Math.hypot(dx, dy);
-              if (distAB > 0.001) {
-                  const dirX = dx / distAB;
-                  const dirY = dy / distAB;
-                  const hDist = Math.hypot(handle.x - anchorA.x, handle.y - anchorA.y);
-                  newPts[j] = { ...handle, x: anchorA.x + dirX * hDist, y: anchorA.y + dirY * hDist };
+
+              const oldDx = oldAnchorB.x - oldAnchorA.x;
+              const oldDy = oldAnchorB.y - oldAnchorA.y;
+              const oldLenSq = oldDx * oldDx + oldDy * oldDy;
+
+              if (oldLenSq > 0.0001) {
+                  const hx = oldHandle.x - oldAnchorA.x;
+                  const hy = oldHandle.y - oldAnchorA.y;
+                  let t = (hx * oldDx + hy * oldDy) / oldLenSq;
+                  t = Math.max(0, t);
+                  newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
                   changed = true;
               }
           }
@@ -964,149 +1122,318 @@ export default function App() {
       return changed ? { ...edge, points: newPts } : edge;
   };
 
-  const onPointerMove = (e: React.PointerEvent) => {
-    const rawPos = { x: e.clientX - canvasRef.current!.getBoundingClientRect().left, y: e.clientY - canvasRef.current!.getBoundingClientRect().top };
-    pointersRef.current.set(e.pointerId, rawPos);
+  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan'; id: string; pointId?: number }, pos: Point, shiftKey: boolean) => {
+    const taper = (dist: number, radius: number) => Math.max(0, 1 - Math.pow(dist / radius, 2));
 
-    if ((pointersRef.current.size === 2 || (dragging?.type === 'pan' && pointersRef.current.size === 1)) && lastPanMidpointRef.current) {
-      const pts = Array.from(pointersRef.current.values()) as Point[];
-      let newMidpoint = rawPos;
-      if (pointersRef.current.size === 2) {
-        newMidpoint = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-      }
-      const dx = newMidpoint.x - lastPanMidpointRef.current.x;
-      const dy = newMidpoint.y - lastPanMidpointRef.current.y;
-      setView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
-      lastPanMidpointRef.current = newMidpoint;
-      return;
-    }
-
-    if (!dragging || pointersRef.current.size > 1) return;
-    const pos = getMousePos(e);
-
-    if (dragging.type === 'node') {
-        const draggingNode = nodes.find(n => n.id === dragging.id);
+    if (dragState.type === 'node') {
+        const draggingNode = nodes.find(n => n.id === dragState.id);
         if (draggingNode) {
-            const dx = pos.x - draggingNode.point.x;
-            const dy = pos.y - draggingNode.point.y;
-            const newNodes = nodes.map(n => n.id === dragging.id ? { ...n, point: pos } : n);
-            
-            setNodes(newNodes);
-            
-            // Move only the explicitly connected control points (handles) with the node
-            setEdges(prev => prev.map(edge => {
-                if (edge.source === dragging.id || edge.target === dragging.id) {
-                    const newPoints = [...edge.points];
-                    if (edge.source === dragging.id && newPoints.length > 0) {
-                        newPoints[0] = { ...newPoints[0], x: newPoints[0].x + dx, y: newPoints[0].y + dy };
-                    }
-                    if (edge.target === dragging.id && newPoints.length > 1) {
-                        newPoints[newPoints.length - 1] = { 
-                            ...newPoints[newPoints.length - 1],
-                            x: newPoints[newPoints.length - 1].x + dx, 
-                            y: newPoints[newPoints.length - 1].y + dy 
-                        };
-                    }
-                    return enforceLinear({ ...edge, points: newPoints }, newNodes);
+            let dx = pos.x - draggingNode.point.x;
+            let dy = pos.y - draggingNode.point.y;
+            if (is3DMode && shiftKey) { dx = 0; dy = 0; }
+            const dz = pos.z !== undefined ? pos.z - (draggingNode.point.z ?? 4) : 0;
+
+            const originPoint = draggingNode.point;
+
+            const newNodes = nodes.map(n => {
+                const isSelected = selectedNodes.includes(n.id);
+                if (n.id === draggingNode.id) {
+                    return { ...n, point: { ...n.point, x: n.point.x + dx, y: n.point.y + dy, z: pos.z ?? originPoint.z } };
+                } else if (isSelected) {
+                    return { ...n, point: { ...n.point, x: n.point.x + dx, y: n.point.y + dy, z: (n.point.z ?? 4) + dz } };
                 }
-                return edge;
+                if (!softSelectionEnabled) return n;
+                const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
+                const w = taper(d, softSelectionRadius);
+                if (w <= 0) return n;
+                return {
+                    ...n,
+                    point: {
+                        x: n.point.x + dx * w,
+                        y: n.point.y + dy * w,
+                        z: (n.point.z ?? 4) + dz * w
+                    }
+                };
+            });
+
+            setNodes(newNodes);
+            const movedNodes = new Set([...selectedNodes, draggingNode.id]);
+            setEdges(edges.map(edge => {
+                let newPoints = [...edge.points];
+                let changed = false;
+
+                if (movedNodes.has(edge.source) || movedNodes.has(edge.target)) {
+                    if (movedNodes.has(edge.source) && newPoints.length > 0) {
+                        newPoints[0] = { ...newPoints[0], x: newPoints[0].x + dx, y: newPoints[0].y + dy, z: (newPoints[0].z ?? 4) + dz };
+                        changed = true;
+                    }
+                    if (movedNodes.has(edge.target) && newPoints.length > 0) {
+                        newPoints[newPoints.length - 1] = {
+                            ...newPoints[newPoints.length - 1],
+                            x: newPoints[newPoints.length - 1].x + dx,
+                            y: newPoints[newPoints.length - 1].y + dy,
+                            z: (newPoints[newPoints.length - 1].z ?? 4) + dz
+                        };
+                        changed = true;
+                    }
+                }
+
+                if (softSelectionEnabled) {
+                    newPoints = newPoints.map((pt, idx) => {
+                        if (movedNodes.has(edge.source) && idx === 0) return pt;
+                        if (movedNodes.has(edge.target) && idx === newPoints.length - 1) return pt;
+
+                        const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
+                        const w = taper(d, softSelectionRadius);
+                        if (w <= 0) return pt;
+                        changed = true;
+                        return {
+                            ...pt,
+                            x: pt.x + dx * w,
+                            y: pt.y + dy * w,
+                            z: (pt.z ?? 4) + dz * w
+                        };
+                    });
+                }
+
+                return changed ? enforceLinear({ ...edge, points: newPoints }, newNodes, edge, nodes) : edge;
             }));
         }
-    } else if (dragging.type === 'edge' && dragging.pointId !== undefined) {
-      setEdges((prev) => prev.map((edge) => {
-        if (edge.id === dragging.id) {
-          const newPoints = [...edge.points];
-          const pid = dragging.pointId!;
-          const oldPos = newPoints[pid];
-          const dx = pos.x - oldPos.x;
-          const dy = pos.y - oldPos.y;
-          
-          if (pid % 3 === 2) {
-             // moving an anchor point, move its connected handles
-             newPoints[pid] = { ...oldPos, x: pos.x, y: pos.y };
-             if (pid - 1 >= 0) {
-                 newPoints[pid - 1] = { ...newPoints[pid - 1], x: newPoints[pid - 1].x + dx, y: newPoints[pid - 1].y + dy };
-             }
-             if (pid + 1 < newPoints.length) {
-                 newPoints[pid + 1] = { ...newPoints[pid + 1], x: newPoints[pid + 1].x + dx, y: newPoints[pid + 1].y + dy };
-             }
-          } else if (pid % 3 === 0 || pid % 3 === 1) {
-             // moving a handle, check if its linear
-             const handle = newPoints[pid];
-             let effectivePos = pos;
-             
-             if (handle.linear) {
-                 const sourceNode = nodes.find(n => n.id === edge.source);
-                 const targetNode = edge.target ? nodes.find(n => n.id === edge.target) : null;
-                 
-                 let anchorA, anchorB;
-                 if (pid % 3 === 0) {
-                     anchorA = pid === 0 ? sourceNode?.point : newPoints[pid - 1];
-                     anchorB = pid + 2 >= newPoints.length ? (targetNode ? targetNode.point : newPoints[pid]) : newPoints[pid + 2];
-                 } else {
-                     anchorA = pid + 1 >= newPoints.length ? (targetNode ? targetNode.point : newPoints[pid]) : newPoints[pid + 1];
-                     anchorB = pid === 1 ? sourceNode?.point : newPoints[pid - 2];
-                 }
-                 
-                 if (anchorA && anchorB) {
-                     const dxL = anchorB.x - anchorA.x;
-                     const dyL = anchorB.y - anchorA.y;
-                     const distAB = Math.hypot(dxL, dyL);
-                     if (distAB > 0.001) {
-                         const dirX = dxL / distAB;
-                         const dirY = dyL / distAB;
-                         const vX = pos.x - anchorA.x;
-                         const vY = pos.y - anchorA.y;
-                         const dot = vX * dirX + vY * dirY;
-                         // don't allow negative distance if we want it to stay between them or pointing the right way
-                         const clampedDot = Math.max(0, dot);
-                         effectivePos = { x: anchorA.x + dirX * clampedDot, y: anchorA.y + dirY * clampedDot };
-                     }
-                 }
-             }
+    } else if (dragState.type === 'edge' && dragState.pointId !== undefined) {
+      setEdges((prev) => {
+        const pid = dragState.pointId as number;
+        const draggingEdge = prev.find(e => e.id === dragState.id);
+        if (!draggingEdge) return prev;
 
-             newPoints[pid] = { ...handle, ...effectivePos };
-             
-             // Check if anchor is linked
-             const isIncoming = pid % 3 === 1;
-             const anchorIdx = isIncoming ? pid + 1 : pid - 1;
-             const oppositeIdx = isIncoming ? pid + 2 : pid - 2;
-             
-             if (anchorIdx >= 0 && anchorIdx < newPoints.length && oppositeIdx >= 0 && oppositeIdx < newPoints.length) {
-                 const anchor = newPoints[anchorIdx];
-                 if (anchor.linked) {
-                     const dxAngle = effectivePos.x - anchor.x;
-                     const dyAngle = effectivePos.y - anchor.y;
-                     const angle = Math.atan2(dyAngle, dxAngle);
-                     const oppPos = newPoints[oppositeIdx];
-                     const oppDist = Math.hypot(oppPos.x - anchor.x, oppPos.y - anchor.y);
-                     const oppAngle = angle + Math.PI;
-                     newPoints[oppositeIdx] = {
-                         ...oppPos,
-                         x: anchor.x + Math.cos(oppAngle) * oppDist,
-                         y: anchor.y + Math.sin(oppAngle) * oppDist
-                     };
-                 }
-             }
-          }
-          
-          return enforceLinear({ ...edge, points: newPoints }, nodes);
+        const originPoint = draggingEdge.points[pid];
+        let ddx = pos.x - originPoint.x;
+        let ddy = pos.y - originPoint.y;
+        if (is3DMode && shiftKey) { ddx = 0; ddy = 0; }
+        const ddz = pos.z !== undefined ? pos.z - (originPoint.z ?? 4) : 0;
+
+        let linkedNode: Node | null = null;
+        let angleDelta = 0;
+        let scaleRatio = 1;
+
+        if (pid === 0 || pid === draggingEdge.points.length - 1) {
+            const nodeId = pid === 0 ? draggingEdge.source : draggingEdge.target;
+            if (nodeId && !originPoint.linear) {
+               const node = nodes.find(n => n.id === nodeId);
+               if (node && node.point.linked) {
+                   linkedNode = node;
+
+                   const oldDx = originPoint.x - node.point.x;
+                   const oldDy = originPoint.y - node.point.y;
+                   const oldAngle = Math.atan2(oldDy, oldDx);
+
+                   const newPos = { x: originPoint.x + ddx, y: originPoint.y + ddy };
+                   const newDx = newPos.x - node.point.x;
+                   const newDy = newPos.y - node.point.y;
+                   const newAngle = Math.atan2(newDy, newDx);
+
+                   angleDelta = newAngle - oldAngle;
+               }
+            }
         }
-        return edge;
-      }));
+
+        let newNodes = nodes;
+        if (softSelectionEnabled) {
+            newNodes = nodes.map(n => {
+                const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
+                const w = taper(d, softSelectionRadius);
+                if (w <= 0) return n;
+                return {
+                    ...n,
+                    point: {
+                        x: n.point.x + ddx * w,
+                        y: n.point.y + ddy * w,
+                        z: (n.point.z ?? 4) + ddz * w
+                    }
+                };
+            });
+            // Calling setNodes here relies on it batching nicely
+            setNodes(newNodes);
+        }
+
+        return prev.map((e) => {
+          let isLinkedEdge = false;
+          if (linkedNode && e.id !== draggingEdge.id && (e.source === linkedNode.id || e.target === linkedNode.id)) {
+              isLinkedEdge = true;
+          }
+
+          if (e.id !== draggingEdge.id && !softSelectionEnabled && !isLinkedEdge) return e;
+
+          let newPoints = [...e.points];
+          let changed = false;
+
+          if (e.id === draggingEdge.id) {
+              const oldTarget = originPoint;
+
+              if (pid % 3 === 2) {
+                 newPoints[pid] = { ...oldTarget, x: oldTarget.x + ddx, y: oldTarget.y + ddy, z: oldTarget.z !== undefined ? oldTarget.z + ddz : 4 + ddz };
+                 if (pid - 1 >= 0) {
+                     newPoints[pid - 1] = { ...newPoints[pid - 1], x: newPoints[pid - 1].x + ddx, y: newPoints[pid - 1].y + ddy, z: (newPoints[pid - 1].z ?? 4) + ddz };
+                 }
+                 if (pid + 1 < newPoints.length) {
+                     newPoints[pid + 1] = { ...newPoints[pid + 1], x: newPoints[pid + 1].x + ddx, y: newPoints[pid + 1].y + ddy, z: (newPoints[pid + 1].z ?? 4) + ddz };
+                 }
+              } else if (pid % 3 === 0 || pid % 3 === 1) {
+                  const handle = originPoint;
+                  let effectivePos = { x: handle.x + ddx, y: handle.y + ddy, z: pos.z ?? oldTarget.z ?? 4 };
+
+                  newPoints[pid] = { ...handle, ...effectivePos };
+
+                  // Check if anchor is linked
+                  const isIncoming = pid % 3 === 1;
+                  const anchorIdx = isIncoming ? pid + 1 : pid - 1;
+                  const oppositeIdx = isIncoming ? pid + 2 : pid - 2;
+
+                  if (anchorIdx >= 0 && anchorIdx < newPoints.length && oppositeIdx >= 0 && oppositeIdx < newPoints.length && !handle.linear) {
+                      const anchor = newPoints[anchorIdx];
+                      if (anchor.linked) {
+                          const dxAngle = effectivePos.x - anchor.x;
+                          const dyAngle = effectivePos.y - anchor.y;
+                          const oppPos = newPoints[oppositeIdx];
+
+                          const curDist = Math.hypot(dxAngle, dyAngle);
+                          const oppOldDx = oppPos.x - anchor.x;
+                          const oppOldDy = oppPos.y - anchor.y;
+                          const oppDist = Math.hypot(oppOldDx, oppOldDy);
+
+                          if (curDist > 0.001) {
+                              const oppDirX = -dxAngle / curDist;
+                              const oppDirY = -dyAngle / curDist;
+
+                              newPoints[oppositeIdx] = {
+                                  ...oppPos,
+                                  x: anchor.x + oppDirX * oppDist,
+                                  y: anchor.y + oppDirY * oppDist,
+                                  linear: false
+                              };
+                          }
+                      }
+                  }
+              }
+              changed = true;
+
+              if (softSelectionEnabled) {
+                  newPoints = newPoints.map((pt, idx) => {
+                      if (idx === pid) return pt;
+                      if (pid % 3 === 2 && (idx === pid - 1 || idx === pid + 1)) return pt;
+                      const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
+                      const w = taper(d, softSelectionRadius);
+                      if (w <= 0) return pt;
+                      return {
+                          ...pt,
+                          x: pt.x + ddx * w,
+                          y: pt.y + ddy * w,
+                          z: (pt.z ?? 4) + ddz * w
+                      };
+                  });
+              }
+          } else if (isLinkedEdge && linkedNode && angleDelta !== 0) {
+              if (e.source === linkedNode.id && newPoints.length > 0 && !newPoints[0].linear) {
+                  const h = newPoints[0];
+                  const odx = h.x - linkedNode.point.x;
+                  const ody = h.y - linkedNode.point.y;
+                  const oAng = Math.atan2(ody, odx);
+                  const oDist = Math.hypot(odx, ody);
+                  const nAng = oAng + angleDelta;
+                  const nDist = oDist * scaleRatio;
+                  newPoints[0] = { ...h, x: linkedNode.point.x + Math.cos(nAng) * nDist, y: linkedNode.point.y + Math.sin(nAng) * nDist, linear: false };
+                  changed = true;
+              }
+              if (e.target === linkedNode.id && newPoints.length > 0 && !newPoints[newPoints.length - 1].linear) {
+                  const idx = newPoints.length - 1;
+                  const h = newPoints[idx];
+                  const odx = h.x - linkedNode.point.x;
+                  const ody = h.y - linkedNode.point.y;
+                  const oAng = Math.atan2(ody, odx);
+                  const oDist = Math.hypot(odx, ody);
+                  const nAng = oAng + angleDelta;
+                  const nDist = oDist * scaleRatio;
+                  newPoints[idx] = { ...h, x: linkedNode.point.x + Math.cos(nAng) * nDist, y: linkedNode.point.y + Math.sin(nAng) * nDist, linear: false };
+                  changed = true;
+              }
+          } else if (softSelectionEnabled) {
+              newPoints = newPoints.map((pt, idx) => {
+                  const d = Math.hypot(pt.x - originPoint.x, pt.y - originPoint.y);
+                  const w = taper(d, softSelectionRadius);
+                  if (w <= 0) return pt;
+                  changed = true;
+                  return {
+                      ...pt,
+                      x: pt.x + ddx * w,
+                      y: pt.y + ddy * w,
+                      z: (pt.z ?? 4) + ddz * w
+                  };
+              });
+          }
+
+          const passOldEdge = (pid % 3 === 2);
+          return changed ? enforceLinear({ ...e, points: newPoints }, newNodes, passOldEdge ? e : undefined, passOldEdge ? nodes : undefined) : e;
+        });
+      });
     }
   };
 
-  const onPointerUp = (e: React.PointerEvent) => {
-    pointersRef.current.delete(e.pointerId);
-    if (pointersRef.current.size < 2 && dragging?.type !== 'pan') {
-      lastPanMidpointRef.current = null;
+  const onPointerMove = (e: React.PointerEvent | any) => {
+    if (is3DMode) {
+      if (!dragging || dragging.type === 'pan') return;
+    } else {
+      const rect = canvasRef.current!.getBoundingClientRect();
+      const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      pointersRef.current.set(e.pointerId, rawPos);
+
+      if ((pointersRef.current.size === 2 || (dragging?.type === 'pan' && pointersRef.current.size === 1)) && lastPanMidpointRef.current) {
+        const pts = Array.from(pointersRef.current.values()) as Point[];
+        let newMidpoint = rawPos;
+        if (pointersRef.current.size === 2) {
+          newMidpoint = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        }
+        const dx = newMidpoint.x - lastPanMidpointRef.current.x;
+        const dy = newMidpoint.y - lastPanMidpointRef.current.y;
+        setView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+        lastPanMidpointRef.current = newMidpoint;
+        return;
+      }
+
+      if (!dragging || pointersRef.current.size > 1) return;
     }
 
-    if (dragging?.type === 'pan') {
-      setDragging(null);
-      lastPanMidpointRef.current = null;
-      return;
+    const pos = getMousePos(e);
+
+    handleDrag(dragging, pos, e.shiftKey);
+  };
+
+  const onPointerUp = (e: React.PointerEvent | any) => {
+    if (dragging && e.shiftKey && startDragPosRef.current) {
+        const pos = getMousePos(e);
+        const dx = pos.x - startDragPosRef.current.x;
+        const dy = pos.y - startDragPosRef.current.y;
+        const dz = (pos.z ?? 0) - (startDragPosRef.current.z ?? 0);
+        const dist = Math.hypot(Math.hypot(dx, dy), dz);
+
+        if (dist < 5 && !addedToSelectionRef.current) {
+            if (dragging.type === 'node') {
+                setSelectedNodes(prev => prev.filter(id => id !== dragging.id));
+            } else if (dragging.type === 'edge') {
+                setSelectedEdges(prev => prev.filter(id => id !== dragging.id));
+            }
+        }
+    }
+
+    if (!is3DMode) {
+      pointersRef.current.delete(e.pointerId);
+      if (pointersRef.current.size < 2 && dragging?.type !== 'pan') {
+        lastPanMidpointRef.current = null;
+      }
+
+      if (dragging?.type === 'pan') {
+        setDragging(null);
+        lastPanMidpointRef.current = null;
+        return;
+      }
     }
 
     if (dragging?.type === 'edge') {
@@ -1114,7 +1441,7 @@ export default function App() {
         const pos = getMousePos(e);
         let targetNode = null;
         for (const n of nodes) {
-            if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < 30) {
+            if (Math.hypot(pos.x - n.point.x, pos.y - n.point.y) < (is3DMode ? 40 : 30)) {
                 targetNode = n.id;
                 break;
             }
@@ -1135,21 +1462,25 @@ export default function App() {
         }
     }
 
-    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    if (!is3DMode && e.target.releasePointerCapture) {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    }
     setDragging(null);
   };
 
-  const onPointerCancel = (e: React.PointerEvent) => {
-    pointersRef.current.delete(e.pointerId);
-    if (pointersRef.current.size < 2) {
-      lastPanMidpointRef.current = null;
+  const onPointerCancel = (e: React.PointerEvent | any) => {
+    if (!is3DMode) {
+      pointersRef.current.delete(e.pointerId);
+      if (pointersRef.current.size < 2) {
+        lastPanMidpointRef.current = null;
+      }
     }
     setDragging(null);
   };
 
   const addNode = () => {
     const id = Math.random().toString(36).substring(2, 9);
-    setNodes(prev => [...prev, { id, point: { x: nodes[nodes.length-1]?.point.x + 100 || 400, y: nodes[nodes.length-1]?.point.y + 100 || 300 } }]);
+    setNodes(prev => [...prev, { id, point: { x: (nodes[nodes.length-1]?.point?.x ?? 300) + 100, y: (nodes[nodes.length-1]?.point?.y ?? 200) + 100 } }]);
   };
 
   const addEdge = () => {
@@ -1164,8 +1495,8 @@ export default function App() {
           source: srcNode.id,
           target: tgtId,
           points: [
-              { x: srcNode.point.x, y: srcNode.point.y + 33 },
-              { x: srcNode.point.x, y: srcNode.point.y + 66 }
+              { x: srcNode.point.x, y: srcNode.point.y + 33, z: srcNode.point.z ?? 4, linear: true },
+              { x: srcNode.point.x, y: srcNode.point.y + 66, z: srcNode.point.z ?? 4, linear: true }
           ],
           width: 60,
           sidewalk: 12,
@@ -1173,317 +1504,134 @@ export default function App() {
       }]);
   }
 
+  const handleFlipEdge = (id: string) => {
+    setEdges(prev => prev.map(e => {
+      if (e.id !== id) return e;
+      if (!e.target) return e;
+      return {
+        ...e,
+        source: e.target,
+        target: e.source,
+        points: [...e.points].reverse(),
+        sidewalkLeft: e.sidewalkRight,
+        sidewalkRight: e.sidewalkLeft
+      };
+    }));
+  };
+
   return (
     <div className="w-full h-screen bg-slate-950 text-slate-300 font-sans flex flex-col overflow-hidden">
-      <header className="h-14 lg:h-16 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-4 lg:px-6 shrink-0 relative z-30">
-        <div className="flex items-center gap-2 lg:gap-3">
-          <button 
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 lg:hidden text-slate-400 hover:text-white"
-          >
-            {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
-          <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center shrink-0">
-            <Layers className="w-5 h-5 text-white" />
-          </div>
-          <h1 className="text-base lg:text-lg font-semibold tracking-tight text-white line-clamp-1">
-            Network <span className="hidden sm:inline text-slate-500 font-normal">v3.0</span>
-          </h1>
-        </div>
-
-        <div className="flex items-center gap-2 lg:gap-4">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
-            title="Import JSON"
-          >
-            <Upload className="w-4 h-4" />
-            <span className="hidden xl:inline">Import</span>
-          </button>
-          <input
-            type="file"
-            accept=".json"
-            ref={fileInputRef}
-            onChange={handleImport}
-            className="hidden"
-          />
-          <button
-            onClick={handleExport}
-            className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
-            title="Export JSON"
-          >
-            <Download className="w-4 h-4" />
-            <span className="hidden xl:inline">Export</span>
-          </button>
-          <div className="w-px h-6 bg-slate-700 hidden sm:block mx-1"></div>
-          <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300 font-medium hover:text-white sm:mr-2">
-            <input 
-              type="checkbox" 
-              className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 w-4 h-4 cursor-pointer"
-              checked={showControlPoints} 
-              onChange={(e) => setShowControlPoints(e.target.checked)} 
-            />
-            <span className="hidden md:inline">Show Control Points</span>
-            <span className="md:hidden">Points</span>
-          </label>
-          <button
-            onClick={() => setShowMesh(!showMesh)}
-            className={`p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors ${
-              showMesh 
-                ? 'bg-blue-600 border-blue-500 text-white hover:bg-blue-500' 
-                : 'border-slate-700 hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span className="hidden md:inline">{showMesh ? 'Hide Mesh' : 'Show Mesh'}</span>
-          </button>
-        </div>
-      </header>
+      <Header
+        isSidebarOpen={isSidebarOpen}
+        setIsSidebarOpen={setIsSidebarOpen}
+        handleImport={handleImport}
+        handleExport={handleExport}
+        showControlPoints={showControlPoints}
+        setShowControlPoints={setShowControlPoints}
+        is3DMode={is3DMode}
+        setIs3DMode={setIs3DMode}
+        showMesh={showMesh}
+        setShowMesh={setShowMesh}
+      />
 
       <div className="flex flex-grow overflow-hidden relative">
         <main className="flex-grow relative bg-slate-900 overflow-hidden" ref={containerRef}>
-          <div 
-            className="absolute inset-0 opacity-10 pointer-events-none" 
-            style={{ 
-              backgroundImage: 'radial-gradient(#64748b 1px, transparent 1px)', 
-              backgroundSize: `${24 * view.zoom}px ${24 * view.zoom}px`,
-              backgroundPosition: `${view.x}px ${view.y}px`
-            }}
-          ></div>
-          
-          <canvas
-            ref={canvasRef}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerCancel}
-            onContextMenu={onContextMenu}
-            className="absolute inset-0 block outline-none cursor-crosshair touch-none"
-          />
+          {is3DMode ? (
+            <ThreeScene
+              nodes={nodes}
+              edges={edges}
+              chamferAngle={chamferAngle}
+              meshResolution={meshResolution}
+              laneWidth={laneWidth}
+              showMesh={showMesh}
+              showControlPoints={showControlPoints}
+              setNodes={setNodes}
+              setEdges={setEdges}
+              view={view}
+              setView={setView}
+              containerRef={containerRef}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
+              onContextMenu={onContextMenu}
+              isDragging={dragging !== null && dragging.type !== 'pan'}
+              draggingPoint={draggingPoint}
+              softSelectionEnabled={softSelectionEnabled}
+              softSelectionRadius={softSelectionRadius}
+              selectedNode={selectedNode}
+              selectedNodes={selectedNodes}
+              selectedEdges={selectedEdges}
+              selectedPointIndex={selectedPointIndex}
+            />
+          ) : (
+            <>
+              <div
+                className="absolute inset-0 opacity-10 pointer-events-none"
+                style={{
+                  backgroundImage: 'radial-gradient(#64748b 1px, transparent 1px)',
+                  backgroundSize: `${24 * view.zoom}px ${24 * view.zoom}px`,
+                  backgroundPosition: `${view.x}px ${view.y}px`
+                }}
+              ></div>
 
-          <div className="absolute bottom-10 lg:bottom-6 left-1/2 -translate-x-1/2 lg:left-6 lg:translate-x-0 p-2.5 lg:p-3 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-md shadow-xl flex gap-4 lg:gap-6 text-[9px] lg:text-[11px] font-medium tracking-wider uppercase pointer-events-none whitespace-nowrap z-10 flex-col sm:flex-row shadow-[0_0_20px_black] border-slate-600 flex-wrap justify-center">
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Right Click Edge</span> Create Node/Split</div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
-              <span className={isConnectMode ? "text-emerald-400" : "text-blue-300"}>
-                {isConnectMode ? "Click Node/Space" : "C"}
-              </span> 
-              {isConnectMode ? "Connect to / New Road" : "Connect Mode"}
-            </div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
-              <span className={isMergeMode ? "text-red-400" : "text-blue-300"}>
-                {isMergeMode ? "Click Node" : "M"}
-              </span>
-              {isMergeMode ? "Merge With Selected" : "Merge Mode"}
-            </div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Middle Drag / 2 Fingers</span> Pan</div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Scroll</span> Zoom</div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Click Edge</span> Add Point</div>
-            <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Esc</span> Deselect</div>
-          </div>
+              <canvas
+                ref={canvasRef}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerCancel}
+                onContextMenu={onContextMenu}
+                className="absolute inset-0 block outline-none cursor-crosshair touch-none"
+              />
+
+              <div className="absolute bottom-10 lg:bottom-6 left-1/2 -translate-x-1/2 lg:left-6 lg:translate-x-0 p-2.5 lg:p-3 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-md shadow-xl flex gap-4 lg:gap-6 text-[9px] lg:text-[11px] font-medium tracking-wider uppercase pointer-events-none whitespace-nowrap z-10 flex-col sm:flex-row shadow-[0_0_20px_black] border-slate-600 flex-wrap justify-center">
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Right Click Edge</span> Create Node/Split</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
+                  <span className={isConnectMode ? "text-emerald-400" : "text-blue-300"}>
+                    {isConnectMode ? "Click Node/Space" : "C"}
+                  </span>
+                  {isConnectMode ? "Connect to / New Road" : "Connect Mode"}
+                </div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
+                  <span className={isMergeMode ? "text-red-400" : "text-blue-300"}>
+                    {isMergeMode ? "Click Node" : "M"}
+                  </span>
+                  {isMergeMode ? "Merge With Selected" : "Merge Mode"}
+                </div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Middle Drag / 2 Fingers</span> Pan</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Scroll</span> Zoom</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Click Edge</span> Add Point</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Esc</span> Deselect</div>
+              </div>
+            </>
+          )}
         </main>
 
-        <aside className={`${isSidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} fixed lg:relative right-0 top-0 h-full w-full sm:w-80 lg:w-72 border-l border-slate-800 bg-slate-900 p-5 lg:p-6 flex flex-col gap-6 lg:gap-8 shrink-0 overflow-y-auto transition-transform duration-300 ease-in-out z-40 lg:z-10`}>
-          <div className="flex items-center justify-between lg:hidden mb-2">
-            <h2 className="text-white font-bold text-lg uppercase tracking-tight">Properties</h2>
-            <button 
-              onClick={() => setIsSidebarOpen(false)}
-              className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          <section>
-            <div className="flex gap-2 mb-4">
-                <button onClick={addNode} className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-semibold flex justify-center items-center gap-2">Add Node</button>
-                <button onClick={addEdge} className="flex-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-semibold flex justify-center items-center gap-2">Add Road</button>
-            </div>
-          </section>
-
-          <section className="mb-6">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Settings</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">
-                  Chamfer Angle ({chamferAngle}°)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="range"
-                    min="10"
-                    max="180"
-                    value={chamferAngle}
-                    onChange={(e) => setChamferAngle(parseInt(e.target.value))}
-                    className="flex-grow min-w-0"
-                  />
-                  <input
-                    type="number"
-                    min="10"
-                    max="180"
-                    value={chamferAngle}
-                    onChange={(e) => setChamferAngle(parseInt(e.target.value) || 70)}
-                    className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">
-                  Mesh Split Size ({meshResolution} studs)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="range"
-                    min="5"
-                    max="100"
-                    value={meshResolution}
-                    onChange={(e) => setMeshResolution(sanitizeMeshResolution(e.target.value))}
-                    className="flex-grow min-w-0"
-                  />
-                  <input
-                    type="number"
-                    min="5"
-                    max="100"
-                    value={meshResolution}
-                    onChange={(e) => setMeshResolution(sanitizeMeshResolution(e.target.value))}
-                    className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
-                  />
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="flex-grow flex flex-col min-h-0">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Edges</h3>
-            <div className="space-y-3 overflow-y-auto flex-grow pb-4">
-              {edges.map((e, idx) => (
-                <div
-                  key={e.id}
-                  onClick={() => setSelectedEdge(e.id)}
-                  className={`p-3 lg:p-4 rounded-xl border transition-all cursor-pointer ${
-                    selectedEdge === e.id
-                      ? 'bg-blue-900/10 border-blue-500/50 ring-1 ring-blue-500/20'
-                      : 'bg-slate-800/40 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex justify-between items-center mb-3">
-                    {editingEdgeName === e.id ? (
-                      <input
-                        autoFocus
-                        value={editingNameValue}
-                        onChange={(evt) => setEditingNameValue(evt.target.value)}
-                        onBlur={() => {
-                          setEdges(prev => prev.map(ed => ed.id === e.id ? { ...ed, name: editingNameValue } : ed));
-                          setEditingEdgeName(null);
-                        }}
-                        onKeyDown={(evt) => {
-                          if (evt.key === 'Enter') {
-                            setEdges(prev => prev.map(ed => ed.id === e.id ? { ...ed, name: editingNameValue } : ed));
-                            setEditingEdgeName(null);
-                          } else if (evt.key === 'Escape') {
-                            setEditingEdgeName(null);
-                          }
-                        }}
-                        className="text-sm font-bold bg-slate-900 text-white px-1 py-0.5 rounded outline-none border border-blue-500 w-32"
-                      />
-                    ) : (
-                      <span 
-                        onDoubleClick={(evt) => {
-                          evt.stopPropagation();
-                          setEditingNameValue(e.name || `Road ${idx + 1}`);
-                          setEditingEdgeName(e.id);
-                        }}
-                        className="text-sm font-bold text-slate-200 cursor-text"
-                        title="Double-click to rename"
-                      >
-                        {e.name || `Road ${idx + 1}`}
-                      </span>
-                    )}
-                    <button
-                      onClick={(evt) => { evt.stopPropagation(); setEdges(prev => prev.filter(edge => edge.id !== e.id)); setSelectedEdge(null); }}
-                      className="text-slate-500 hover:text-red-400 p-2 lg:p-1 rounded-lg hover:bg-slate-800 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4 opacity-70" />
-                    </button>
-                  </div>
-                  <div className="flex flex-col gap-3">
-                    <div>
-                      <div className="flex justify-between text-xs text-slate-400 mb-1">
-                        <span>Width</span>
-                        <span>{e.width}px</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="20"
-                        max="200"
-                        step="5"
-                        value={e.width}
-                        onChange={(evt) =>
-                          setEdges((prev) =>
-                            prev.map((pr) => (pr.id === e.id ? { ...pr, width: parseInt(evt.target.value) } : pr))
-                          )
-                        }
-                        className="w-full accent-blue-600 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-xs text-slate-400 mb-1">
-                        <span>Sidewalk (Left)</span>
-                        <span>{e.sidewalkLeft ?? e.sidewalk ?? 12}px</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="2"
-                        value={e.sidewalkLeft ?? e.sidewalk ?? 12}
-                        onChange={(evt) =>
-                          setEdges((prev) =>
-                            prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkLeft: parseInt(evt.target.value) } : pr))
-                          )
-                        }
-                        className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-3"
-                      />
-                      <div className="flex justify-between text-xs text-slate-400 mb-1">
-                        <span>Sidewalk (Right)</span>
-                        <span>{e.sidewalkRight ?? e.sidewalk ?? 12}px</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="2"
-                        value={e.sidewalkRight ?? e.sidewalk ?? 12}
-                        onChange={(evt) =>
-                          setEdges((prev) =>
-                            prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkRight: parseInt(evt.target.value) } : pr))
-                          )
-                        }
-                        className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-3"
-                      />
-                      <div className="flex justify-between text-xs text-slate-400 mb-1">
-                        <span>Transition Smoothing</span>
-                        <span>{e.transitionSmoothness ?? 0}px</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="200"
-                        step="5"
-                        value={e.transitionSmoothness ?? 0}
-                        onChange={(evt) =>
-                          setEdges((prev) =>
-                            prev.map((pr) => (pr.id === e.id ? { ...pr, transitionSmoothness: parseInt(evt.target.value) } : pr))
-                          )
-                        }
-                        className="w-full accent-emerald-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        </aside>
+        <Sidebar
+          isSidebarOpen={isSidebarOpen}
+          setIsSidebarOpen={setIsSidebarOpen}
+          addNode={addNode}
+          addEdge={addEdge}
+          softSelectionEnabled={softSelectionEnabled}
+          setSoftSelectionEnabled={setSoftSelectionEnabled}
+          softSelectionRadius={softSelectionRadius}
+          setSoftSelectionRadius={setSoftSelectionRadius}
+          chamferAngle={chamferAngle}
+          setChamferAngle={setChamferAngle}
+          meshResolution={meshResolution}
+          setMeshResolution={setMeshResolution}
+          laneWidth={laneWidth}
+          setLaneWidth={setLaneWidth}
+          nodes={nodes}
+          setNodes={setNodes}
+          edges={edges}
+          setEdges={setEdges}
+          selectedNodes={selectedNodes}
+          setSelectedNodes={setSelectedNodes}
+          selectedEdges={selectedEdges}
+          setSelectedEdges={setSelectedEdges}
+        />
       </div>
     </div>
   );
