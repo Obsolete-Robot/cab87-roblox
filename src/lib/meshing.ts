@@ -355,7 +355,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                outerRightPoints.push({ x: p2.x + -dir.y * OW_R, y: p2.y + dir.x * OW_R, z: p2.z });
                poly = [bL, bR, ...rightPoints];
                outerPoly = [obL, obR, ...outerRightPoints];
-               fullCenterLine.push({ p: p2, dir });
+               fullCenterLine.push({ p: p2, dir, right: { x: -dir.y, y: dir.x } });
            } else {
                const lL = leftPoints[leftPoints.length - 1];
                const lR = rightPoints[rightPoints.length - 1];
@@ -454,29 +454,26 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                 for (let j = 1; j < linePoints.length; j++) {
                     const p1 = linePoints[j - 1];
                     const p2 = linePoints[j];
-                    const dx = p2.x - p1.x;
-                    const dy = p2.y - p1.y;
-                    const len = Math.hypot(dx, dy);
-                    const dir = len > 0 ? { x: dx/len, y: dy/len } : { x: 1, y: 0 };
-                    const right = { x: -dir.y, y: dir.x };
+                    const right1 = fullCenterLine[j - 1].right;
+                    const right2 = fullCenterLine[j].right;
                     
                     const h1 = (p1.z ?? 4) + yOffset;
                     const h2 = (p2.z ?? 4) + yOffset;
 
-                    const r1 = { x: p1.x + right.x * spread, y: p1.y + right.y * spread, z: h1 };
-                    const r2 = { x: p2.x + right.x * spread, y: p2.y + right.y * spread, z: h2 };
-                    const br1 = { x: r1.x + right.x * width / 2, y: r1.y + right.y * width / 2, z: h1 };
-                    const bl1 = { x: r1.x - right.x * width / 2, y: r1.y - right.y * width / 2, z: h1 };
-                    const tr1 = { x: r2.x + right.x * width / 2, y: r2.y + right.y * width / 2, z: h2 };
-                    const tl1 = { x: r2.x - right.x * width / 2, y: r2.y - right.y * width / 2, z: h2 };
+                    const r1 = { x: p1.x + right1.x * spread, y: p1.y + right1.y * spread, z: h1 };
+                    const r2 = { x: p2.x + right2.x * spread, y: p2.y + right2.y * spread, z: h2 };
+                    const br1 = { x: r1.x + right1.x * width / 2, y: r1.y + right1.y * width / 2, z: h1 };
+                    const bl1 = { x: r1.x - right1.x * width / 2, y: r1.y - right1.y * width / 2, z: h1 };
+                    const tr1 = { x: r2.x + right2.x * width / 2, y: r2.y + right2.y * width / 2, z: h2 };
+                    const tl1 = { x: r2.x - right2.x * width / 2, y: r2.y - right2.y * width / 2, z: h2 };
                     mesh.solidLineTriangles.push([bl1, tr1, tl1], [bl1, br1, tr1]);
 
-                    const l1 = { x: p1.x - right.x * spread, y: p1.y - right.y * spread, z: h1 };
-                    const l2 = { x: p2.x - right.x * spread, y: p2.y - right.y * spread, z: h2 };
-                    const br2 = { x: l1.x + right.x * width / 2, y: l1.y + right.y * width / 2, z: h1 };
-                    const bl2 = { x: l1.x - right.x * width / 2, y: l1.y - right.y * width / 2, z: h1 };
-                    const tr2 = { x: l2.x + right.x * width / 2, y: l2.y + right.y * width / 2, z: h2 };
-                    const tl2 = { x: l2.x - right.x * width / 2, y: l2.y - right.y * width / 2, z: h2 };
+                    const l1 = { x: p1.x - right1.x * spread, y: p1.y - right1.y * spread, z: h1 };
+                    const l2 = { x: p2.x - right2.x * spread, y: p2.y - right2.y * spread, z: h2 };
+                    const br2 = { x: l1.x + right1.x * width / 2, y: l1.y + right1.y * width / 2, z: h1 };
+                    const bl2 = { x: l1.x - right1.x * width / 2, y: l1.y - right1.y * width / 2, z: h1 };
+                    const tr2 = { x: l2.x + right2.x * width / 2, y: l2.y + right2.y * width / 2, z: h2 };
+                    const tl2 = { x: l2.x - right2.x * width / 2, y: l2.y - right2.y * width / 2, z: h2 };
                     mesh.solidLineTriangles.push([bl2, tr2, tl2], [bl2, br2, tr2]);
                 }
            }

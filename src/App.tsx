@@ -722,18 +722,16 @@ export default function App() {
                     const newPts = [...edge.points];
                     let changed = false;
                     if (edge.source === n.id && newPts.length > 0) {
-                        const targetNode = edge.target ? nodes.find(tn => tn.id === edge.target) : null;
-                        const targetAnchor = newPts.length >= 3 ? newPts[2] : (targetNode ? targetNode.point : newPts[1]);
-                        if (targetAnchor) {
-                            newPts[0] = { ...newPts[0], x: n.point.x + (targetAnchor.x - n.point.x) / 3, y: n.point.y + (targetAnchor.y - n.point.y) / 3, z: !newPts[0].linear ? n.point.z ?? 4 : newPts[0].z, linear: !newPts[0].linear };
+                        const targetHandle = newPts[1];
+                        if (targetHandle) {
+                            newPts[0] = { ...newPts[0], x: n.point.x + (targetHandle.x - n.point.x) / 2, y: n.point.y + (targetHandle.y - n.point.y) / 2, z: !newPts[0].linear ? n.point.z ?? 4 : newPts[0].z, linear: !newPts[0].linear };
                             changed = true;
                         }
                     }
                     if (edge.target === n.id && newPts.length > 1) {
-                        const sourceNode = nodes.find(sn => sn.id === edge.source);
-                        const prevAnchor = newPts.length >= 3 ? newPts[newPts.length - 3] : (sourceNode ? sourceNode.point : newPts[0]);
-                        if (prevAnchor) {
-                            newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: n.point.x + (prevAnchor.x - n.point.x) / 3, y: n.point.y + (prevAnchor.y - n.point.y) / 3, z: !newPts[newPts.length - 1].linear ? n.point.z ?? 4 : newPts[newPts.length - 1].z, linear: !newPts[newPts.length - 1].linear };
+                        const prevHandle = newPts[newPts.length - 2];
+                        if (prevHandle) {
+                            newPts[newPts.length - 1] = { ...newPts[newPts.length - 1], x: n.point.x + (prevHandle.x - n.point.x) / 2, y: n.point.y + (prevHandle.y - n.point.y) / 2, z: !newPts[newPts.length - 1].linear ? n.point.z ?? 4 : newPts[newPts.length - 1].z, linear: !newPts[newPts.length - 1].linear };
                             changed = true;
                         }
                     }
@@ -843,21 +841,23 @@ export default function App() {
               const targetNode = edge.target ? nodes.find(n => n.id === edge.target) : null;
               
               if (j % 3 === 2) {
-                const prevAnchor = j === 2 ? sourceNode.point : newPts[j - 3];
-                const nextAnchor = j + 3 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 3];
-                newPts[j - 1] = { 
-                    ...newPts[j - 1], 
-                    x: newPts[j].x + (prevAnchor.x - newPts[j].x) / 3, 
-                    y: newPts[j].y + (prevAnchor.y - newPts[j].y) / 3, 
-                    z: !newPts[j - 1].linear ? newPts[j].z ?? 4 : newPts[j - 1].z,
-                    linear: !newPts[j - 1].linear 
-                };
-                  newPts[j] = { ...newPts[j], linked: false };
-                if (targetNode || j + 3 < newPts.length) {
+                const prevHandle = newPts[j - 2];
+                const nextHandle = j + 2 < newPts.length ? newPts[j + 2] : null;
+                if (prevHandle) {
+                  newPts[j - 1] = { 
+                      ...newPts[j - 1], 
+                      x: newPts[j].x + (prevHandle.x - newPts[j].x) / 2, 
+                      y: newPts[j].y + (prevHandle.y - newPts[j].y) / 2, 
+                      z: !newPts[j - 1].linear ? newPts[j].z ?? 4 : newPts[j - 1].z,
+                      linear: !newPts[j - 1].linear 
+                  };
+                }
+                newPts[j] = { ...newPts[j], linked: false };
+                if ((targetNode || j + 3 < newPts.length) && nextHandle) {
                     newPts[j + 1] = { 
                         ...newPts[j + 1], 
-                        x: newPts[j].x + (nextAnchor.x - newPts[j].x) / 3, 
-                        y: newPts[j].y + (nextAnchor.y - newPts[j].y) / 3, 
+                        x: newPts[j].x + (nextHandle.x - newPts[j].x) / 2, 
+                        y: newPts[j].y + (nextHandle.y - newPts[j].y) / 2, 
                         z: !newPts[j + 1].linear ? newPts[j].z ?? 4 : newPts[j + 1].z,
                         linear: !newPts[j + 1].linear 
                     };
@@ -867,8 +867,8 @@ export default function App() {
                     newPts[j] = { ...newPts[j], linear: false };
                 } else {
                     const anchorA = j === 0 ? sourceNode.point : newPts[j - 1];
-                    const anchorB = j + 2 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 2];
-                    newPts[j] = { x: anchorA.x + (anchorB.x - anchorA.x) / 3, y: anchorA.y + (anchorB.y - anchorA.y) / 3, z: anchorA.z ?? 4, linear: true };
+                    const otherHandle = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
+                    newPts[j] = { x: anchorA.x + (otherHandle.x - anchorA.x) / 2, y: anchorA.y + (otherHandle.y - anchorA.y) / 2, z: anchorA.z ?? 4, linear: true };
                 }
                 if (j > 0 && newPts[j - 1]) newPts[j - 1] = { ...newPts[j - 1], linked: false };
               } else if (j % 3 === 1) {
@@ -876,8 +876,8 @@ export default function App() {
                     newPts[j] = { ...newPts[j], linear: false };
                 } else {
                     const anchorB = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
-                    const anchorA = j === 1 ? sourceNode.point : newPts[j - 2];
-                    newPts[j] = { x: anchorB.x + (anchorA.x - anchorB.x) / 3, y: anchorB.y + (anchorA.y - anchorB.y) / 3, z: anchorB.z ?? 4, linear: true };
+                    const otherHandle = j - 1 < 0 ? (sourceNode ? sourceNode.point : newPts[j]) : newPts[j - 1];
+                    newPts[j] = { x: anchorB.x + (otherHandle.x - anchorB.x) / 2, y: anchorB.y + (otherHandle.y - anchorB.y) / 2, z: anchorB.z ?? 4, linear: true };
                 }
                 if (j + 1 < newPts.length && newPts[j + 1]) newPts[j + 1] = { ...newPts[j + 1], linked: false };
               }
@@ -1072,10 +1072,10 @@ export default function App() {
 
           if (j % 3 === 0) {
               const anchorA = j === 0 ? sourceNode?.point : newPts[j - 1];
-              const anchorB = j + 2 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 2];
+              const anchorB = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
               
               const oldAnchorA = j === 0 ? oldSourceNode?.point : oldPts[j - 1];
-              const oldAnchorB = j + 2 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 2];
+              const oldAnchorB = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
 
               if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
               
@@ -1096,10 +1096,10 @@ export default function App() {
               }
           } else if (j % 3 === 1) {
               const anchorA = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
-              const anchorB = j === 1 ? sourceNode?.point : newPts[j - 2];
+              const anchorB = j - 1 < 0 ? (sourceNode ? sourceNode.point : newPts[j]) : newPts[j - 1];
               
               const oldAnchorA = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
-              const oldAnchorB = j === 1 ? oldSourceNode?.point : oldPts[j - 2];
+              const oldAnchorB = j - 1 < 0 ? (oldSourceNode ? oldSourceNode.point : oldPts[j]) : oldPts[j - 1];
 
               if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
               const dx = anchorB.x - anchorA.x;

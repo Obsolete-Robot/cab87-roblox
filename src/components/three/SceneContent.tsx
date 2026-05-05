@@ -56,14 +56,15 @@ export function SceneContent({
         {nodes.map((n: Node) => {
           const isActive = selectedNode === n.id;
           const isSelected = selectedNodes?.includes(n.id) || isActive;
+          const color = isActive ? (n.point.linked ? '#059669' : '#ef4444') : isSelected ? (n.point.linked ? '#6ee7b7' : '#fca5a5') : (n.point.linked ? '#10b981' : '#60a5fa');
           return (
             <mesh 
               key={n.id} 
               position={[n.point.x, n.point.z ?? 4, n.point.y]}
               renderOrder={1000}
             >
-              <sphereGeometry args={[12, 16, 16]} />
-              <meshStandardMaterial color={isActive ? "#ef4444" : isSelected ? "#fca5a5" : "#60a5fa"} depthTest={false} depthWrite={false} transparent />
+              <sphereGeometry args={[14, 16, 16]} />
+              <meshBasicMaterial color={color} depthTest={false} depthWrite={false} transparent />
             </mesh>
           );
         })}
@@ -74,14 +75,45 @@ export function SceneContent({
             if (!showControlPoints && !isAnchor) return null;
             const isSelectedEdge = selectedEdges.includes(edge.id);
             const isSelectedPoint = isSelectedEdge && selectedPointIndex === i;
+            
+            let color = "#fbbf24";
+            if (isSelectedPoint) {
+              color = "#ef4444";
+            } else if (isAnchor) {
+              if (pt.linked) color = "#10b981";
+              else color = isSelectedEdge ? "#fcd34d" : "#fbbf24";
+            } else {
+              if (pt.linear) color = "#0ea5e9";
+              else color = "#ffffff";
+              if (!isSelectedEdge) {
+                color = pt.linear ? "#38bdf8" : "#e2e8f0";
+              }
+            }
+
+            let rotY = 0;
+            if (!isAnchor && pt.linear) {
+              const anchorA = i % 3 === 0 
+                ? (i === 0 ? nodes.find((n: any) => n.id === edge.source)?.point : edge.points[i - 1])
+                : (i + 1 >= edge.points.length ? nodes.find((n: any) => n.id === edge.target)?.point : edge.points[i + 1]);
+              
+              if (anchorA) {
+                rotY = -Math.atan2(pt.y - anchorA.y, pt.x - anchorA.x);
+              }
+            }
+
             return (
               <mesh 
                 key={`edge-${edge.id}-${i}`}
                 position={[pt.x, pt.z ?? 4, pt.y]}
+                rotation={[0, rotY, 0]}
                 renderOrder={1000}
               >
-                <sphereGeometry args={[isAnchor ? 8 : 5, 16, 16]} />
-                <meshStandardMaterial color={isSelectedPoint ? "#ef4444" : isSelectedEdge ? "#fca5a5" : "#fbbf24"} depthTest={false} depthWrite={false} transparent />
+                {isAnchor ? (
+                  pt.linked ? <octahedronGeometry args={[14, 0]} /> : <sphereGeometry args={[12, 16, 16]} />
+                ) : (
+                  pt.linear ? <boxGeometry args={[16, 16, 16]} /> : <sphereGeometry args={[10, 16, 16]} />
+                )}
+                <meshBasicMaterial color={color} depthTest={false} depthWrite={false} transparent />
               </mesh>
             );
           })

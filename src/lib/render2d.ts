@@ -422,7 +422,7 @@ export const drawNetwork2D = (
 
               ctx.beginPath();
               ctx.strokeStyle = '#475569';
-              ctx.lineWidth = 2;
+              ctx.lineWidth = 3;
               for (let i = 0; i + 3 < cubicPts.length; i += 3) {
                   ctx.moveTo(cubicPts[i].x, cubicPts[i].y);
                   ctx.lineTo(cubicPts[i+1].x, cubicPts[i+1].y);
@@ -447,7 +447,7 @@ export const drawNetwork2D = (
 
           ctx.beginPath();
           const isSelectedPoint = selectedEdges.includes(e.id) && selectedPointIndex === j;
-          ctx.arc(pt.x, pt.y, isAnchor ? 8 : 5, 0, Math.PI * 2);
+          ctx.arc(pt.x, pt.y, isAnchor ? 10 : 8, 0, Math.PI * 2);
           ctx.fillStyle = selectedEdges.includes(e.id) ? (isSelectedPoint ? '#ef4444' : (isAnchor ? (pt.linked ? '#10b981' : '#fbbf24') : (pt.linear ? '#0ea5e9' : '#ffffff'))) : '#64748b';
           ctx.fill();
           ctx.stroke();
