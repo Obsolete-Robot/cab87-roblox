@@ -555,7 +555,15 @@ local function getExtendedEdgeControlPoints(edge, nodes, edges, nodeLookup, sett
 	end
 	local targetCut = pN + dirN * targetClearance
 
-	if #basePoints > 2 then
+	if #basePoints == 3 then
+		local mid = basePoints[2]
+		table.insert(result, sourceCut:Lerp(mid, 2 / 3))
+		table.insert(result, targetCut:Lerp(mid, 2 / 3))
+		table.insert(result, targetCut)
+		table.insert(result, targetCut:Lerp(pN, 1 / 3))
+		table.insert(result, targetCut:Lerp(pN, 2 / 3))
+		table.insert(result, pN)
+	elseif #basePoints > 2 then
 		for i = 2, #basePoints - 1 do
 			table.insert(result, basePoints[i])
 		end

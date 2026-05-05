@@ -52,23 +52,30 @@ local function graphPointToVector(point, planeY)
 	end
 
 	local x = finiteNumber(point.x)
-	local z = finiteNumber(point.y)
-	if not z then
-		z = finiteNumber(point.z)
+	local horizontalZ = finiteNumber(point.y)
+	local elevation = finiteNumber(point.elevation)
+	if horizontalZ then
+		if elevation == nil then
+			elevation = finiteNumber(point.z) or 0
+		end
+	else
+		horizontalZ = finiteNumber(point.z)
+		elevation = elevation or 0
 	end
-	if not (x and z) then
+	if not (x and horizontalZ) then
 		return nil
 	end
 
-	local y = finiteNumber(point.elevation) or 0
-	return Vector3.new(x, (finiteNumber(planeY) or 0) + y, z)
+	return Vector3.new(x, (finiteNumber(planeY) or 0) + elevation, horizontalZ)
 end
 
 local function vectorToGraphPoint(position, planeY)
+	local elevation = position.Y - (finiteNumber(planeY) or 0)
 	return {
 		x = position.X,
 		y = position.Z,
-		elevation = position.Y - (finiteNumber(planeY) or 0),
+		z = elevation,
+		elevation = elevation,
 	}
 end
 
