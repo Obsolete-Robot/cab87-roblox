@@ -434,6 +434,7 @@ export const drawNetwork2D = (
               ctx.fillStyle = '#94a3b8'; // light slate for automatic
               for (let i = 3; i < cubicPts.length - 1; i += 3) {
                   if (i === 3 || i === cubicPts.length - 4) {
+                      ctx.beginPath();
                       ctx.arc(cubicPts[i].x, cubicPts[i].y, 4, 0, Math.PI * 2);
                       ctx.fill();
                   }

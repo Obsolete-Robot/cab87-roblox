@@ -218,8 +218,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     const centerLine: { p: Point, dir: Point }[] = [];
 
     const controlPoints = getEdgeControlPoints(edge, nodes);
-    const srcDir = getDir(controlPoints[0], controlPoints[1]);
-    const tgtDir = targetNode ? getDir(controlPoints[controlPoints.length - 1], controlPoints[controlPoints.length - 2]) : {x:0, y:0};
+    const srcDir = controlPoints.length > 1 ? getDir(controlPoints[0], controlPoints[1]) : { x: 1, y: 0 };
+    const tgtDir = targetNode && controlPoints.length > 1 ? getDir(controlPoints[controlPoints.length - 1], controlPoints[controlPoints.length - 2]) : {x:0, y:0};
 
     for (let j = 1; j < spline.length; j++) {
       const p1 = spline[j - 1];
