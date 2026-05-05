@@ -123,7 +123,7 @@ export function PointerInterceptor({
       makeDefault 
       enabled={!isDragging} 
       target={initialCameraParams.target} 
-      mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN }}
+      mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN }}
       enableDamping={false}
    />;
 }

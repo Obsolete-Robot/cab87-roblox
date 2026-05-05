@@ -327,8 +327,9 @@ export default function App() {
 
     const onContextMenu = (e: React.MouseEvent | any) => {
     e.preventDefault();
-    const pos = getMousePos(e);
+  };
 
+  const handleRightClick = (e: React.PointerEvent | any, pos: any) => {
     const getNewEdgeParams = (sn: Node, targetPt: Point) => {
         let params: any = {
             width: 60,
@@ -411,6 +412,8 @@ export default function App() {
                 setSelectedPointIndex(null);
                 setIsConnectMode(false);
                 setIsMergeMode(false);
+                startDragPosRef.current = pos;
+                setDragging({ type: 'node', id: n.id });
             } else {
                 setSelectedNode(n.id);
                 setSelectedEdges([]);
@@ -442,6 +445,8 @@ export default function App() {
                 setSelectedPointIndex(null);
                 setIsConnectMode(false);
                 setIsMergeMode(false);
+                startDragPosRef.current = pos;
+                setDragging({ type: 'node', id: newNodeId });
                 return;
             }
         }
@@ -524,6 +529,8 @@ export default function App() {
             setSelectedPointIndex(null);
             setIsConnectMode(false);
             setIsMergeMode(false);
+            startDragPosRef.current = pos;
+            setDragging({ type: 'node', id: newNodeId });
             return;
         }
     }
@@ -569,10 +576,15 @@ export default function App() {
     setSelectedPointIndex(null);
     setIsConnectMode(false);
     setIsMergeMode(false);
+    startDragPosRef.current = spawnPos;
+    setDragging({ type: 'node', id: newNodeId });
   };
 
   const onPointerDown = (e: React.PointerEvent | any) => {
-    if (e.button === 2) return; // ignore right click
+    if (e.button === 2) {
+      handleRightClick(e, getMousePos(e));
+      return;
+    }
 
     if (is3DMode) {
       if (e.button !== 0) return;
