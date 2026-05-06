@@ -779,6 +779,7 @@ local function createGraphWorld(root, graph)
 	world:SetAttribute("AuthoredRoadRoadTriangles", #(meshData.roadTriangles or {}))
 	world:SetAttribute("AuthoredRoadSidewalkTriangles", #(meshData.sidewalkTriangles or {}))
 	world:SetAttribute("AuthoredRoadCrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
+	world:SetAttribute("AuthoredRoadPolygonFillTriangles", #(meshData.polygonFillTriangles or {}))
 	world:SetAttribute("AuthoredRoadMeshSource", meshBuild.source or "runtime")
 	world:SetAttribute("AuthoredRoadServerCollisionSource", BAKED_COLLISION_NAME)
 	world:SetAttribute("AuthoredRoadServerMeshError", "")
@@ -787,12 +788,13 @@ local function createGraphWorld(root, graph)
 	world:SetAttribute("MinimapRoadMeshDedicated", minimapMesh ~= nil)
 
 	roadDebugLog(
-		"road graph world built: nodes=%d edges=%d roadTris=%d sidewalkTris=%d crosswalkTris=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
+		"road graph world built: nodes=%d edges=%d roadTris=%d sidewalkTris=%d crosswalkTris=%d fillTris=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
 		#(graph.nodes or {}),
 		#(graph.edges or {}),
 		#(meshData.roadTriangles or {}),
 		#(meshData.sidewalkTriangles or {}),
 		#(meshData.crosswalkTriangles or {}),
+		#(meshData.polygonFillTriangles or {}),
 		#driveSurfaces,
 		spawnPose.position.X,
 		spawnPose.position.Y,

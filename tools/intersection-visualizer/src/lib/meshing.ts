@@ -1,8 +1,9 @@
-import { Point, Node, Edge, MeshData } from "./types";
+import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
 import { getDir } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
 import { DEFAULT_LANE_WIDTH, sanitizeLaneWidth } from "./constants";
+import Delaunator from 'delaunator';
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
   const corners = nodeCorners.get(node.id);
@@ -12,7 +13,7 @@ export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource:
   return [bases[0], bases[1]];
 }
 
-export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20, laneWidth: number = DEFAULT_LANE_WIDTH): MeshData {
+export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = 20, laneWidth: number = DEFAULT_LANE_WIDTH, polygonFills: PolygonFill[] = []): MeshData {
   const safeLaneWidth = sanitizeLaneWidth(laneWidth);
   const mesh: MeshData = {
     vertices: [],
@@ -29,7 +30,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     solidYellowLines: [],
     dashedLineTriangles: [],
     solidLineTriangles: [],
-    laneArrows: []
+    laneArrows: [],
+    polygonTriangles: []
   };
 
   const edgeSplines = new Map<string, Point[]>();
@@ -70,22 +72,31 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         if (N === 1) {
             const sw_left = r1.isSource ? (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12);
             const sw_right = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
-            const left = { x: r1.dir.y, y: -r1.dir.x };
-            const right = { x: -r1.dir.y, y: r1.dir.x };
             const W = r1.edge.width / 2;
             const OW_L = W + sw_left;
             const OW_R = W + sw_right;
+
+            const pts: Point[] = [];
+            const outerPts: Point[] = [];
+
+            const steps = 8;
+            const angle0 = Math.atan2(r1.dir.y, r1.dir.x);
+            const startAngle = angle0 - Math.PI / 2;
+
+            for (let s = 0; s <= steps; s++) {
+                const a = startAngle - Math.PI * (s / steps);
+                const dx = Math.cos(a);
+                const dy = Math.sin(a);
+                pts.push({ x: node.point.x + dx * W, y: node.point.y + dy * W, z: node.point.z });
+                const outerR = OW_L * (1 - s/steps) + OW_R * (s/steps);
+                outerPts.push({ x: node.point.x + dx * outerR, y: node.point.y + dy * outerR, z: node.point.z });
+            }
+
             corners.push({
-              points: [
-                { x: node.point.x + left.x * W, y: node.point.y + left.y * W, z: node.point.z },
-                { x: node.point.x + right.x * W, y: node.point.y + right.y * W, z: node.point.z }
-              ],
+              points: pts,
               sidewalkWidth: Math.max(sw_left, sw_right)
             });
-            outerCorners.push([
-                { x: node.point.x + left.x * OW_L, y: node.point.y + left.y * OW_L, z: node.point.z },
-                { x: node.point.x + right.x * OW_R, y: node.point.y + right.y * OW_R, z: node.point.z }
-            ]);
+            outerCorners.push(outerPts);
         } else {
             const [innerPts, outerPts] = calculateBothCornerPoints(
               node.point,
@@ -116,9 +127,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       const r = outgoing[rIdx];
 
       const bL = N === 1 ? corners[0].points[0] : corners[i].points[corners[i].points.length - 1];
-      const bR = N === 1 ? corners[0].points[1] : corners[rIdx].points[0];
+      const bR = N === 1 ? corners[0].points[corners[0].points.length - 1] : corners[rIdx].points[0];
       const obL = N === 1 ? outerCorners[0][0] : outerCorners[i][outerCorners[i].length - 1];
-      const obR = N === 1 ? outerCorners[0][1] : outerCorners[rIdx][0];
+      const obR = N === 1 ? outerCorners[0][outerCorners[0].length - 1] : outerCorners[rIdx][0];
 
       const dir0 = r.dir;
       const distL = (bL.x - node.point.x) * dir0.x + (bL.y - node.point.y) * dir0.y;
@@ -515,11 +526,11 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
        mesh.roadPolygons.push({
            id: edge.id,
            polygon: poly,
-           leftCurve: leftPoints,
-           rightCurve: rightPoints,
+           leftCurve: [bL, ...leftPoints, ...(tbL ? [tbL] : [])],
+           rightCurve: [bR, ...rightPoints, ...(tbR ? [tbR] : [])],
            outerPolygon: outerPoly,
-           outerLeftCurve: outerLeftPoints,
-           outerRightCurve: outerRightPoints,
+           outerLeftCurve: [obL, ...outerLeftPoints, ...(otbL ? [otbL] : [])],
+           outerRightCurve: [obR, ...outerRightPoints, ...(otbR ? [otbR] : [])],
            sidewalkWidth: edge.sidewalk ?? 12
        });
 
@@ -573,5 +584,262 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     }
   }
 
+  // 3. Build Polygon Fills
+  for (const poly of polygonFills) {
+    if (poly.points.length < 3) continue;
+
+    const polyNodes = poly.points.map(id => nodes.find(n => n.id === id)).filter(n => !!n) as Node[];
+    if (polyNodes.length < 3) continue;
+
+    let signedArea = 0;
+    for (let i = 0; i < polyNodes.length; i++) {
+        const p1 = polyNodes[i].point;
+        const p2 = polyNodes[(i + 1) % polyNodes.length].point;
+        signedArea += (p1.x * p2.y - p2.x * p1.y);
+    }
+    const isClockwise = signedArea > 0;
+
+    const segments: Point[][] = [];
+
+    for (let i = 0; i < poly.points.length; i++) {
+        const n1_id = poly.points[i];
+        const n2_id = poly.points[(i + 1) % poly.points.length];
+
+        const n1 = nodes.find(n => n.id === n1_id);
+        const n2 = nodes.find(n => n.id === n2_id);
+        if (!n1 || !n2) continue;
+
+        const edge = edges.find(e => (e.source === n1.id && e.target === n2.id) || (e.source === n2.id && e.target === n1.id));
+        const roadPoly = edge ? mesh.roadPolygons.find(rp => rp.id === edge.id) : null;
+
+        let curve: Point[] = [];
+        if (roadPoly) {
+            const isForward = edge!.source === n1_id;
+            let useRightCurve = false;
+
+            // For drawing fills around roads, tracing clockwise means the fill is on the RIGHT.
+            // On the right side, we use the OUTER curve of the road.
+            // When traversing forward, the right side is outerRightCurve.
+            if (isClockwise) {
+                useRightCurve = isForward;
+            } else {
+                useRightCurve = !isForward;
+            }
+
+            const chosenCurve = useRightCurve ? roadPoly.outerRightCurve : roadPoly.outerLeftCurve;
+
+            // Reverse if traversing backwards relative to edge direction
+            if (isForward) {
+                for (let j = 0; j < chosenCurve.length; j++) {
+                    curve.push(chosenCurve[j]);
+                }
+            } else {
+                for (let j = chosenCurve.length - 1; j >= 0; j--) {
+                    curve.push(chosenCurve[j]);
+                }
+            }
+        } else {
+            // No direct edge, use straight line
+            curve.push(n1.point);
+            curve.push(n2.point);
+        }
+        segments.push(curve);
+    }
+
+    const boundaryPoints: Point[] = [];
+
+    for (let i = 0; i < segments.length; i++) {
+        const curve = segments[i];
+        const nextCurve = segments[(i + 1) % segments.length];
+
+        for (let j = 0; j < curve.length; j++) {
+            boundaryPoints.push(curve[j]);
+        }
+
+        const p_end = curve[curve.length - 1];
+        const p_start = nextCurve[0];
+
+        const n2_id = poly.points[(i + 1) % poly.points.length];
+        const hub = mesh.hubs.find(h => h.id === n2_id);
+
+        if (hub && hub.outerPolygon.length > 0) {
+            let minDEnd = Infinity, minDStart = Infinity;
+            let iEnd = -1, iStart = -1;
+            for (let k = 0; k < hub.outerPolygon.length; k++) {
+                const hp = hub.outerPolygon[k];
+                const d1 = Math.hypot(hp.x - p_end.x, hp.y - p_end.y);
+                const d2 = Math.hypot(hp.x - p_start.x, hp.y - p_start.y);
+                if (d1 < minDEnd) { minDEnd = d1; iEnd = k; }
+                if (d2 < minDStart) { minDStart = d2; iStart = k; }
+            }
+
+            if (iEnd !== -1 && iStart !== -1 && minDEnd < 150 && minDStart < 150) {
+                const path1 = [hub.outerPolygon[iEnd]];
+                let k1 = iEnd;
+                while (k1 !== iStart && path1.length < hub.outerPolygon.length + 2) {
+                    k1 = (k1 + 1) % hub.outerPolygon.length;
+                    path1.push(hub.outerPolygon[k1]);
+                }
+
+                const path2 = [hub.outerPolygon[iEnd]];
+                let k2 = iEnd;
+                while (k2 !== iStart && path2.length < hub.outerPolygon.length + 2) {
+                    k2 = (k2 - 1 + hub.outerPolygon.length) % hub.outerPolygon.length;
+                    path2.push(hub.outerPolygon[k2]);
+                }
+
+                if (path1.length > 0 || path2.length > 0) {
+                    const chosenPath = isClockwise ? path2 : path1;
+                    for (let j = 0; j < chosenPath.length; j++) {
+                        boundaryPoints.push(chosenPath[j]);
+                    }
+                }
+            }
+        }
+    }
+
+    if (boundaryPoints.length < 3) continue;
+
+    // Filter consecutive duplicate points (ShapeUtils doesn't like duplicates)
+    const uniqueBoundaryPoints: Point[] = [];
+    for (let i = 0; i < boundaryPoints.length; i++) {
+        const p = boundaryPoints[i];
+        const next = boundaryPoints[(i + 1) % boundaryPoints.length];
+        if (Math.hypot(p.x - next.x, p.y - next.y) > 0.01) {
+            uniqueBoundaryPoints.push(p);
+        }
+    }
+
+    if (uniqueBoundaryPoints.length < 3) continue;
+
+    const fillTriangles = buildGridMesh(uniqueBoundaryPoints);
+
+    mesh.polygonTriangles.push({ triangles: fillTriangles, color: poly.color });
+  }
+
   return mesh;
+}
+
+function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
+    // Calculate average segment length from boundary to match density
+    let totalSegLen = 0;
+    let count = 0;
+    for (let i = 0; i < boundaryPoints.length - 1; i++) {
+        const d = Math.hypot(boundaryPoints[i+1].x - boundaryPoints[i].x, boundaryPoints[i+1].y - boundaryPoints[i].y);
+        if (d > 0.001) {
+            totalSegLen += d;
+            count++;
+        }
+    }
+    // Match the average density of the boundary points
+    const S = count > 0 ? (totalSegLen / count) * 1.5 : 30; // Slightly larger grid for internal points
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of boundaryPoints) {
+        minX = Math.min(minX, p.x);
+        maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y);
+        maxY = Math.max(maxY, p.y);
+    }
+
+    // Safety check for huge polygons
+    const width = maxX - minX;
+    const height = maxY - minY;
+    if (width > 10000 || height > 10000) return [];
+
+    const internalPoints: Point[] = [];
+    // Increase the grid start to avoid points too close to boundary
+    for (let x = minX + S; x < maxX; x += S) {
+        for (let y = minY + S; y < maxY; y += S) {
+            const pt = { x, y, z: 0 };
+            if (pointInPolygon(pt, boundaryPoints)) {
+                let tooClose = false;
+                for (const bp of boundaryPoints) {
+                    if (Math.hypot(bp.x - x, bp.y - y) < S * 0.7) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+                if (!tooClose) {
+                    internalPoints.push(pt);
+                }
+            }
+        }
+    }
+
+    // Weight interpolation based on proximity to boundary
+    for (const pt of internalPoints) {
+        let sumZ = 0;
+        let sumW = 0;
+        for (const bp of boundaryPoints) {
+            const d = Math.hypot(bp.x - pt.x, bp.y - pt.y);
+            const w = 1.0 / (d * d * d + 0.0001); // Cube weight for faster decay
+            sumZ += (bp.z ?? 0) * w;
+            sumW += w;
+        }
+        pt.z = sumW > 0 ? sumZ / sumW : 0;
+    }
+
+    const allPoints = [...boundaryPoints, ...internalPoints];
+
+    // Ensure all points have unique coords for delaunay
+    const coords: number[] = [];
+    const used = new Set<string>();
+    const filteredPoints: Point[] = [];
+
+    for (const p of allPoints) {
+        const key = `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
+        if (!used.has(key)) {
+            used.add(key);
+            coords.push(p.x, p.y);
+            filteredPoints.push(p);
+        }
+    }
+
+    if (filteredPoints.length < 3) return [];
+
+    const delaunay = new Delaunator(coords);
+    const triangles = delaunay.triangles;
+
+    const result: Triangle[] = [];
+    for (let i = 0; i < triangles.length; i += 3) {
+        const i0 = triangles[i];
+        const i1 = triangles[i + 1];
+        const i2 = triangles[i + 2];
+        const p0 = filteredPoints[i0];
+        const p1 = filteredPoints[i1];
+        const p2 = filteredPoints[i2];
+
+        // Final check: only keep triangles if their centroid is inside the polygon
+        const cx = (p0.x + p1.x + p2.x) / 3;
+        const cy = (p0.y + p1.y + p2.y) / 3;
+
+        if (pointInPolygon({ x: cx, y: cy }, boundaryPoints)) {
+            result.push([p0, p1, p2]);
+        }
+    }
+
+    return result;
+}
+
+function pointInPolygon(p: { x: number, y: number }, polygon: Point[]): boolean {
+    let isInside = false;
+    let minX = polygon[0].x, maxX = polygon[0].x;
+    let minY = polygon[0].y, maxY = polygon[0].y;
+    for (let n = 1; n < polygon.length; n++) {
+        minX = Math.min(minX, polygon[n].x);
+        maxX = Math.max(maxX, polygon[n].x);
+        minY = Math.min(minY, polygon[n].y);
+        maxY = Math.max(maxY, polygon[n].y);
+    }
+    if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) {
+        return false;
+    }
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        if ((polygon[i].y > p.y) !== (polygon[j].y > p.y) &&
+            p.x < (polygon[j].x - polygon[i].x) * (p.y - polygon[i].y) / (polygon[j].y - polygon[i].y) + polygon[i].x) {
+            isInside = !isInside;
+        }
+    }
+    return isInside;
 }

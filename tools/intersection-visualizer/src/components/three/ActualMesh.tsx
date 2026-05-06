@@ -54,10 +54,23 @@ export function ActualMesh({ mesh, showMesh }: { mesh: any, showMesh: boolean })
   const dashedGeo = useMemo(() => createGeo(mesh.dashedLineTriangles || []), [mesh.dashedLineTriangles]);
   const solidGeo = useMemo(() => createGeo(mesh.solidLineTriangles || []), [mesh.solidLineTriangles]);
 
+  const polygonGeos = useMemo(() => {
+    if (!mesh.polygonTriangles) return [];
+    return mesh.polygonTriangles.map((pGroup: { triangles: Point[][], color: string }) => ({
+      geo: createGeo(pGroup.triangles),
+      color: pGroup.color
+    }));
+  }, [mesh.polygonTriangles]);
+
   const wireColor = showMesh ? "#22d3ee" : undefined;
 
   return (
     <group>
+      {polygonGeos.map((pg: any, i: number) => (
+        <mesh key={`poly-${i}`} geometry={pg.geo} position={[0, -1.5, 0]}>
+          <meshStandardMaterial color={wireColor || pg.color} side={THREE.DoubleSide} wireframe={showMesh} transparent={true} opacity={0.7} />
+        </mesh>
+      ))}
       <mesh geometry={roadGeo} position={[0, 0, 0]}>
         <meshStandardMaterial color={wireColor || "#1e293b"} side={THREE.DoubleSide} wireframe={showMesh} />
       </mesh>

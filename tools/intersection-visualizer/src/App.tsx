@@ -26,9 +26,9 @@ export default function App() {
   ]);
 
   const [edges, setEdges] = useState<Edge[]>([
-    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: 60, sidewalk: 12, color: '#ef4444' },
-    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: 60, sidewalk: 12, color: '#10b981' },
-    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: 12, color: '#3b82f6' },
+    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: 60, sidewalk: 24, color: '#ef4444' },
+    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: 60, sidewalk: 24, color: '#10b981' },
+    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: 24, color: '#3b82f6' },
   ]);
 
   const [selectedEdges, setSelectedEdges] = useState<string[]>([]);
@@ -62,12 +62,15 @@ export default function App() {
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+  const [selectedPolygonFillId, setSelectedPolygonFillId] = useState<string | null>(null);
   const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
   const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
   const [laneWidth, setLaneWidth] = useState(DEFAULT_LANE_WIDTH);
   const [is3DMode, setIs3DMode] = useState(false);
   const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
   const [softSelectionRadius, setSoftSelectionRadius] = useState(200);
+
+  const [polygonFills, setPolygonFills] = useState<{ id: string; points: string[]; color: string }[]>([]);
 
   const handleExport = () => {
     const data = JSON.stringify({
@@ -80,6 +83,7 @@ export default function App() {
       },
       nodes,
       edges,
+      polygonFills,
     }, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -122,6 +126,11 @@ export default function App() {
           } else {
             setLaneWidth(DEFAULT_LANE_WIDTH);
           }
+          if (Array.isArray(data.polygonFills)) {
+            setPolygonFills(data.polygonFills);
+          } else {
+            setPolygonFills([]);
+          }
           setSelectedEdges([]);
           setSelectedNode(null);
           setSelectedPointIndex(null);
@@ -163,7 +172,22 @@ export default function App() {
         setIsMergeMode(prev => !prev);
         setIsConnectMode(false);
       }
+      if (e.key.toLowerCase() === 'p' && !e.ctrlKey) {
+        if (selectedNodes.length >= 3) {
+           const id = Math.random().toString(36).substring(2, 9);
+           const color = '#10b981'; // default fill color (emerald)
+           setPolygonFills(prev => [...prev, { id, points: [...selectedNodes], color }]);
+           setSelectedNodes([]);
+        } else {
+           alert("Select at least 3 nodes to create a polygon fill constraint.");
+        }
+      }
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedPolygonFillId) {
+            setPolygonFills(prev => prev.filter(p => p.id !== selectedPolygonFillId));
+            setSelectedPolygonFillId(null);
+            return;
+        }
         if (selectedEdges.length > 0 && selectedPointIndex !== null && selectedNodes.length === 0 && selectedEdges.length === 1) {
           setEdges(prev => prev.map(edge => {
             if (selectedEdges.includes(edge.id)) {
@@ -186,9 +210,12 @@ export default function App() {
           setSelectedNodes([]);
           setSelectedEdges([]);
           setSelectedPointIndex(null);
+        } else {
+          // If nothing else is deleted, clear the last polygon
+          setPolygonFills(prev => prev.length > 0 ? prev.slice(0, prev.length - 1) : prev);
         }
       }
-      if (e.key.toLowerCase() === 'f') {
+      if (e.key.toLowerCase() === 'f' && !e.ctrlKey && e.key !== 'F') {
         if (nodes.length > 0) {
           let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
           nodes.forEach(n => {
@@ -310,12 +337,12 @@ export default function App() {
     drawNetwork2D(
       ctx, size, nodes, edges, selectedEdges, selectedNodes, selectedNode,
       showMesh, showControlPoints, isConnectMode, isMergeMode,
-      chamferAngle, meshResolution, laneWidth,
+      chamferAngle, meshResolution, laneWidth, polygonFills,
       softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex,
-      view
+      selectedPolygonFillId, view
     );
     ctx.restore();
-  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, selectedPolygonFillId, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
     if (e.__scenePos) return e.__scenePos;
@@ -328,12 +355,13 @@ export default function App() {
 
     const onContextMenu = (e: React.MouseEvent | any) => {
     e.preventDefault();
-    const pos = getMousePos(e);
+  };
 
+  const handleRightClick = (e: React.PointerEvent | any, pos: any) => {
     const getNewEdgeParams = (sn: Node, targetPt: Point) => {
         let params: any = {
             width: 60,
-            sidewalk: 12,
+            sidewalk: 24,
             color: COLORS[edges.length % COLORS.length]
         };
 
@@ -412,6 +440,8 @@ export default function App() {
                 setSelectedPointIndex(null);
                 setIsConnectMode(false);
                 setIsMergeMode(false);
+                startDragPosRef.current = pos;
+                setDragging({ type: 'node', id: n.id });
             } else {
                 setSelectedNode(n.id);
                 setSelectedEdges([]);
@@ -443,6 +473,8 @@ export default function App() {
                 setSelectedPointIndex(null);
                 setIsConnectMode(false);
                 setIsMergeMode(false);
+                startDragPosRef.current = pos;
+                setDragging({ type: 'node', id: newNodeId });
                 return;
             }
         }
@@ -525,6 +557,8 @@ export default function App() {
             setSelectedPointIndex(null);
             setIsConnectMode(false);
             setIsMergeMode(false);
+            startDragPosRef.current = pos;
+            setDragging({ type: 'node', id: newNodeId });
             return;
         }
     }
@@ -570,10 +604,15 @@ export default function App() {
     setSelectedPointIndex(null);
     setIsConnectMode(false);
     setIsMergeMode(false);
+    startDragPosRef.current = spawnPos;
+    setDragging({ type: 'node', id: newNodeId });
   };
 
   const onPointerDown = (e: React.PointerEvent | any) => {
-    if (e.button === 2) return; // ignore right click
+    if (e.button === 2) {
+      handleRightClick(e, getMousePos(e));
+      return;
+    }
 
     if (is3DMode) {
       if (e.button !== 0) return;
@@ -605,6 +644,25 @@ export default function App() {
     }
 
     const pos = getMousePos(e);
+
+    setSelectedPolygonFillId(null);
+    for (const pg of polygonFills) {
+      let cx = 0, cy = 0, count = 0;
+      pg.points.forEach(nid => {
+         const n = nodes.find(nn => nn.id === nid);
+         if (n) { cx += n.point.x; cy += n.point.y; count++; }
+      });
+      if (count > 0) {
+          cx /= count; cy /= count;
+          if (Math.hypot(pos.x - cx, pos.y - cy) < 20) {
+              setSelectedPolygonFillId(pg.id);
+              setSelectedNodes([]);
+              setSelectedEdges([]);
+              setSelectedPointIndex(null);
+              return;
+          }
+      }
+    }
 
     // Click nodes
     for (const n of nodes) {
@@ -795,7 +853,7 @@ export default function App() {
                           { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
                         ],
                         width: 60,
-                        sidewalk: 12,
+                        sidewalk: 24,
                         color: COLORS[edges.length % COLORS.length]
                     };
                     setEdges(prev => [...prev, newEdge]);
@@ -918,13 +976,13 @@ export default function App() {
                 if (newPts[j].linear) {
                     newPts[j] = { ...newPts[j], linear: false };
                 } else {
-                    const anchorB = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
+                    const anchorA = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
                     const otherHandle = j - 1 < 0 ? (sourceNode ? sourceNode.point : newPts[j]) : newPts[j - 1];
-                    newPts[j] = { x: anchorB.x + (otherHandle.x - anchorB.x) / 2, y: anchorB.y + (otherHandle.y - anchorB.y) / 2, z: anchorB.z ?? 4, linear: true };
+                    newPts[j] = { x: anchorA.x + (otherHandle.x - anchorA.x) / 2, y: anchorA.y + (otherHandle.y - anchorA.y) / 2, z: anchorA.z ?? 4, linear: true };
                 }
                 if (j + 1 < newPts.length && newPts[j + 1]) newPts[j + 1] = { ...newPts[j + 1], linked: false };
               }
-              return { ...edge, points: newPts };
+              return enforceLinear({ ...edge, points: newPts }, nodes, undefined, undefined, undefined);
             }));
 
             setDragging({ type: 'edge', id: edges[i].id, pointId: j });
@@ -986,9 +1044,11 @@ export default function App() {
                     }
                 }
               }
-              return { ...edge, points: newPts };
+              return enforceLinear({ ...edge, points: newPts }, nodes, undefined, undefined, undefined);
             }));
             // Note: we DO NOT return here, so that dragging can immediately begin.
+            // Oh wait, Ctrl-click toggles link state, we shouldn't drag link toggle necessarily...
+            // the previous code might start dragging. Let it be for now.
           }
 
           setDragging({ type: 'edge', id: edges[i].id, pointId: j });
@@ -1120,9 +1180,10 @@ export default function App() {
       const oldTargetNode = oldNodes && edge.target ? oldNodes.find(n => n.id === edge.target) : targetNode;
       const oldPts = oldEdge ? oldEdge.points : newPts;
 
-      for (let j = 0; j < newPts.length; j++) {
+      // 1. Process the dragging point first (if any)
+      const processPoint = (j: number) => {
           const handle = newPts[j];
-          if (!handle.linear) continue;
+          if (!handle.linear) return;
 
           const oldHandle = oldPts[j] || handle;
 
@@ -1133,7 +1194,7 @@ export default function App() {
               const oldAnchorA = j === 0 ? oldSourceNode?.point : oldPts[j - 1];
               const oldAnchorB = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
 
-              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
+              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) return;
 
               let outputDx = anchorB.x - anchorA.x;
               let outputDy = anchorB.y - anchorA.y;
@@ -1170,7 +1231,7 @@ export default function App() {
               const oldAnchorA = j + 1 >= oldPts.length ? (oldTargetNode ? oldTargetNode.point : oldPts[j]) : oldPts[j + 1];
               const oldAnchorB = j - 1 < 0 ? (oldSourceNode ? oldSourceNode.point : oldPts[j]) : oldPts[j - 1];
 
-              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) continue;
+              if (!anchorA || !anchorB || !oldAnchorA || !oldAnchorB) return;
 
               let outputDx = anchorB.x - anchorA.x;
               let outputDy = anchorB.y - anchorA.y;
@@ -1201,7 +1262,18 @@ export default function App() {
                   changed = true;
               }
           }
+      };
+
+      if (draggingPointId !== undefined && draggingPointId >= 0 && draggingPointId < newPts.length) {
+          processPoint(draggingPointId);
       }
+
+      for (let j = 0; j < newPts.length; j++) {
+          if (j !== draggingPointId) {
+              processPoint(j);
+          }
+      }
+
       return changed ? { ...edge, points: newPts } : edge;
   };
 
@@ -1581,7 +1653,7 @@ export default function App() {
               { x: srcNode.point.x, y: srcNode.point.y + 66, z: srcNode.point.z ?? 4, linear: true }
           ],
           width: 60,
-          sidewalk: 12,
+          sidewalk: 24,
           color: COLORS[prev.length % COLORS.length]
       }]);
   }
@@ -1622,6 +1694,7 @@ export default function App() {
             <ThreeScene
               nodes={nodes}
               edges={edges}
+              polygonFills={polygonFills}
               chamferAngle={chamferAngle}
               meshResolution={meshResolution}
               laneWidth={laneWidth}
@@ -1645,6 +1718,7 @@ export default function App() {
               selectedNodes={selectedNodes}
               selectedEdges={selectedEdges}
               selectedPointIndex={selectedPointIndex}
+              selectedPolygonFillId={selectedPolygonFillId}
             />
           ) : (
             <>
@@ -1684,6 +1758,7 @@ export default function App() {
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Middle Drag / 2 Fingers</span> Pan</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Scroll</span> Zoom</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Click Edge</span> Add Point</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">P</span> (with 3+ nodes) Fill Polygon</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Esc</span> Deselect</div>
               </div>
             </>

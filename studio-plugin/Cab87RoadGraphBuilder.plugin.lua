@@ -667,6 +667,82 @@ local function assetAttr(spec, suffix)
 	return spec.assetPrefix .. suffix
 end
 
+local function colorFromHex(value, fallback)
+	if typeof(value) == "Color3" then
+		return value
+	end
+
+	local hex = tostring(value or "")
+	hex = string.match(hex, "^#?([%da-fA-F]+)$") or ""
+	if #hex == 3 then
+		hex = string.gsub(hex, ".", function(character)
+			return character .. character
+		end)
+	end
+	if #hex ~= 6 then
+		return fallback
+	end
+
+	local red = tonumber(string.sub(hex, 1, 2), 16)
+	local green = tonumber(string.sub(hex, 3, 4), 16)
+	local blue = tonumber(string.sub(hex, 5, 6), 16)
+	if not (red and green and blue) then
+		return fallback
+	end
+	return Color3.fromRGB(red, green, blue)
+end
+
+local function sanitizeAssetToken(value, fallback)
+	local text = tostring(value or "")
+	text = string.gsub(text, "[^%w_%-]", "_")
+	text = string.gsub(text, "_+", "_")
+	if text == "" then
+		text = fallback
+	end
+	return string.sub(text, 1, 48)
+end
+
+local function getBakeSpecs(meshData)
+	local specs = {}
+	for _, spec in ipairs(BAKE_SPECS) do
+		table.insert(specs, spec)
+	end
+
+	for index, group in ipairs(meshData.polygonFillGroups or {}) do
+		local triangles = group.triangles or {}
+		if #triangles > 0 then
+			local token = sanitizeAssetToken(group.id, string.format("PolygonFill_%03d", index))
+			local color = colorFromHex(group.color, Color3.fromRGB(42, 155, 104))
+			table.insert(specs, {
+				key = "polygonFillSurface_" .. token,
+				assetPrefix = "PolygonFillSurface_" .. token,
+				triangles = triangles,
+				partName = "PolygonFillSurface_" .. token,
+				folder = "surface",
+				surfaceType = "polygonFill",
+				color = color,
+				material = Enum.Material.SmoothPlastic,
+				polygonFillId = tostring(group.id or token),
+				polygonFillColor = tostring(group.color or ""),
+			})
+			table.insert(specs, {
+				key = "polygonFillCollision_" .. token,
+				assetPrefix = "PolygonFillCollision_" .. token,
+				triangles = triangles,
+				partName = "PolygonFillCollision_" .. token,
+				folder = "collision",
+				surfaceType = "polygonFill",
+				color = color,
+				material = Enum.Material.SmoothPlastic,
+				collision = true,
+				polygonFillId = tostring(group.id or token),
+				polygonFillColor = tostring(group.color or ""),
+			})
+		end
+	end
+	return specs
+end
+
 local function clearAssetManifestEntry(assets, spec)
 	assets:SetAttribute(assetAttr(spec, "AssetId"), nil)
 	assets:SetAttribute(assetAttr(spec, "Version"), nil)
@@ -761,6 +837,12 @@ local function createBakedPart(RoadMeshBuilder, parent, spec, assetId, triangleC
 	part:SetAttribute("MapId", mapId)
 	part:SetAttribute("MeshAssetId", assetId)
 	part:SetAttribute("BakedRoadGraphMesh", true)
+	if spec.polygonFillId then
+		part:SetAttribute("PolygonFillId", spec.polygonFillId)
+	end
+	if spec.polygonFillColor then
+		part:SetAttribute("PolygonFillColor", spec.polygonFillColor)
+	end
 	return part, nil
 end
 
@@ -871,6 +953,7 @@ local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reas
 	assets:SetAttribute("RoadTriangles", #(meshData.roadTriangles or {}))
 	assets:SetAttribute("SidewalkTriangles", #(meshData.sidewalkTriangles or {}))
 	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
+	assets:SetAttribute("PolygonFillTriangles", #(meshData.polygonFillTriangles or {}))
 
 	clearPreviewMeshes(root)
 	setStatus(string.format(
@@ -943,8 +1026,8 @@ local function bakeMeshAssets()
 	local bakedParts = 0
 	local errors = {}
 	local uploadUnavailableReason = nil
-	for _, spec in ipairs(BAKE_SPECS) do
-		local triangles = meshData[spec.triangleSet] or {}
+	for _, spec in ipairs(getBakeSpecs(meshData)) do
+		local triangles = spec.triangles or meshData[spec.triangleSet] or {}
 		if #triangles == 0 then
 			clearAssetManifestEntry(assets, spec)
 			continue
@@ -1022,6 +1105,7 @@ local function bakeMeshAssets()
 	assets:SetAttribute("RoadTriangles", #(meshData.roadTriangles or {}))
 	assets:SetAttribute("SidewalkTriangles", #(meshData.sidewalkTriangles or {}))
 	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
+	assets:SetAttribute("PolygonFillTriangles", #(meshData.polygonFillTriangles or {}))
 	setGraphImportScaleAttributes(root, RoadGraphData)
 
 	setStatus(string.format(

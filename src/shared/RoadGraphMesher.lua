@@ -63,6 +63,134 @@ local function addTrianglesToBounds(bounds, triangles)
 	end
 end
 
+local function signedAreaXZ(points)
+	local area = 0
+	for index, point in ipairs(points or {}) do
+		local nextPoint = points[(index % #points) + 1]
+		area += point.X * nextPoint.Z - nextPoint.X * point.Z
+	end
+	return area
+end
+
+local function removeConsecutiveDuplicatePoints(points, epsilon)
+	local result = {}
+	local threshold = epsilon or 0.01
+	for _, point in ipairs(points or {}) do
+		local previous = result[#result]
+		if not previous or horizontalDistance(previous, point) > threshold then
+			table.insert(result, point)
+		end
+	end
+
+	while #result > 1 and horizontalDistance(result[1], result[#result]) <= threshold do
+		table.remove(result, #result)
+	end
+	return result
+end
+
+local function pointInTriangleXZ(point, a, b, c)
+	local v0x = c.X - a.X
+	local v0z = c.Z - a.Z
+	local v1x = b.X - a.X
+	local v1z = b.Z - a.Z
+	local v2x = point.X - a.X
+	local v2z = point.Z - a.Z
+
+	local dot00 = v0x * v0x + v0z * v0z
+	local dot01 = v0x * v1x + v0z * v1z
+	local dot02 = v0x * v2x + v0z * v2z
+	local dot11 = v1x * v1x + v1z * v1z
+	local dot12 = v1x * v2x + v1z * v2z
+	local denom = dot00 * dot11 - dot01 * dot01
+	if math.abs(denom) <= EPSILON then
+		return false
+	end
+
+	local invDenom = 1 / denom
+	local u = (dot11 * dot02 - dot01 * dot12) * invDenom
+	local v = (dot00 * dot12 - dot01 * dot02) * invDenom
+	return u > EPSILON and v > EPSILON and (u + v) < 1 - EPSILON
+end
+
+local function triangulateSimplePolygon(points)
+	local boundary = removeConsecutiveDuplicatePoints(points, 0.01)
+	if #boundary < 3 then
+		return {}
+	end
+
+	local area = signedAreaXZ(boundary)
+	if math.abs(area) <= EPSILON then
+		return {}
+	end
+
+	local isCounterClockwise = area > 0
+	local indices = {}
+	for index = 1, #boundary do
+		table.insert(indices, index)
+	end
+
+	local triangles = {}
+	local guard = 0
+	local maxIterations = #boundary * #boundary
+	while #indices > 3 and guard < maxIterations do
+		guard += 1
+		local earIndex = nil
+
+		for i = 1, #indices do
+			local previousIndex = indices[((i - 2) % #indices) + 1]
+			local currentIndex = indices[i]
+			local nextIndex = indices[(i % #indices) + 1]
+			local a = boundary[previousIndex]
+			local b = boundary[currentIndex]
+			local c = boundary[nextIndex]
+			local ab = b - a
+			local bc = c - b
+			local cross = crossXZ(ab, bc)
+			local convex = if isCounterClockwise then cross > EPSILON else cross < -EPSILON
+
+			if convex then
+				local containsPoint = false
+				for _, candidateIndex in ipairs(indices) do
+					if candidateIndex ~= previousIndex and candidateIndex ~= currentIndex and candidateIndex ~= nextIndex then
+						if pointInTriangleXZ(boundary[candidateIndex], a, b, c) then
+							containsPoint = true
+							break
+						end
+					end
+				end
+
+				if not containsPoint then
+					earIndex = i
+					if isCounterClockwise then
+						addTriangle(triangles, a, b, c)
+					else
+						addTriangle(triangles, a, c, b)
+					end
+					break
+				end
+			end
+		end
+
+		if not earIndex then
+			break
+		end
+		table.remove(indices, earIndex)
+	end
+
+	if #indices == 3 then
+		local a = boundary[indices[1]]
+		local b = boundary[indices[2]]
+		local c = boundary[indices[3]]
+		if isCounterClockwise then
+			addTriangle(triangles, a, b, c)
+		else
+			addTriangle(triangles, a, c, b)
+		end
+	end
+
+	return triangles
+end
+
 local function cubicBezier(p0, p1, p2, p3, t)
 	local t2 = t * t
 	local t3 = t2 * t
@@ -617,6 +745,8 @@ local function makeMeshData()
 		crosswalkTriangles = {},
 		hubs = {},
 		roadPolygons = {},
+		polygonFillGroups = {},
+		polygonFillTriangles = {},
 		sidewalkPolygons = {},
 		crosswalks = {},
 		centerLines = {},
@@ -627,6 +757,171 @@ local function makeMeshData()
 			maxZ = -math.huge,
 		},
 	}
+end
+
+local function findEdgeBetween(edges, firstNodeId, secondNodeId)
+	for _, edge in ipairs(edges or {}) do
+		if (edge.source == firstNodeId and edge.target == secondNodeId) or (edge.source == secondNodeId and edge.target == firstNodeId) then
+			return edge
+		end
+	end
+	return nil
+end
+
+local function appendCurve(target, curve, reverse)
+	if reverse then
+		for index = #(curve or {}), 1, -1 do
+			table.insert(target, curve[index])
+		end
+	else
+		for _, point in ipairs(curve or {}) do
+			table.insert(target, point)
+		end
+	end
+end
+
+local function nearestPolygonPointIndex(polygon, point)
+	local nearestIndex = nil
+	local nearestDistance = math.huge
+	for index, candidate in ipairs(polygon or {}) do
+		local distance = horizontalDistance(candidate, point)
+		if distance < nearestDistance then
+			nearestIndex = index
+			nearestDistance = distance
+		end
+	end
+	return nearestIndex, nearestDistance
+end
+
+local function buildHubPath(polygon, startIndex, endIndex, step)
+	local result = {}
+	if not startIndex or not endIndex or #polygon == 0 then
+		return result
+	end
+
+	local index = startIndex
+	while #result < #polygon + 2 do
+		table.insert(result, polygon[index])
+		if index == endIndex then
+			break
+		end
+		index += step
+		if index > #polygon then
+			index = 1
+		elseif index < 1 then
+			index = #polygon
+		end
+	end
+	return result
+end
+
+local function buildPolygonFillMeshes(mesh, graph, settings)
+	local polygonFills = graph.polygonFills or {}
+	if #polygonFills == 0 then
+		return
+	end
+
+	local nodes = graph.nodes or {}
+	local edges = graph.edges or {}
+	local nodeLookup = graph.nodeLookup or nodesById(nodes)
+	local roadPolygonsById = {}
+	for _, roadPolygon in ipairs(mesh.roadPolygons or {}) do
+		roadPolygonsById[roadPolygon.id] = roadPolygon
+	end
+
+	local hubsById = {}
+	for _, hub in ipairs(mesh.hubs or {}) do
+		hubsById[hub.id] = hub
+	end
+
+	for fillIndex, fill in ipairs(polygonFills) do
+		if type(fill) ~= "table" or type(fill.points) ~= "table" or #fill.points < 3 then
+			continue
+		end
+
+		local fillNodes = {}
+		for _, nodeId in ipairs(fill.points) do
+			local node = nodeLookup[nodeId]
+			if node then
+				table.insert(fillNodes, node)
+			end
+		end
+		if #fillNodes < 3 then
+			continue
+		end
+
+		local nodePolygon = {}
+		for _, node in ipairs(fillNodes) do
+			table.insert(nodePolygon, node.point)
+		end
+		local isClockwise = signedAreaXZ(nodePolygon) > 0
+		local segments = {}
+
+		for index, firstNodeId in ipairs(fill.points) do
+			local secondNodeId = fill.points[(index % #fill.points) + 1]
+			local firstNode = nodeLookup[firstNodeId]
+			local secondNode = nodeLookup[secondNodeId]
+			if not (firstNode and secondNode) then
+				continue
+			end
+
+			local edge = findEdgeBetween(edges, firstNodeId, secondNodeId)
+			local roadPolygon = edge and roadPolygonsById[edge.id] or nil
+			local curve = {}
+			if roadPolygon then
+				local isForward = edge.source == firstNodeId
+				local useRightCurve = if isClockwise then isForward else not isForward
+				local chosenCurve = if useRightCurve then roadPolygon.outerRightCurve else roadPolygon.outerLeftCurve
+				if chosenCurve and #chosenCurve >= 2 then
+					appendCurve(curve, chosenCurve, not isForward)
+				end
+			end
+
+			if #curve < 2 then
+				table.insert(curve, firstNode.point)
+				table.insert(curve, secondNode.point)
+			end
+			table.insert(segments, {
+				nodeId = secondNodeId,
+				curve = curve,
+			})
+		end
+
+		local boundaryPoints = {}
+		for index, segment in ipairs(segments) do
+			appendCurve(boundaryPoints, segment.curve, false)
+
+			local nextSegment = segments[(index % #segments) + 1]
+			local endPoint = segment.curve[#segment.curve]
+			local nextStart = nextSegment and nextSegment.curve[1] or nil
+			local hub = hubsById[segment.nodeId]
+			if endPoint and nextStart and hub and #(hub.outerPolygon or {}) > 0 then
+				local endIndex, endDistance = nearestPolygonPointIndex(hub.outerPolygon, endPoint)
+				local startIndex, startDistance = nearestPolygonPointIndex(hub.outerPolygon, nextStart)
+				local maxJoinDistance = math.max(tonumber(settings.sidewalkWidth) or 12, 12) * 12.5
+				if endIndex and startIndex and endDistance < maxJoinDistance and startDistance < maxJoinDistance then
+					local forwardPath = buildHubPath(hub.outerPolygon, endIndex, startIndex, 1)
+					local backwardPath = buildHubPath(hub.outerPolygon, endIndex, startIndex, -1)
+					local chosenPath = if isClockwise then backwardPath else forwardPath
+					appendCurve(boundaryPoints, chosenPath, false)
+				end
+			end
+		end
+
+		local uniqueBoundaryPoints = removeConsecutiveDuplicatePoints(boundaryPoints, 0.01)
+		local fillTriangles = triangulateSimplePolygon(uniqueBoundaryPoints)
+		if #fillTriangles > 0 then
+			local group = {
+				id = fill.id or string.format("polygonFill%d", fillIndex),
+				color = fill.color or "#10b981",
+				triangles = fillTriangles,
+			}
+			table.insert(mesh.polygonFillGroups, group)
+			for _, triangle in ipairs(fillTriangles) do
+				table.insert(mesh.polygonFillTriangles, triangle)
+			end
+		end
+	end
 end
 
 function RoadGraphMesher.buildNetworkMesh(graph, options)
@@ -979,13 +1274,32 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 			table.insert(mesh.roadPolygons, {
 				id = edge.id,
 				polygon = polygon,
-				leftCurve = leftPoints,
-				rightCurve = rightPoints,
+				leftCurve = { baseLeft },
+				rightCurve = { baseRight },
 				outerPolygon = outerPolygon,
-				outerLeftCurve = outerLeftPoints,
-				outerRightCurve = outerRightPoints,
+				outerLeftCurve = { outerBaseLeft },
+				outerRightCurve = { outerBaseRight },
 				sidewalkWidth = getEdgeSidewalk(edge, settings),
 			})
+			local roadPolygon = mesh.roadPolygons[#mesh.roadPolygons]
+			for _, point in ipairs(leftPoints) do
+				table.insert(roadPolygon.leftCurve, point)
+			end
+			for _, point in ipairs(rightPoints) do
+				table.insert(roadPolygon.rightCurve, point)
+			end
+			for _, point in ipairs(outerLeftPoints) do
+				table.insert(roadPolygon.outerLeftCurve, point)
+			end
+			for _, point in ipairs(outerRightPoints) do
+				table.insert(roadPolygon.outerRightCurve, point)
+			end
+			if targetBaseLeft and targetBaseRight and outerTargetBaseLeft and outerTargetBaseRight then
+				table.insert(roadPolygon.leftCurve, targetBaseRight)
+				table.insert(roadPolygon.rightCurve, targetBaseLeft)
+				table.insert(roadPolygon.outerLeftCurve, outerTargetBaseRight)
+				table.insert(roadPolygon.outerRightCurve, outerTargetBaseLeft)
+			end
 
 			local currentLeft = baseLeft
 			local currentRight = baseRight
@@ -1020,9 +1334,12 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		end
 	end
 
+	buildPolygonFillMeshes(mesh, graph, settings)
+
 	addTrianglesToBounds(mesh.bounds, mesh.roadTriangles)
 	addTrianglesToBounds(mesh.bounds, mesh.sidewalkTriangles)
 	addTrianglesToBounds(mesh.bounds, mesh.crosswalkTriangles)
+	addTrianglesToBounds(mesh.bounds, mesh.polygonFillTriangles)
 	return mesh
 end
 

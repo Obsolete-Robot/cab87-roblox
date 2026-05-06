@@ -21,10 +21,41 @@ local DEFAULT_SURFACES = {
 		color = Color3.fromRGB(231, 226, 204),
 		material = Enum.Material.SmoothPlastic,
 	},
+	fills = {
+		name = "PolygonFillSurface",
+		collisionName = "PolygonFillCollision",
+		color = Color3.fromRGB(42, 155, 104),
+		material = Enum.Material.SmoothPlastic,
+	},
 }
 
 local MIN_PART_DIMENSION = 0.01
 local DEFAULT_CHUNK_SIZE = 1024
+
+local function colorFromHex(value, fallback)
+	if typeof(value) == "Color3" then
+		return value
+	end
+
+	local hex = tostring(value or "")
+	hex = string.match(hex, "^#?([%da-fA-F]+)$") or ""
+	if #hex == 3 then
+		hex = string.gsub(hex, ".", function(character)
+			return character .. character
+		end)
+	end
+	if #hex ~= 6 then
+		return fallback
+	end
+
+	local red = tonumber(string.sub(hex, 1, 2), 16)
+	local green = tonumber(string.sub(hex, 3, 4), 16)
+	local blue = tonumber(string.sub(hex, 5, 6), 16)
+	if not (red and green and blue) then
+		return fallback
+	end
+	return Color3.fromRGB(red, green, blue)
+end
 
 local function newMeshState()
 	local ok, editableMeshOrErr = pcall(function()
@@ -421,6 +452,133 @@ local function buildPrimitiveSurfacePair(meshParent, collisionParent, key, trian
 	return visibleParts, collisionParts, nil
 end
 
+local function getPolygonFillGroups(meshData)
+	local groups = meshData.polygonFillGroups or {}
+	if #groups > 0 then
+		return groups
+	end
+
+	if #(meshData.polygonFillTriangles or {}) > 0 then
+		return {
+			{
+				id = "polygonFill",
+				color = "#10b981",
+				triangles = meshData.polygonFillTriangles,
+			},
+		}
+	end
+	return {}
+end
+
+local function buildFillSurfacePair(meshParent, collisionParent, group, index, options)
+	local triangles = group and group.triangles or {}
+	if #(triangles or {}) == 0 then
+		return nil, nil, nil
+	end
+
+	local style = DEFAULT_SURFACES.fills
+	local fillId = tostring(group.id or index)
+	local color = colorFromHex(group.color, style.color)
+	local visiblePart, visibleErr = RoadMeshBuilder.createSurfaceMesh(
+		meshParent,
+		string.format("%s_%03d", style.name, index),
+		triangles,
+		{
+			color = color,
+			material = style.material,
+			surfaceType = "polygonFill",
+			generatedBy = options.generatedBy,
+			canCollide = false,
+			canQuery = false,
+			canTouch = false,
+			castShadow = false,
+		}
+	)
+	if not visiblePart then
+		return nil, nil, visibleErr
+	end
+
+	local collisionPart, collisionErr = RoadMeshBuilder.createCollisionMesh(
+		collisionParent,
+		string.format("%s_%03d", style.collisionName, index),
+		triangles,
+		{
+			color = color,
+			material = style.material,
+			surfaceType = "polygonFill",
+			generatedBy = options.generatedBy,
+			thickness = options.collisionThickness,
+			surfaceOffset = options.collisionSurfaceOffset,
+		}
+	)
+	if not collisionPart then
+		visiblePart:Destroy()
+		return nil, nil, collisionErr
+	end
+
+	visiblePart:SetAttribute("PolygonFillId", fillId)
+	visiblePart:SetAttribute("PolygonFillColor", tostring(group.color or ""))
+	collisionPart:SetAttribute("PolygonFillId", fillId)
+	collisionPart:SetAttribute("PolygonFillColor", tostring(group.color or ""))
+	return visiblePart, collisionPart, nil
+end
+
+local function buildPrimitiveFillSurfacePair(meshParent, collisionParent, group, index, options)
+	local triangles = group and group.triangles or {}
+	if #(triangles or {}) == 0 then
+		return {}, {}, nil
+	end
+
+	local style = DEFAULT_SURFACES.fills
+	local fillId = tostring(group.id or index)
+	local color = colorFromHex(group.color, style.color)
+	local visibleParts = RoadMeshBuilder.createPrimitiveTriangleParts(
+		meshParent,
+		string.format("%s_%03d", style.name, index),
+		triangles,
+		{
+			color = color,
+			material = style.material,
+			surfaceType = "polygonFill",
+			generatedBy = options.generatedBy,
+			canCollide = false,
+			canQuery = false,
+			canTouch = false,
+			castShadow = false,
+			thickness = options.visualThickness or 0.04,
+		}
+	)
+
+	local collisionParts = RoadMeshBuilder.createPrimitiveTriangleParts(
+		collisionParent,
+		string.format("%s_%03d", style.collisionName, index),
+		triangles,
+		{
+			color = color,
+			material = style.material,
+			surfaceType = "polygonFill",
+			generatedBy = options.generatedBy,
+			canCollide = true,
+			canQuery = true,
+			canTouch = false,
+			transparency = 1,
+			castShadow = false,
+			driveSurface = true,
+			thickness = options.collisionThickness or 0.2,
+		}
+	)
+
+	for _, part in ipairs(visibleParts) do
+		part:SetAttribute("PolygonFillId", fillId)
+		part:SetAttribute("PolygonFillColor", tostring(group.color or ""))
+	end
+	for _, part in ipairs(collisionParts) do
+		part:SetAttribute("PolygonFillId", fillId)
+		part:SetAttribute("PolygonFillColor", tostring(group.color or ""))
+	end
+	return visibleParts, collisionParts, nil
+end
+
 local function triangleCenter(triangle)
 	local a = triangle and triangle[1]
 	local b = triangle and triangle[2]
@@ -544,6 +702,17 @@ function RoadMeshBuilder.createClassifiedMeshes(parent, meshData, options)
 		end
 	end
 
+	for index, group in ipairs(getPolygonFillGroups(meshData)) do
+		local visiblePart, collisionPart, err = buildFillSurfacePair(meshFolder, collisionFolder, group, index, options)
+		if visiblePart and collisionPart then
+			table.insert(result.visibleParts, visiblePart)
+			table.insert(result.collisionParts, collisionPart)
+			table.insert(result.driveSurfaces, collisionPart)
+		elseif err then
+			table.insert(result.errors, string.format("polygonFill[%s]: %s", tostring(group.id or index), tostring(err)))
+		end
+	end
+
 	if #result.visibleParts == 0 then
 		meshFolder:Destroy()
 	end
@@ -568,6 +737,7 @@ function RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, meshData, 
 		roads = meshData.roadTriangles,
 		sidewalks = meshData.sidewalkTriangles,
 		crosswalks = meshData.crosswalkTriangles,
+		fills = meshData.polygonFillTriangles,
 	}
 	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks" }
 
@@ -613,6 +783,20 @@ function RoadMeshBuilder.createClassifiedPrimitiveMeshes(parent, meshData, optio
 		local visibleParts, collisionParts, err = buildPrimitiveSurfacePair(meshFolder, collisionFolder, key, triangles, options)
 		if err then
 			table.insert(result.errors, string.format("%s: %s", key, tostring(err)))
+		end
+		for _, part in ipairs(visibleParts) do
+			table.insert(result.visibleParts, part)
+		end
+		for _, part in ipairs(collisionParts) do
+			table.insert(result.collisionParts, part)
+			table.insert(result.driveSurfaces, part)
+		end
+	end
+
+	for index, group in ipairs(getPolygonFillGroups(meshData)) do
+		local visibleParts, collisionParts, err = buildPrimitiveFillSurfacePair(meshFolder, collisionFolder, group, index, options)
+		if err then
+			table.insert(result.errors, string.format("polygonFill[%s]: %s", tostring(group.id or index), tostring(err)))
 		end
 		for _, part in ipairs(visibleParts) do
 			table.insert(result.visibleParts, part)

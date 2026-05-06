@@ -391,14 +391,14 @@ export default function Sidebar({
                       <div>
                         <div className="flex justify-between text-xs text-slate-400 mb-1">
                           <span>Sidewalk (Left)</span>
-                          <span>{e.sidewalkLeft ?? e.sidewalk ?? 12}px</span>
+                          <span>{e.sidewalkLeft ?? e.sidewalk ?? 24}px</span>
                         </div>
                         <input
                           type="range"
                           min="0"
                           max="100"
                           step="2"
-                          value={e.sidewalkLeft ?? e.sidewalk ?? 12}
+                          value={e.sidewalkLeft ?? e.sidewalk ?? 24}
                           onChange={(evt) =>
                             setEdges((prev) =>
                               prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkLeft: parseInt(evt.target.value) } : pr))
@@ -408,14 +408,14 @@ export default function Sidebar({
                         />
                         <div className="flex justify-between text-xs text-slate-400 mb-1">
                           <span>Sidewalk (Right)</span>
-                          <span>{e.sidewalkRight ?? e.sidewalk ?? 12}px</span>
+                          <span>{e.sidewalkRight ?? e.sidewalk ?? 24}px</span>
                         </div>
                         <input
                           type="range"
                           min="0"
                           max="100"
                           step="2"
-                          value={e.sidewalkRight ?? e.sidewalk ?? 12}
+                          value={e.sidewalkRight ?? e.sidewalk ?? 24}
                           onChange={(evt) =>
                             setEdges((prev) =>
                               prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkRight: parseInt(evt.target.value) } : pr))

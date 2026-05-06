@@ -7,6 +7,7 @@ import { SceneContent } from './components/three/SceneContent';
 interface ThreeSceneProps {
   nodes: Node[];
   edges: Edge[];
+  polygonFills: any[];
   chamferAngle: number;
   meshResolution: number;
   laneWidth?: number;
@@ -24,6 +25,7 @@ interface ThreeSceneProps {
   selectedNodes: string[];
   selectedEdges: string[];
   selectedPointIndex: number | null;
+  selectedPolygonFillId: string | null;
   view: { x: number, y: number, zoom: number };
   setView: React.Dispatch<React.SetStateAction<{ x: number, y: number, zoom: number }>>;
   containerRef: React.RefObject<HTMLDivElement>;
@@ -33,14 +35,14 @@ interface ThreeSceneProps {
 }
 
 export default function ThreeScene({
-    nodes, edges, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
+    nodes, edges, polygonFills, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
     setNodes, setEdges,
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
-    isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPointIndex,
+    isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPointIndex, selectedPolygonFillId,
     softSelectionEnabled, softSelectionRadius,
     view, setView, containerRef
 }: ThreeSceneProps) {
-  const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth || 30), [nodes, edges, chamferAngle, meshResolution, laneWidth]);
+  const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth || 30, polygonFills), [nodes, edges, chamferAngle, meshResolution, laneWidth, polygonFills]);
 
   const initialCameraParams = useMemo(() => {
     const cW = containerRef.current?.clientWidth || 800;
@@ -66,6 +68,7 @@ export default function ThreeScene({
       <Canvas camera={{ position: initialCameraParams.position, fov: initialCameraParams.fov, far: 50000 }} style={{ touchAction: 'none' }}>
         <SceneContent
           mesh={mesh}
+          polygonFills={polygonFills}
           showMesh={showMesh}
           showControlPoints={showControlPoints}
           nodes={nodes}
@@ -82,6 +85,7 @@ export default function ThreeScene({
           selectedNodes={selectedNodes}
           selectedEdges={selectedEdges}
           selectedPointIndex={selectedPointIndex}
+          selectedPolygonFillId={selectedPolygonFillId}
           initialCameraParams={initialCameraParams}
           softSelectionEnabled={softSelectionEnabled}
           softSelectionRadius={softSelectionRadius}

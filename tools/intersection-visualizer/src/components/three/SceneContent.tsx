@@ -9,7 +9,7 @@ import { LaneArrows } from './LaneArrows';
 import { Grid } from '@react-three/drei';
 
 export function SceneContent({
-  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle,
+  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, polygonFills, selectedPolygonFillId,
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
   isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPointIndex,
   softSelectionEnabled, softSelectionRadius,
@@ -53,6 +53,30 @@ export function SceneContent({
 
       <group>
         {showControlPoints && <BezierPaths edges={edges} nodes={nodes} chamferAngle={chamferAngle} />}
+        {polygonFills && polygonFills.map((fill: any, i: number) => {
+          let cx = 0, cy = 0, count = 0;
+          fill.points.forEach((nid: string) => {
+             const n = nodes.find((nn: any) => nn.id === nid);
+             if (n) { cx += n.point.x; cy += n.point.y; count++; }
+          });
+          if (count > 0) {
+            cx /= count; cy /= count;
+            const isSelected = selectedPolygonFillId === fill.id;
+            return (
+              <mesh key={`fill-handle-${fill.id}`} position={[cx, 5, cy]} renderOrder={1000}>
+                <sphereGeometry args={[isSelected ? 10 : 8, 16, 16]} />
+                <meshBasicMaterial color={isSelected ? "#ffffff" : fill.color} depthTest={false} depthWrite={false} transparent={true} />
+                {isSelected && (
+                  <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+                    <ringGeometry args={[14, 16, 32]} />
+                    <meshBasicMaterial color="#3b82f6" side={THREE.DoubleSide} transparent opacity={0.8} />
+                  </mesh>
+                )}
+              </mesh>
+            );
+          }
+          return null;
+        })}
         {nodes.map((n: Node) => {
           const isActive = selectedNode === n.id;
           const isSelected = selectedNodes?.includes(n.id) || isActive;

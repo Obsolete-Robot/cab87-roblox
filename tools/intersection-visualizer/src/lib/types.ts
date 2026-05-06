@@ -18,6 +18,12 @@ export type Node = {
   transitionSmoothness?: number;
 };
 
+export type PolygonFill = {
+  id: string;
+  points: string[]; // Can be node IDs or just keep simple and map them later
+  color: string;
+};
+
 export type Edge = {
   id: string;
   source: string; // Node ID
@@ -49,4 +55,5 @@ export type MeshData = {
   dashedLineTriangles: Triangle[];
   solidLineTriangles: Triangle[];
   laneArrows: { position: Point; dir: Point }[];
+  polygonTriangles: { triangles: Triangle[], color: string }[];
 };
