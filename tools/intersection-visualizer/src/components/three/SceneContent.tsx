@@ -9,11 +9,11 @@ import { LaneArrows } from './LaneArrows';
 import { Grid } from '@react-three/drei';
 
 export function SceneContent({
-  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle,
+  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, polygonFills, selectedPolygonFillId,
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
-  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPointIndex,
+  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints,
   softSelectionEnabled, softSelectionRadius,
-  setView, containerRef
+  setView, containerRef, marqueeStart, marqueeEnd, snapGridSize = 10
 }: any) {
   const controlsRef = useRef<any>(null);
 
@@ -22,15 +22,38 @@ export function SceneContent({
       <ambientLight intensity={0.4} />
       <directionalLight position={[500, 1000, 500]} intensity={0.8} castShadow />
 
+      {marqueeStart && marqueeEnd && (() => {
+          const xMin = Math.min(marqueeStart.x, marqueeEnd.x);
+          const xMax = Math.max(marqueeStart.x, marqueeEnd.x);
+          const yMin = Math.min(marqueeStart.y, marqueeEnd.y);
+          const yMax = Math.max(marqueeStart.y, marqueeEnd.y);
+          const width = Math.max(xMax - xMin, 1);
+          const height = Math.max(yMax - yMin, 1);
+          const cx = (xMax + xMin) / 2;
+          const cy = (yMax + yMin) / 2;
+          return (
+            <group position={[cx, 4.5, cy]} rotation={[-Math.PI / 2, 0, 0]}>
+              <mesh renderOrder={1001}>
+                <planeGeometry args={[width, height]} />
+                <meshBasicMaterial color="#3b82f6" transparent opacity={0.2} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+              </mesh>
+              <lineSegments renderOrder={1002}>
+                <edgesGeometry args={[new THREE.PlaneGeometry(width, height)]} />
+                <lineBasicMaterial color="#3b82f6" transparent opacity={0.8} depthTest={false} depthWrite={false} />
+              </lineSegments>
+            </group>
+          );
+      })()}
+
       <Grid
         infiniteGrid
         fadeDistance={5000}
-        sectionColor="#404040"
-        cellColor="#262626"
-        position={[0, -0.2, 0]}
-        cellSize={20}
-        sectionSize={100}
-        cellThickness={1}
+        sectionColor="#666666"
+        cellColor="#444444"
+        position={[0, 0, 0]}
+        cellSize={Math.max(1, snapGridSize)}
+        sectionSize={Math.max(10, snapGridSize * 10)}
+        cellThickness={2}
         sectionThickness={2}
       />
 
@@ -53,6 +76,30 @@ export function SceneContent({
 
       <group>
         {showControlPoints && <BezierPaths edges={edges} nodes={nodes} chamferAngle={chamferAngle} />}
+        {polygonFills && polygonFills.map((fill: any, i: number) => {
+          let cx = 0, cy = 0, count = 0;
+          fill.points.forEach((nid: string) => {
+             const n = nodes.find((nn: any) => nn.id === nid);
+             if (n) { cx += n.point.x; cy += n.point.y; count++; }
+          });
+          if (count > 0) {
+            cx /= count; cy /= count;
+            const isSelected = selectedPolygonFillId === fill.id;
+            return (
+              <mesh key={`fill-handle-${fill.id}`} position={[cx, 5, cy]} renderOrder={1000}>
+                <sphereGeometry args={[isSelected ? 10 : 8, 16, 16]} />
+                <meshBasicMaterial color={isSelected ? "#ffffff" : fill.color} depthTest={false} depthWrite={false} transparent={true} />
+                {isSelected && (
+                  <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+                    <ringGeometry args={[14, 16, 32]} />
+                    <meshBasicMaterial color="#3b82f6" side={THREE.DoubleSide} transparent opacity={0.8} />
+                  </mesh>
+                )}
+              </mesh>
+            );
+          }
+          return null;
+        })}
         {nodes.map((n: Node) => {
           const isActive = selectedNode === n.id;
           const isSelected = selectedNodes?.includes(n.id) || isActive;
@@ -74,7 +121,7 @@ export function SceneContent({
             const isAnchor = (i % 3 === 2);
             if (!showControlPoints && !isAnchor) return null;
             const isSelectedEdge = selectedEdges.includes(edge.id);
-            const isSelectedPoint = isSelectedEdge && selectedPointIndex === i;
+            const isSelectedPoint = selectedPoints?.some((p: any) => p.edgeId === edge.id && p.pointIndex === i) || false;
 
             let color = "#fbbf24";
             if (isSelectedPoint) {

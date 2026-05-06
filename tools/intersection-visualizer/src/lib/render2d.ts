@@ -17,11 +17,14 @@ export const drawNetwork2D = (
   chamferAngle: number,
   meshResolution: number,
   laneWidth: number,
+  polygonFills: any[],
   softSelectionEnabled: boolean,
   softSelectionRadius: number,
   draggingPoint: Point | null,
-  selectedPointIndex: number | null,
-  view?: { x: number; y: number; zoom: number }
+  selectedPoints: any[],
+  selectedPolygonFillId: string | null,
+  view?: { x: number; y: number; zoom: number },
+  snapGridSize: number = 10
 ) => {
   // Clear the canvas outside of the view transform or just fill the entire view area.
   // Wait, ctx is already transformed. To clear the whole canvas properly:
@@ -31,8 +34,8 @@ export const drawNetwork2D = (
   ctx.restore();
 
   if (view) {
-    const gridSize = 100;
-    const cellGridSize = 20;
+    const gridSize = Math.max(snapGridSize * 10, 100);
+    const cellGridSize = snapGridSize;
     const invZoom = 1 / view.zoom;
 
     const minX = -view.x * invZoom;
@@ -75,7 +78,7 @@ export const drawNetwork2D = (
 
   if (nodes.length === 0) return;
 
-  const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth);
+  const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth, polygonFills);
 
   if (showMesh) {
     mesh.triangles.forEach((tri, idx) => {
@@ -93,11 +96,29 @@ export const drawNetwork2D = (
     });
   }
 
+  if (showMesh && mesh.polygonTriangles) {
+    mesh.polygonTriangles.forEach(pg => {
+      ctx.beginPath();
+      pg.triangles.forEach(tri => {
+        ctx.moveTo(tri[0].x, tri[0].y);
+        ctx.lineTo(tri[1].x, tri[1].y);
+        ctx.lineTo(tri[2].x, tri[2].y);
+        ctx.lineTo(tri[0].x, tri[0].y);
+      });
+      ctx.fillStyle = pg.color + '44'; // 44 is partial transparency
+      ctx.fill();
+      ctx.strokeStyle = pg.color;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  }
+
   if (!showMesh) {
     const getAvgZ = (paths: Point[]) => {
       let sum = 0;
+      if (!paths || paths.length === 0) return 4;
       for (const p of paths) sum += (p.z ?? 4);
-      return sum / (paths.length || 1);
+      return sum / paths.length;
     };
 
     const getZColor = (paths: Point[], type: 'road' | 'sidewalk' | 'crosswalk' | 'hub') => {
@@ -121,6 +142,74 @@ export const drawNetwork2D = (
     ctx.shadowOffsetY = 4;
 
     const renderables: { z: number, priority: number, paths: Point[], draw: () => void }[] = [];
+
+    if (mesh.polygonTriangles) {
+        mesh.polygonTriangles.forEach((pg, i) => {
+            if (pg.triangles.length === 0) return;
+            const fillDef = polygonFills[i];
+
+            let cx = 0, cy = 0, count = 0;
+            if (fillDef) {
+                fillDef.points.forEach((nid: string) => {
+                    const n = nodes.find(n => n.id === nid);
+                    if (n) { cx += n.point.x; cy += n.point.y; count++; }
+                });
+                if (count > 0) { cx /= count; cy /= count; }
+            }
+
+            renderables.push({
+                z: -10, // Always below everything
+                priority: -100,
+                paths: [],
+                draw: () => {
+                    ctx.save();
+                    ctx.shadowColor = 'transparent';
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = pg.color + '66'; // semi-transparent
+                    ctx.strokeStyle = pg.color;
+                    ctx.lineWidth = 0.5;
+                    ctx.beginPath();
+                    pg.triangles.forEach(tri => {
+                        ctx.moveTo(tri[0].x, tri[0].y);
+                        ctx.lineTo(tri[1].x, tri[1].y);
+                        ctx.lineTo(tri[2].x, tri[2].y);
+                        ctx.lineTo(tri[0].x, tri[0].y);
+                    });
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            });
+
+            if (count > 0 && fillDef) {
+                renderables.push({
+                    z: 9999,
+                    priority: 100, // On top of everything
+                    paths: [],
+                    draw: () => {
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+                        ctx.fillStyle = selectedPolygonFillId === fillDef.id ? '#ffffff' : pg.color;
+                        ctx.strokeStyle = '#000000';
+                        ctx.lineWidth = 2;
+                        ctx.fill();
+                        ctx.stroke();
+
+                        if (selectedPolygonFillId === fillDef.id) {
+                            ctx.beginPath();
+                            ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+                            ctx.strokeStyle = '#3b82f6';
+                            ctx.lineWidth = 2;
+                            ctx.setLineDash([4, 4]);
+                            ctx.stroke();
+                        }
+                        ctx.restore();
+                    }
+                });
+            }
+        });
+    }
 
     mesh.roadPolygons.forEach(rp => {
       if (rp.outerLeftCurve && rp.outerRightCurve && rp.outerLeftCurve.length === rp.outerRightCurve.length && rp.outerLeftCurve.length > 0) {
@@ -447,7 +536,7 @@ export const drawNetwork2D = (
           if (!showControlPoints && !isAnchor) return;
 
           ctx.beginPath();
-          const isSelectedPoint = selectedEdges.includes(e.id) && selectedPointIndex === j;
+          const isSelectedPoint = selectedPoints?.some(p => p.edgeId === e.id && p.pointIndex === j) || false;
           ctx.arc(pt.x, pt.y, isAnchor ? 10 : 8, 0, Math.PI * 2);
           ctx.fillStyle = selectedEdges.includes(e.id) ? (isSelectedPoint ? '#ef4444' : (isAnchor ? (pt.linked ? '#10b981' : '#fbbf24') : (pt.linear ? '#0ea5e9' : '#ffffff'))) : '#64748b';
           ctx.fill();
