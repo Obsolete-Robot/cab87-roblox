@@ -967,13 +967,13 @@ export default function App() {
                 if (newPts[j].linear) {
                     newPts[j] = { ...newPts[j], linear: false };
                 } else {
-                    const anchorB = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
+                    const anchorA = j + 1 >= newPts.length ? (targetNode ? targetNode.point : newPts[j]) : newPts[j + 1];
                     const otherHandle = j - 1 < 0 ? (sourceNode ? sourceNode.point : newPts[j]) : newPts[j - 1];
-                    newPts[j] = { x: anchorB.x + (otherHandle.x - anchorB.x) / 2, y: anchorB.y + (otherHandle.y - anchorB.y) / 2, z: anchorB.z ?? 4, linear: true };
+                    newPts[j] = { x: anchorA.x + (otherHandle.x - anchorA.x) / 2, y: anchorA.y + (otherHandle.y - anchorA.y) / 2, z: anchorA.z ?? 4, linear: true };
                 }
                 if (j + 1 < newPts.length && newPts[j + 1]) newPts[j + 1] = { ...newPts[j + 1], linked: false };
               }
-              return { ...edge, points: newPts };
+              return enforceLinear({ ...edge, points: newPts }, nodes, undefined, undefined, undefined);
             }));
             
             setDragging({ type: 'edge', id: edges[i].id, pointId: j });
@@ -1035,9 +1035,11 @@ export default function App() {
                     }
                 }
               }
-              return { ...edge, points: newPts };
+              return enforceLinear({ ...edge, points: newPts }, nodes, undefined, undefined, undefined);
             }));
             // Note: we DO NOT return here, so that dragging can immediately begin.
+            // Oh wait, Ctrl-click toggles link state, we shouldn't drag link toggle necessarily...
+            // the previous code might start dragging. Let it be for now.
           }
 
           setDragging({ type: 'edge', id: edges[i].id, pointId: j });
@@ -1169,68 +1171,78 @@ export default function App() {
       const oldTargetNode = oldNodes && edge.target ? oldNodes.find(n => n.id === edge.target) : targetNode;
       const oldPts = oldEdge ? oldEdge.points : newPts;
 
-      for (let j = 0; j < newPts.length; j++) {
+      // 1. Process the dragging point first (if any)
+      const processPoint = (j: number) => {
           const handle = newPts[j];
-          if (!handle.linear) continue;
+          if (!handle.linear) return;
           
-          const oldHandle = oldPts[j] || handle;
+          if (j % 3 === 0) {
+              const anchorA = j === 0 ? sourceNode?.point : newPts[j - 1];
+              const nextAnchorIndex = j + 2;
+              const trueTargetAnchor = nextAnchorIndex >= newPts.length ? targetNode?.point : newPts[nextAnchorIndex];
+              const otherHandle = j + 1 >= newPts.length ? undefined : newPts[j + 1];
+              
+              let targetForLine;
+              if (otherHandle && otherHandle.linear && trueTargetAnchor) {
+                  targetForLine = trueTargetAnchor;
+              } else {
+                  targetForLine = j + 1 >= newPts.length ? targetNode?.point : newPts[j + 1];
+              }
+              
+              if (!anchorA || !targetForLine) return;
+              
+              const dx = targetForLine.x - anchorA.x;
+              const dy = targetForLine.y - anchorA.y;
+              const lenSq = dx * dx + dy * dy;
+              
+              if (lenSq > 0.0001) {
+                  const hx = handle.x - anchorA.x;
+                  const hy = handle.y - anchorA.y;
+                  let t = (hx * dx + hy * dy) / lenSq;
+                  t = Math.max(0, t);
+                  newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
+                  changed = true;
+              }
+          } else if (j % 3 === 1) {
+              const anchorA = j + 1 >= newPts.length ? targetNode?.point : newPts[j + 1];
+              const prevAnchorIndex = j - 2;
+              const trueSourceAnchor = prevAnchorIndex < 0 ? sourceNode?.point : newPts[prevAnchorIndex];
+              const otherHandle = j - 1 < 0 ? undefined : newPts[j - 1];
+              
+              let targetForLine;
+              if (otherHandle && otherHandle.linear && trueSourceAnchor) {
+                  targetForLine = trueSourceAnchor;
+              } else {
+                  targetForLine = j - 1 < 0 ? sourceNode?.point : newPts[j - 1];
+              }
+              
+              if (!anchorA || !targetForLine) return;
+              
+              const dx = targetForLine.x - anchorA.x;
+              const dy = targetForLine.y - anchorA.y;
+              const lenSq = dx * dx + dy * dy;
+              
+              if (lenSq > 0.0001) {
+                  const hx = handle.x - anchorA.x;
+                  const hy = handle.y - anchorA.y;
+                  let t = (hx * dx + hy * dy) / lenSq;
+                  t = Math.max(0, t);
+                  newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
+                  changed = true;
+              }
+          }
+      };
 
-        if (j % 3 === 0) {
-            const anchorA = j === 0 ? sourceNode?.point : newPts[j - 1];
-            const anchorB = j + 1 >= newPts.length ? targetNode?.point : newPts[j + 1];
-            
-            const oldAnchorA = j === 0 ? oldSourceNode?.point : oldPts[j - 1];
-
-            if (!anchorA || !anchorB || !oldAnchorA) continue;
-            
-            let dx, dy;
-            if (j === draggingPointId) {
-                dx = oldHandle.x - oldAnchorA.x;
-                dy = oldHandle.y - oldAnchorA.y;
-            } else {
-                dx = anchorB.x - anchorA.x;
-                dy = anchorB.y - anchorA.y;
-            }
-            
-            const lenSq = dx * dx + dy * dy;
-            
-            if (lenSq > 0.0001) {
-                const hx = handle.x - anchorA.x;
-                const hy = handle.y - anchorA.y;
-                let t = (hx * dx + hy * dy) / lenSq;
-                t = Math.max(0, t);
-                newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
-                changed = true;
-            }
-        } else if (j % 3 === 1) {
-            const anchorA = j + 1 >= newPts.length ? targetNode?.point : newPts[j + 1];
-            const anchorB = j - 1 < 0 ? sourceNode?.point : newPts[j - 1];
-            
-            const oldAnchorA = j + 1 >= oldPts.length ? oldTargetNode?.point : oldPts[j + 1];
-
-            if (!anchorA || !anchorB || !oldAnchorA) continue;
-            
-            let dx, dy;
-            if (j === draggingPointId) {
-                dx = oldHandle.x - oldAnchorA.x;
-                dy = oldHandle.y - oldAnchorA.y;
-            } else {
-                dx = anchorB.x - anchorA.x;
-                dy = anchorB.y - anchorA.y;
-            }
-            
-            const lenSq = dx * dx + dy * dy;
-            
-            if (lenSq > 0.0001) {
-                const hx = handle.x - anchorA.x;
-                const hy = handle.y - anchorA.y;
-                let t = (hx * dx + hy * dy) / lenSq;
-                t = Math.max(0, t);
-                newPts[j] = { ...handle, x: anchorA.x + dx * t, y: anchorA.y + dy * t, z: handle.z ?? anchorA.z ?? 4 };
-                changed = true;
-            }
-        }
+      if (draggingPointId !== undefined && draggingPointId >= 0 && draggingPointId < newPts.length) {
+          processPoint(draggingPointId);
       }
+
+      for (let j = 0; j < newPts.length; j++) {
+          if (j !== draggingPointId) {
+              processPoint(j);
+          }
+      }
+
       return changed ? { ...edge, points: newPts } : edge;
   };
 
