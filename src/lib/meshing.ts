@@ -672,7 +672,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                 if (d2 < minDStart) { minDStart = d2; iStart = k; }
             }
             
-            if (iEnd !== -1 && iStart !== -1 && minDEnd < 20 && minDStart < 20) {
+            if (iEnd !== -1 && iStart !== -1 && minDEnd < 150 && minDStart < 150) {
                 const path1 = [hub.outerPolygon[iEnd]];
                 let k1 = iEnd;
                 while (k1 !== iStart && path1.length < hub.outerPolygon.length + 2) {
