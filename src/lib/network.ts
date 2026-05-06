@@ -1,6 +1,118 @@
 import { Point, Node, Edge } from "./types";
 import { sampleSpline } from "./splines";
 import { getEdgeClearance } from "./junctions";
+import { getDir } from "./math";
+
+export function findClosedAreas(nodes: Node[], edges: Edge[]): string[][] {
+  const halfEdges: {
+    edgeId: string;
+    from: string;
+    to: string;
+    dirOut: Point;
+    dirIn: Point;
+    angleOut: number;
+  }[] = [];
+
+  for (const e of edges) {
+    if (!e.target) continue;
+    const pts = getEdgeControlPoints(e, nodes);
+    if (pts.length < 2) continue;
+    
+    // Half-edge from source to target
+    const dirOut1 = getDir(pts[0], pts[1]);
+    const dirIn1 = getDir(pts[pts.length - 2], pts[pts.length - 1]);
+    halfEdges.push({
+      edgeId: e.id,
+      from: e.source,
+      to: e.target,
+      dirOut: dirOut1,
+      dirIn: dirIn1,
+      angleOut: Math.atan2(dirOut1.y, dirOut1.x)
+    });
+
+    // Half-edge from target to source
+    const dirOut2 = { x: -dirIn1.x, y: -dirIn1.y };
+    const dirIn2 = { x: -dirOut1.x, y: -dirOut1.y };
+    halfEdges.push({
+      edgeId: e.id,
+      from: e.target,
+      to: e.source,
+      dirOut: dirOut2,
+      dirIn: dirIn2,
+      angleOut: Math.atan2(dirOut2.y, dirOut2.x)
+    });
+  }
+
+  const outMap = new Map<string, typeof halfEdges>();
+  for (const n of nodes) {
+    outMap.set(n.id, []);
+  }
+  for (const he of halfEdges) {
+    outMap.get(he.from)?.push(he);
+  }
+
+  for (const hes of outMap.values()) {
+    hes.sort((a, b) => a.angleOut - b.angleOut);
+  }
+
+  const visited = new Set<string>();
+  const faces: string[][] = [];
+
+  for (const he of halfEdges) {
+    const key = `${he.from}->${he.to}_${he.edgeId}`;
+    if (visited.has(key)) continue;
+
+    const faceNodes: string[] = [];
+    let current = he;
+    let isClosed = false;
+    let maxIter = 1000;
+
+    while (maxIter-- > 0) {
+      const curKey = `${current.from}->${current.to}_${current.edgeId}`;
+      if (visited.has(curKey)) {
+        if (curKey === key) {
+          isClosed = true;
+        }
+        break;
+      }
+      visited.add(curKey);
+      faceNodes.push(current.from);
+
+      const v = current.to;
+      const hes = outMap.get(v) || [];
+      if (hes.length === 0) break;
+
+      const angleBack = Math.atan2(-current.dirIn.y, -current.dirIn.x);
+      
+      let nextHe = hes[0];
+      for (const next of hes) {
+        if (next.angleOut > angleBack + 1e-5) {
+          nextHe = next;
+          break;
+        }
+      }
+      // handle exact overlap edge cases by prioritizing rightmost branch
+      
+      current = nextHe;
+    }
+
+    if (isClosed && faceNodes.length >= 3) {
+      let signedArea = 0;
+      for (let i = 0; i < faceNodes.length; i++) {
+        const p1 = nodes.find(n => n.id === faceNodes[i])?.point;
+        const p2 = nodes.find(n => n.id === faceNodes[(i + 1) % faceNodes.length])?.point;
+        if (p1 && p2) {
+          signedArea += (p1.x * p2.y - p2.x * p1.y);
+        }
+      }
+      if (signedArea < -1) { // -1 unit area threshold to prevent micro-polygons from precision issues
+        faces.push(faceNodes);
+      }
+    }
+  }
+
+  return faces;
+}
 
 export function getEdgeControlPoints(edge: Edge, nodes: Node[]): Point[] {
   const sourceNode = nodes.find(n => n.id === edge.source);
