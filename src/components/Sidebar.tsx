@@ -8,8 +8,8 @@ import { DEFAULTS } from '../lib/constants';
 interface SidebarProps {
   isSidebarOpen: boolean;
   setIsSidebarOpen: (v: boolean) => void;
-  addNode: () => void;
-  addEdge: () => void;
+  isAddNodeMode: boolean;
+  setIsAddNodeMode: (v: boolean) => void;
   softSelectionEnabled: boolean;
   setSoftSelectionEnabled: (v: boolean) => void;
   softSelectionRadius: number;
@@ -33,8 +33,8 @@ interface SidebarProps {
 export default function Sidebar({
   isSidebarOpen,
   setIsSidebarOpen,
-  addNode,
-  addEdge,
+  isAddNodeMode,
+  setIsAddNodeMode,
   softSelectionEnabled,
   setSoftSelectionEnabled,
   softSelectionRadius,
@@ -145,8 +145,16 @@ export default function Sidebar({
 
       <section>
         <div className="flex gap-2">
-            <button onClick={addNode} className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-semibold flex justify-center items-center gap-2">Add Node</button>
-            <button onClick={addEdge} className="flex-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-semibold flex justify-center items-center gap-2">Add Road</button>
+            <button 
+                onClick={() => setIsAddNodeMode(!isAddNodeMode)} 
+                className={`flex-1 px-3 py-1.5 rounded text-sm font-semibold flex justify-center items-center gap-2 transition-colors ${
+                  isAddNodeMode 
+                    ? 'bg-blue-600 hover:bg-blue-500 text-white border border-blue-400' 
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+            >
+              {isAddNodeMode ? 'Add Node Mode: ON' : 'Add Node'}
+            </button>
         </div>
       </section>
 

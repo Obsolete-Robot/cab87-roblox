@@ -40,7 +40,7 @@ export default function App() {
   const setSelectedNode = (id: string | null) => {
     setSelectedNodes(id ? [id] : []);
   };
-  const [isConnectMode, setIsConnectMode] = useState(false);
+  const [isAddNodeMode, setIsAddNodeMode] = useState(false);
   
   const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan'; id: string; pointId?: number } | null>(null);
 
@@ -133,7 +133,7 @@ export default function App() {
           setSelectedEdges([]);
           setSelectedNode(null);
           setSelectedPointIndex(null);
-          setIsConnectMode(false);
+          setIsAddNodeMode(false);
           setDragging(null);
           setIsMergeMode(false);
         } else {
@@ -160,16 +160,16 @@ export default function App() {
         setSelectedEdges([]);
         setSelectedPointIndex(null);
         setDragging(null);
-        setIsConnectMode(false);
+        setIsAddNodeMode(false);
         setIsMergeMode(false);
       }
       if (e.key.toLowerCase() === 'c') {
-        setIsConnectMode(prev => !prev);
+        setIsAddNodeMode(prev => !prev);
         setIsMergeMode(false);
       }
       if (e.key.toLowerCase() === 'm') {
         setIsMergeMode(prev => !prev);
-        setIsConnectMode(false);
+        setIsAddNodeMode(false);
       }
       if (e.key.toLowerCase() === 'p' && !e.ctrlKey) {
         if (selectedNodes.length >= 3) {
@@ -254,7 +254,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNode, selectedEdges, selectedPointIndex, nodes, edges, size, isMergeMode, isConnectMode]);
+  }, [selectedNode, selectedEdges, selectedPointIndex, nodes, edges, size, isMergeMode, isAddNodeMode]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -335,13 +335,13 @@ export default function App() {
     ctx.scale(view.zoom, view.zoom);
     drawNetwork2D(
       ctx, size, nodes, edges, selectedEdges, selectedNodes, selectedNode,
-      showMesh, showControlPoints, isConnectMode, isMergeMode,
+      showMesh, showControlPoints, isAddNodeMode, isMergeMode,
       chamferAngle, meshResolution, laneWidth, polygonFills,
       softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex,
       selectedPolygonFillId, view
     );
     ctx.restore();
-  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, selectedPolygonFillId, isConnectMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, selectedPolygonFillId, isAddNodeMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
     if (e.__scenePos) return e.__scenePos;
@@ -437,7 +437,6 @@ export default function App() {
                 setSelectedNode(n.id);
                 setSelectedEdges([newEdgeId]);
                 setSelectedPointIndex(null);
-                setIsConnectMode(false);
                 setIsMergeMode(false);
                 startDragPosRef.current = pos;
                 setDragging({ type: 'node', id: n.id });
@@ -470,7 +469,6 @@ export default function App() {
                 setSelectedNode(newNodeId);
                 setSelectedEdges([]);
                 setSelectedPointIndex(null);
-                setIsConnectMode(false);
                 setIsMergeMode(false);
                 startDragPosRef.current = pos;
                 setDragging({ type: 'node', id: newNodeId });
@@ -554,7 +552,6 @@ export default function App() {
             setSelectedNode(newNodeId);
             setSelectedEdges([]);
             setSelectedPointIndex(null);
-            setIsConnectMode(false);
             setIsMergeMode(false);
             startDragPosRef.current = pos;
             setDragging({ type: 'node', id: newNodeId });
@@ -601,7 +598,6 @@ export default function App() {
     
     setSelectedNode(newNodeId);
     setSelectedPointIndex(null);
-    setIsConnectMode(false);
     setIsMergeMode(false);
     startDragPosRef.current = spawnPos;
     setDragging({ type: 'node', id: newNodeId });
@@ -644,6 +640,12 @@ export default function App() {
 
     const pos = getMousePos(e);
     
+    // Divert behavior to handleRightClick if in Add Node Mode
+    if (e.button === 0 && isAddNodeMode) {
+      handleRightClick(e, pos);
+      return;
+    }
+
     setSelectedPolygonFillId(null);
     for (const pg of polygonFills) {
       let cx = 0, cy = 0, count = 0;
@@ -805,7 +807,6 @@ export default function App() {
                 setSelectedNode(n.id);
                 setSelectedEdges([]);
                 setSelectedPointIndex(null);
-                setIsConnectMode(false);
                 setIsMergeMode(false);
                 return;
             }
@@ -833,35 +834,13 @@ export default function App() {
                 setSelectedNode(n.id);
                 setSelectedEdges([]);
                 setSelectedPointIndex(null);
-                setIsConnectMode(false);
                 setIsMergeMode(false);
                 setDragging({ type: 'node', id: n.id });
                 return;
             }
 
-            if (selectedNode && selectedNode !== n.id && (isConnectMode || isMergeMode)) {
-                if (isConnectMode) {
-                    // Connect selectedNode to this node
-                    const sn = nodes.find(nn => nn.id === selectedNode)!;
-                    const id = Math.random().toString(36).substring(2, 9);
-                    const newEdge: Edge = {
-                        id,
-                        source: selectedNode,
-                        target: n.id,
-                        points: [
-                          { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
-                          { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
-                        ],
-                        width: DEFAULTS.roadWidth,
-                        sidewalk: DEFAULTS.sidewalkWidth,
-                        color: COLORS[edges.length % COLORS.length]
-                    };
-                    setEdges(prev => [...prev, newEdge]);
-                    setSelectedNode(n.id);
-                    setSelectedEdges([id]);
-                    setSelectedPointIndex(null);
-                    setIsConnectMode(false);
-                } else if (isMergeMode) {
+            if (selectedNode && selectedNode !== n.id && (isMergeMode)) {
+                if (isMergeMode) {
                     const sn = nodes.find(nn => nn.id === selectedNode)!;
                     const mid = { x: (sn.point.x + n.point.x) / 2, y: (sn.point.y + n.point.y) / 2 };
                     const deltaSn = { x: mid.x - sn.point.x, y: mid.y - sn.point.y };
@@ -1158,7 +1137,7 @@ export default function App() {
     setSelectedNode(null);
     setSelectedEdges([]);
     setSelectedPointIndex(null);
-    setIsConnectMode(false);
+    setIsAddNodeMode(false);
     setIsMergeMode(false);
   };
 
@@ -1602,32 +1581,6 @@ export default function App() {
     setDragging(null);
   };
 
-  const addNode = () => {
-    const id = Math.random().toString(36).substring(2, 9);
-    setNodes(prev => [...prev, { id, point: { x: (nodes[nodes.length-1]?.point?.x ?? 300) + 100, y: (nodes[nodes.length-1]?.point?.y ?? 200) + 100 } }]);
-  };
-
-  const addEdge = () => {
-      if (nodes.length === 0) return;
-      const id = Math.random().toString(36).substring(2, 9);
-      const tgtId = Math.random().toString(36).substring(2, 9);
-      const srcNode = nodes[0];
-      const tgtPos = { x: srcNode.point.x, y: srcNode.point.y + 100 };
-      setNodes(prev => [...prev, { id: tgtId, point: tgtPos }]);
-      setEdges(prev => [...prev, {
-          id,
-          source: srcNode.id,
-          target: tgtId,
-          points: [
-              { x: srcNode.point.x, y: srcNode.point.y + 33, z: srcNode.point.z ?? 4, linear: true },
-              { x: srcNode.point.x, y: srcNode.point.y + 66, z: srcNode.point.z ?? 4, linear: true }
-          ],
-          width: DEFAULTS.roadWidth,
-          sidewalk: DEFAULTS.sidewalkWidth,
-          color: COLORS[prev.length % COLORS.length]
-      }]);
-  }
-
   const handleFlipEdge = (id: string) => {
     setEdges(prev => prev.map(e => {
       if (e.id !== id) return e;
@@ -1714,10 +1667,10 @@ export default function App() {
               <div className="absolute bottom-10 lg:bottom-6 left-1/2 -translate-x-1/2 lg:left-6 lg:translate-x-0 p-2.5 lg:p-3 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-md shadow-xl flex gap-4 lg:gap-6 text-[9px] lg:text-[11px] font-medium tracking-wider uppercase pointer-events-none whitespace-nowrap z-10 flex-col sm:flex-row shadow-[0_0_20px_black] border-slate-600 flex-wrap justify-center">
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Right Click Edge</span> Create Node/Split</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
-                  <span className={isConnectMode ? "text-emerald-400" : "text-blue-300"}>
-                    {isConnectMode ? "Click Node/Space" : "C"}
+                  <span className={isAddNodeMode ? "text-emerald-400" : "text-blue-300"}>
+                    {isAddNodeMode ? "Click Node/Space" : "C"}
                   </span> 
-                  {isConnectMode ? "Connect to / New Road" : "Connect Mode"}
+                  {isAddNodeMode ? "Connect to / New Road" : "Add Node Mode"}
                 </div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90">
                   <span className={isMergeMode ? "text-red-400" : "text-blue-300"}>
@@ -1738,8 +1691,8 @@ export default function App() {
         <Sidebar
           isSidebarOpen={isSidebarOpen}
           setIsSidebarOpen={setIsSidebarOpen}
-          addNode={addNode}
-          addEdge={addEdge}
+          isAddNodeMode={isAddNodeMode}
+          setIsAddNodeMode={setIsAddNodeMode}
           softSelectionEnabled={softSelectionEnabled}
           setSoftSelectionEnabled={setSoftSelectionEnabled}
           softSelectionRadius={softSelectionRadius}
