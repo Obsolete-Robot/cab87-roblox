@@ -9,7 +9,7 @@ import Header from './components/Header';
 import { drawNetwork2D } from './lib/render2d';
 import { 
   COLORS, ROAD_NETWORK_SCHEMA, ROAD_NETWORK_VERSION, 
-  DEFAULT_CHAMFER_ANGLE, DEFAULT_MESH_RESOLUTION, sanitizeMeshResolution 
+  sanitizeMeshResolution, DEFAULTS
 } from './lib/constants';
 
 export default function App() {
@@ -25,9 +25,9 @@ export default function App() {
   ]);
 
   const [edges, setEdges] = useState<Edge[]>([
-    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: 60, sidewalk: 24, color: '#ef4444' },
-    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: 60, sidewalk: 24, color: '#10b981' },
-    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: 24, color: '#3b82f6' },
+    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: DEFAULTS.roadWidth, sidewalk: DEFAULTS.sidewalkWidth, color: '#ef4444' },
+    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: DEFAULTS.roadWidth, sidewalk: DEFAULTS.sidewalkWidth, color: '#10b981' },
+    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: DEFAULTS.sidewalkWidth, color: '#3b82f6' },
   ]);
 
   const [selectedEdges, setSelectedEdges] = useState<string[]>([]);
@@ -62,12 +62,12 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [selectedPolygonFillId, setSelectedPolygonFillId] = useState<string | null>(null);
-  const [chamferAngle, setChamferAngle] = useState(DEFAULT_CHAMFER_ANGLE);
-  const [meshResolution, setMeshResolution] = useState(DEFAULT_MESH_RESOLUTION);
-  const [laneWidth, setLaneWidth] = useState(30);
+  const [chamferAngle, setChamferAngle] = useState(DEFAULTS.chamferAngle);
+  const [meshResolution, setMeshResolution] = useState(DEFAULTS.meshResolution);
+  const [laneWidth, setLaneWidth] = useState(DEFAULTS.laneWidth);
   const [is3DMode, setIs3DMode] = useState(false);
   const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
-  const [softSelectionRadius, setSoftSelectionRadius] = useState(200);
+  const [softSelectionRadius, setSoftSelectionRadius] = useState(DEFAULTS.softSelectionRadius);
 
   const [polygonFills, setPolygonFills] = useState<{ id: string; points: string[]; color: string }[]>([]);
 
@@ -112,18 +112,18 @@ export default function App() {
           if (typeof data.settings?.chamferAngleDeg === 'number') {
             setChamferAngle(data.settings.chamferAngleDeg);
           } else {
-            setChamferAngle(DEFAULT_CHAMFER_ANGLE);
+            setChamferAngle(DEFAULTS.chamferAngle);
           }
           const importedMeshResolution = data.settings?.meshResolution ?? data.settings?.splineSegments;
           if (typeof importedMeshResolution === 'number') {
             setMeshResolution(sanitizeMeshResolution(importedMeshResolution));
           } else {
-            setMeshResolution(DEFAULT_MESH_RESOLUTION);
+            setMeshResolution(DEFAULTS.meshResolution);
           }
           if (typeof data.settings?.laneWidth === 'number') {
             setLaneWidth(data.settings.laneWidth);
           } else {
-            setLaneWidth(30);
+            setLaneWidth(DEFAULTS.laneWidth);
           }
           if (Array.isArray(data.polygonFills)) {
             setPolygonFills(data.polygonFills);
@@ -359,8 +359,8 @@ export default function App() {
   const handleRightClick = (e: React.PointerEvent | any, pos: any) => {
     const getNewEdgeParams = (sn: Node, targetPt: Point) => {
         let params: any = {
-            width: 60,
-            sidewalk: 24,
+            width: DEFAULTS.roadWidth,
+            sidewalk: DEFAULTS.sidewalkWidth,
             color: COLORS[edges.length % COLORS.length]
         };
 
@@ -851,8 +851,8 @@ export default function App() {
                           { x: sn.point.x + (n.point.x - sn.point.x)/3, y: sn.point.y + (n.point.y - sn.point.y)/3, z: sn.point.z ?? 4, linear: true },
                           { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
                         ],
-                        width: 60,
-                        sidewalk: 24,
+                        width: DEFAULTS.roadWidth,
+                        sidewalk: DEFAULTS.sidewalkWidth,
                         color: COLORS[edges.length % COLORS.length]
                     };
                     setEdges(prev => [...prev, newEdge]);
@@ -1621,8 +1621,8 @@ export default function App() {
               { x: srcNode.point.x, y: srcNode.point.y + 33, z: srcNode.point.z ?? 4, linear: true },
               { x: srcNode.point.x, y: srcNode.point.y + 66, z: srcNode.point.z ?? 4, linear: true }
           ],
-          width: 60,
-          sidewalk: 24,
+          width: DEFAULTS.roadWidth,
+          sidewalk: DEFAULTS.sidewalkWidth,
           color: COLORS[prev.length % COLORS.length]
       }]);
   }

@@ -3,6 +3,8 @@ import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2 } from 'luci
 import { Node, Edge } from '../lib/types';
 import { sanitizeMeshResolution } from '../lib/constants';
 
+import { DEFAULTS } from '../lib/constants';
+
 interface SidebarProps {
   isSidebarOpen: boolean;
   setIsSidebarOpen: (v: boolean) => void;
@@ -391,14 +393,14 @@ export default function Sidebar({
                       <div>
                         <div className="flex justify-between text-xs text-slate-400 mb-1">
                           <span>Sidewalk (Left)</span>
-                          <span>{e.sidewalkLeft ?? e.sidewalk ?? 24}px</span>
+                          <span>{e.sidewalkLeft ?? e.sidewalk ?? DEFAULTS.sidewalkWidth}px</span>
                         </div>
                         <input
                           type="range"
                           min="0"
                           max="100"
                           step="2"
-                          value={e.sidewalkLeft ?? e.sidewalk ?? 24}
+                          value={e.sidewalkLeft ?? e.sidewalk ?? DEFAULTS.sidewalkWidth}
                           onChange={(evt) =>
                             setEdges((prev) =>
                               prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkLeft: parseInt(evt.target.value) } : pr))
@@ -408,14 +410,14 @@ export default function Sidebar({
                         />
                         <div className="flex justify-between text-xs text-slate-400 mb-1">
                           <span>Sidewalk (Right)</span>
-                          <span>{e.sidewalkRight ?? e.sidewalk ?? 24}px</span>
+                          <span>{e.sidewalkRight ?? e.sidewalk ?? DEFAULTS.sidewalkWidth}px</span>
                         </div>
                         <input
                           type="range"
                           min="0"
                           max="100"
                           step="2"
-                          value={e.sidewalkRight ?? e.sidewalk ?? 24}
+                          value={e.sidewalkRight ?? e.sidewalk ?? DEFAULTS.sidewalkWidth}
                           onChange={(evt) =>
                             setEdges((prev) =>
                               prev.map((pr) => (pr.id === e.id ? { ...pr, sidewalkRight: parseInt(evt.target.value) } : pr))
