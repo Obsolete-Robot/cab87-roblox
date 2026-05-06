@@ -797,8 +797,9 @@ export default function App() {
                         return edge;
                     });
                     
-                    setNodes(prev => prev.map(node => node.id === n.id ? { ...node, point: { ...node.point, linked: true } } : node));
-                    setEdges(newEdges);
+                    const newNodes = nodes.map(node => node.id === n.id ? { ...node, point: { ...node.point, linked: true } } : node);
+                    setNodes(newNodes);
+                    setEdges(newEdges.map(e => enforceLinear(e, newNodes)));
                 }
                 
                 setSelectedNode(n.id);
@@ -827,7 +828,7 @@ export default function App() {
                             changed = true;
                         }
                     }
-                    return changed ? { ...edge, points: newPts } : edge;
+                    return changed ? enforceLinear({ ...edge, points: newPts }, nodes) : edge;
                 }));
                 setSelectedNode(n.id);
                 setSelectedEdges([]);

@@ -61,6 +61,61 @@ export default function Sidebar({
   const [editingNameValue, setEditingNameValue] = useState("");
   const [copiedEdgeSettings, setCopiedEdgeSettings] = useState<Partial<Edge> | null>(null);
 
+  const [globalScaleMap, setGlobalScaleMap] = useState<string>("1.5");
+  const [globalScaleRoads, setGlobalScaleRoads] = useState<string>("1.5");
+  const [globalScaleSidewalks, setGlobalScaleSidewalks] = useState<string>("1.5");
+
+  const applyGlobalScaleMap = () => {
+    const scale = parseFloat(globalScaleMap);
+    if (isNaN(scale) || scale <= 0 || scale === 1) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach(n => {
+      minX = Math.min(minX, n.point.x); minY = Math.min(minY, n.point.y);
+      maxX = Math.max(maxX, n.point.x); maxY = Math.max(maxY, n.point.y);
+    });
+    edges.forEach(e => {
+      e.points.forEach(p => {
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+      });
+    });
+
+    if (minX !== Infinity) {
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+
+      setNodes(prev => prev.map(n => ({
+        ...n,
+        point: { ...n.point, x: cx + (n.point.x - cx) * scale, y: cy + (n.point.y - cy) * scale }
+      })));
+
+      setEdges(prev => prev.map(e => ({
+        ...e,
+        points: e.points.map(p => ({ ...p, x: cx + (p.x - cx) * scale, y: cy + (p.y - cy) * scale }))
+      })));
+    }
+    setGlobalScaleMap("1.0");
+  };
+
+  const applyGlobalScaleRoads = () => {
+    const scale = parseFloat(globalScaleRoads);
+    if (isNaN(scale) || scale <= 0 || scale === 1) return;
+    setEdges(prev => prev.map(e => ({ ...e, width: Math.max(1, Math.round(e.width * scale)) })));
+    setGlobalScaleRoads("1.0");
+  };
+
+  const applyGlobalScaleSidewalks = () => {
+    const scale = parseFloat(globalScaleSidewalks);
+    if (isNaN(scale) || scale <= 0 || scale === 1) return;
+    setEdges(prev => prev.map(e => ({
+      ...e,
+      sidewalkLeft: Math.max(0, Math.round((e.sidewalkLeft ?? e.sidewalk ?? DEFAULTS.sidewalkWidth) * scale)),
+      sidewalkRight: Math.max(0, Math.round((e.sidewalkRight ?? e.sidewalk ?? DEFAULTS.sidewalkWidth) * scale)),
+      sidewalk: Math.max(0, Math.round((e.sidewalk ?? DEFAULTS.sidewalkWidth) * scale)),
+    })));
+    setGlobalScaleSidewalks("1.0");
+  };
+
   const handleFlipEdge = (id: string) => {
     setEdges(prev => prev.map(e => {
       if (e.id !== id) return e;
@@ -211,6 +266,62 @@ export default function Sidebar({
                   onChange={(e) => setLaneWidth(parseInt(e.target.value) || 30)}
                   className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
                 />
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <div 
+          className="flex items-center justify-between cursor-pointer mb-2"
+          onClick={() => toggleSection('global_ops')}
+        >
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Global Operations</h3>
+          {collapsedSections['global_ops'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+        </div>
+        {!collapsedSections['global_ops'] && (
+          <div className="space-y-4 bg-slate-800/20 p-3 rounded-lg border border-slate-800/50">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">Scale Map Coordinates</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  value={globalScaleMap}
+                  onChange={(e) => setGlobalScaleMap(e.target.value)}
+                  className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                />
+                <button onClick={applyGlobalScaleMap} className="flex-1 px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-semibold">Apply Scale</button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">Scale Road Widths</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  value={globalScaleRoads}
+                  onChange={(e) => setGlobalScaleRoads(e.target.value)}
+                  className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                />
+                <button onClick={applyGlobalScaleRoads} className="flex-1 px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold">Apply Scale</button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">Scale Sidewalk Widths</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  value={globalScaleSidewalks}
+                  onChange={(e) => setGlobalScaleSidewalks(e.target.value)}
+                  className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                />
+                <button onClick={applyGlobalScaleSidewalks} className="flex-1 px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-xs font-semibold">Apply Scale</button>
               </div>
             </div>
           </div>
