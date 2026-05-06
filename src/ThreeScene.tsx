@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { MeshData, Node, Edge, Point } from './lib/types';
+import { MeshData, Node, Edge, Point, PointSelection } from './lib/types';
 import { buildNetworkMesh } from './lib/meshing';
 import { SceneContent } from './components/three/SceneContent';
 
@@ -24,7 +24,7 @@ interface ThreeSceneProps {
   selectedNode: string | null;
   selectedNodes: string[];
   selectedEdges: string[];
-  selectedPointIndex: number | null;
+  selectedPoints: PointSelection[];
   selectedPolygonFillId: string | null;
   view: { x: number, y: number, zoom: number };
   setView: React.Dispatch<React.SetStateAction<{ x: number, y: number, zoom: number }>>;
@@ -32,15 +32,17 @@ interface ThreeSceneProps {
   softSelectionEnabled: boolean;
   softSelectionRadius: number;
   draggingPoint: Point | null;
+  marqueeStart?: Point | null;
+  marqueeEnd?: Point | null;
 }
 
 export default function ThreeScene({ 
     nodes, edges, polygonFills, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
     setNodes, setEdges, 
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
-    isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPointIndex, selectedPolygonFillId,
+    isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPoints, selectedPolygonFillId,
     softSelectionEnabled, softSelectionRadius,
-    view, setView, containerRef 
+    view, setView, containerRef, marqueeStart, marqueeEnd 
 }: ThreeSceneProps) {
   const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth || 30, polygonFills), [nodes, edges, chamferAngle, meshResolution, laneWidth, polygonFills]);
 
@@ -84,13 +86,15 @@ export default function ThreeScene({
           selectedNode={selectedNode}
           selectedNodes={selectedNodes}
           selectedEdges={selectedEdges}
-          selectedPointIndex={selectedPointIndex}
+          selectedPoints={selectedPoints}
           selectedPolygonFillId={selectedPolygonFillId}
           initialCameraParams={initialCameraParams}
           softSelectionEnabled={softSelectionEnabled}
           softSelectionRadius={softSelectionRadius}
           setView={setView}
           containerRef={containerRef}
+          marqueeStart={marqueeStart}
+          marqueeEnd={marqueeEnd}
         />
       </Canvas>
     </div>

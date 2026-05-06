@@ -11,9 +11,9 @@ import { Grid } from '@react-three/drei';
 export function SceneContent({ 
   mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, polygonFills, selectedPolygonFillId,
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu, 
-  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPointIndex,
+  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints,
   softSelectionEnabled, softSelectionRadius,
-  setView, containerRef 
+  setView, containerRef, marqueeStart, marqueeEnd
 }: any) {
   const controlsRef = useRef<any>(null);
 
@@ -21,6 +21,29 @@ export function SceneContent({
     <group>
       <ambientLight intensity={0.4} />
       <directionalLight position={[500, 1000, 500]} intensity={0.8} castShadow />
+
+      {marqueeStart && marqueeEnd && (() => {
+          const xMin = Math.min(marqueeStart.x, marqueeEnd.x);
+          const xMax = Math.max(marqueeStart.x, marqueeEnd.x);
+          const yMin = Math.min(marqueeStart.y, marqueeEnd.y);
+          const yMax = Math.max(marqueeStart.y, marqueeEnd.y);
+          const width = Math.max(xMax - xMin, 1);
+          const height = Math.max(yMax - yMin, 1);
+          const cx = (xMax + xMin) / 2;
+          const cy = (yMax + yMin) / 2;
+          return (
+            <group position={[cx, 4.5, cy]} rotation={[-Math.PI / 2, 0, 0]}>
+              <mesh renderOrder={1001}>
+                <planeGeometry args={[width, height]} />
+                <meshBasicMaterial color="#3b82f6" transparent opacity={0.2} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+              </mesh>
+              <lineSegments renderOrder={1002}>
+                <edgesGeometry args={[new THREE.PlaneGeometry(width, height)]} />
+                <lineBasicMaterial color="#3b82f6" transparent opacity={0.8} depthTest={false} depthWrite={false} />
+              </lineSegments>
+            </group>
+          );
+      })()}
 
       <Grid 
         infiniteGrid 
@@ -98,7 +121,7 @@ export function SceneContent({
             const isAnchor = (i % 3 === 2);
             if (!showControlPoints && !isAnchor) return null;
             const isSelectedEdge = selectedEdges.includes(edge.id);
-            const isSelectedPoint = isSelectedEdge && selectedPointIndex === i;
+            const isSelectedPoint = selectedPoints?.some((p: any) => p.edgeId === edge.id && p.pointIndex === i) || false;
             
             let color = "#fbbf24";
             if (isSelectedPoint) {

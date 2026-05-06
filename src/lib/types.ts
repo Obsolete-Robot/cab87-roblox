@@ -1,3 +1,5 @@
+export type PointSelection = { edgeId: string; pointIndex: number };
+
 export type Point = {
   x: number;
   y: number;

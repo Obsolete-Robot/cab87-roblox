@@ -21,7 +21,7 @@ export const drawNetwork2D = (
   softSelectionEnabled: boolean,
   softSelectionRadius: number,
   draggingPoint: Point | null,
-  selectedPointIndex: number | null,
+  selectedPoints: any[],
   selectedPolygonFillId: string | null,
   view?: { x: number; y: number; zoom: number }
 ) => {
@@ -535,7 +535,7 @@ export const drawNetwork2D = (
           if (!showControlPoints && !isAnchor) return;
 
           ctx.beginPath();
-          const isSelectedPoint = selectedEdges.includes(e.id) && selectedPointIndex === j;
+          const isSelectedPoint = selectedPoints?.some(p => p.edgeId === e.id && p.pointIndex === j) || false;
           ctx.arc(pt.x, pt.y, isAnchor ? 10 : 8, 0, Math.PI * 2);
           ctx.fillStyle = selectedEdges.includes(e.id) ? (isSelectedPoint ? '#ef4444' : (isAnchor ? (pt.linked ? '#10b981' : '#fbbf24') : (pt.linear ? '#0ea5e9' : '#ffffff'))) : '#64748b';
           ctx.fill();

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Point, Node, Edge } from './lib/types';
+import { Point, Node, Edge, PointSelection } from './lib/types';
 import { getExtendedEdgeControlPoints, sampleEdgeSpline } from './lib/network';
 import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
@@ -42,7 +42,9 @@ export default function App() {
   };
   const [isAddNodeMode, setIsAddNodeMode] = useState(false);
   
-  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan'; id: string; pointId?: number } | null>(null);
+  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan' | 'marquee'; id: string; pointId?: number } | null>(null);
+  const [marqueeStart, setMarqueeStart] = useState<Point | null>(null);
+  const [marqueeEnd, setMarqueeEnd] = useState<Point | null>(null);
 
   const draggingPoint = useMemo(() => {
     if (!dragging) return null;
@@ -60,7 +62,7 @@ export default function App() {
   const [showControlPoints, setShowControlPoints] = useState(true);
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+  const [selectedPoints, setSelectedPoints] = useState<PointSelection[]>([]);
   const [selectedPolygonFillId, setSelectedPolygonFillId] = useState<string | null>(null);
   const [chamferAngle, setChamferAngle] = useState(DEFAULTS.chamferAngle);
   const [meshResolution, setMeshResolution] = useState(DEFAULTS.meshResolution);
@@ -132,7 +134,7 @@ export default function App() {
           }
           setSelectedEdges([]);
           setSelectedNode(null);
-          setSelectedPointIndex(null);
+          setSelectedPoints([]);
           setIsAddNodeMode(false);
           setDragging(null);
           setIsMergeMode(false);
@@ -158,7 +160,7 @@ export default function App() {
       if (e.key === 'Escape') {
         setSelectedNode(null);
         setSelectedEdges([]);
-        setSelectedPointIndex(null);
+        setSelectedPoints([]);
         setDragging(null);
         setIsAddNodeMode(false);
         setIsMergeMode(false);
@@ -187,29 +189,38 @@ export default function App() {
             setSelectedPolygonFillId(null);
             return;
         }
-        if (selectedEdges.length > 0 && selectedPointIndex !== null && selectedNodes.length === 0 && selectedEdges.length === 1) {
+        let deletedSomething = false;
+        if (selectedPoints.length > 0 && selectedNodes.length === 0 && selectedEdges.length === 0) {
           setEdges(prev => prev.map(edge => {
-            if (selectedEdges.includes(edge.id)) {
+            const edgePoints = selectedPoints.filter(p => p.edgeId === edge.id);
+            if (edgePoints.length > 0) {
               const newPoints = [...edge.points];
-              const anchorIndex = selectedPointIndex % 3 === 2 
-                ? selectedPointIndex 
-                : (selectedPointIndex % 3 === 1 ? selectedPointIndex + 1 : selectedPointIndex - 1);
-              
-              if (anchorIndex > 0 && anchorIndex < newPoints.length - 1) {
-                newPoints.splice(anchorIndex - 1, 3);
-              }
+              // sort descending by point index to avoid index shifting when deleting
+              const sortedIndices = edgePoints.map(p => p.pointIndex).sort((a, b) => b - a);
+              const deletedAnchorIndices = new Set<number>();
+              sortedIndices.forEach(idx => {
+                const anchorIndex = idx % 3 === 2 ? idx : (idx % 3 === 1 ? idx + 1 : idx - 1);
+                if (anchorIndex > 0 && anchorIndex < newPoints.length - 1 && !deletedAnchorIndices.has(anchorIndex)) {
+                   newPoints.splice(anchorIndex - 1, 3);
+                   deletedAnchorIndices.add(anchorIndex);
+                }
+              });
               return { ...edge, points: newPoints };
             }
             return edge;
           }));
-          setSelectedPointIndex(null);
+          setSelectedPoints([]);
+          deletedSomething = true;
         } else if (selectedNodes.length > 0 || selectedEdges.length > 0) {
           setNodes(prev => prev.filter(n => !selectedNodes.includes(n.id)));
           setEdges(prev => prev.filter(edge => !selectedEdges.includes(edge.id) && !selectedNodes.includes(edge.source) && (!edge.target || !selectedNodes.includes(edge.target))));
           setSelectedNodes([]);
           setSelectedEdges([]);
-          setSelectedPointIndex(null);
-        } else {
+          setSelectedPoints([]);
+          deletedSomething = true;
+        }
+
+        if (!deletedSomething) {
           // If nothing else is deleted, clear the last polygon
           setPolygonFills(prev => prev.length > 0 ? prev.slice(0, prev.length - 1) : prev);
         }
@@ -254,7 +265,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNode, selectedEdges, selectedPointIndex, nodes, edges, size, isMergeMode, isAddNodeMode]);
+  }, [selectedNode, selectedEdges, selectedPoints, nodes, edges, size, isMergeMode, isAddNodeMode]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -337,11 +348,27 @@ export default function App() {
       ctx, size, nodes, edges, selectedEdges, selectedNodes, selectedNode,
       showMesh, showControlPoints, isAddNodeMode, isMergeMode,
       chamferAngle, meshResolution, laneWidth, polygonFills,
-      softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPointIndex,
+      softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPoints,
       selectedPolygonFillId, view
     );
     ctx.restore();
-  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPointIndex, selectedPolygonFillId, isAddNodeMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills]);
+
+    if (marqueeStart && marqueeEnd) {
+      ctx.save();
+      ctx.translate(view.x, view.y);
+      ctx.scale(view.zoom, view.zoom);
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+      ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
+      ctx.lineWidth = 1 / view.zoom;
+      const x = Math.min(marqueeStart.x, marqueeEnd.x);
+      const y = Math.min(marqueeStart.y, marqueeEnd.y);
+      const w = Math.abs(marqueeEnd.x - marqueeStart.x);
+      const h = Math.abs(marqueeEnd.y - marqueeStart.y);
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+      ctx.restore();
+    }
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPoints, selectedPolygonFillId, isAddNodeMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills, marqueeStart, marqueeEnd]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
     if (e.__scenePos) return e.__scenePos;
@@ -436,14 +463,14 @@ export default function App() {
                 setEdges(prev => [...prev, newEdge]);
                 setSelectedNode(n.id);
                 setSelectedEdges([newEdgeId]);
-                setSelectedPointIndex(null);
+                setSelectedPoints([]);
                 setIsMergeMode(false);
                 startDragPosRef.current = pos;
                 setDragging({ type: 'node', id: n.id });
             } else {
                 setSelectedNode(n.id);
                 setSelectedEdges([]);
-                setSelectedPointIndex(null);
+                setSelectedPoints([]);
             }
             return;
         }
@@ -468,7 +495,7 @@ export default function App() {
                 setEdges(prev => [...prev.filter(e => e.id !== edge.id), ...newEdges]);
                 setSelectedNode(newNodeId);
                 setSelectedEdges([]);
-                setSelectedPointIndex(null);
+                setSelectedPoints([]);
                 setIsMergeMode(false);
                 startDragPosRef.current = pos;
                 setDragging({ type: 'node', id: newNodeId });
@@ -551,7 +578,7 @@ export default function App() {
             setEdges(prev => [...prev.filter(e => e.id !== edge.id), ...newEdges]);
             setSelectedNode(newNodeId);
             setSelectedEdges([]);
-            setSelectedPointIndex(null);
+            setSelectedPoints([]);
             setIsMergeMode(false);
             startDragPosRef.current = pos;
             setDragging({ type: 'node', id: newNodeId });
@@ -597,7 +624,7 @@ export default function App() {
     }
     
     setSelectedNode(newNodeId);
-    setSelectedPointIndex(null);
+    setSelectedPoints([]);
     setIsMergeMode(false);
     startDragPosRef.current = spawnPos;
     setDragging({ type: 'node', id: newNodeId });
@@ -659,7 +686,7 @@ export default function App() {
               setSelectedPolygonFillId(pg.id);
               setSelectedNodes([]);
               setSelectedEdges([]);
-              setSelectedPointIndex(null);
+              setSelectedPoints([]);
               return;
           }
       }
@@ -676,7 +703,7 @@ export default function App() {
                     addedToSelectionRef.current = false;
                 }
                 setSelectedEdges([]);
-                setSelectedPointIndex(null);
+                setSelectedPoints([]);
                 startDragPosRef.current = pos;
                 setDragging({ type: 'node', id: n.id });
                 return;
@@ -806,7 +833,7 @@ export default function App() {
                 
                 setSelectedNode(n.id);
                 setSelectedEdges([]);
-                setSelectedPointIndex(null);
+                setSelectedPoints([]);
                 setIsMergeMode(false);
                 return;
             }
@@ -833,7 +860,7 @@ export default function App() {
                 }));
                 setSelectedNode(n.id);
                 setSelectedEdges([]);
-                setSelectedPointIndex(null);
+                setSelectedPoints([]);
                 setIsMergeMode(false);
                 setDragging({ type: 'node', id: n.id });
                 return;
@@ -893,7 +920,7 @@ export default function App() {
                 setDragging({ type: 'node', id: n.id });
                 setSelectedNode(n.id);
                 setSelectedEdges([]);
-                setSelectedPointIndex(null);
+                setSelectedPoints([]);
             }
             return;
         }
@@ -1023,9 +1050,19 @@ export default function App() {
           }
 
           setDragging({ type: 'edge', id: edges[i].id, pointId: j });
-          setSelectedEdges([edges[i].id]);
+          if (e.shiftKey) {
+             const alreadySelected = selectedPoints.some(p => p.edgeId === edges[i].id && p.pointIndex === j);
+             if (!alreadySelected) {
+                 setSelectedPoints(prev => [...prev, { edgeId: edges[i].id, pointIndex: j }]);
+             }
+             if (!selectedEdges.includes(edges[i].id)) {
+                 setSelectedEdges(prev => [...prev, edges[i].id]);
+             }
+          } else {
+             setSelectedEdges([edges[i].id]);
+             setSelectedPoints([{ edgeId: edges[i].id, pointIndex: j }]);
+          }
           setSelectedNode(null);
-          setSelectedPointIndex(j);
           return;
         }
       }
@@ -1125,7 +1162,7 @@ export default function App() {
         
         // start dragging the newly created `pMid`
         const dragPointId = userCurveIndex * 3 + 2; 
-        setSelectedPointIndex(dragPointId);
+        setSelectedPoints([{ edgeId: edge.id, pointIndex: dragPointId }]);
         setDragging({ type: 'edge', id: edge.id, pointId: dragPointId });
         
         return;
@@ -1134,11 +1171,20 @@ export default function App() {
 
     // Click Empty Space
     // Default deselect
-    setSelectedNode(null);
-    setSelectedEdges([]);
-    setSelectedPointIndex(null);
+    if (!e.shiftKey) {
+      setSelectedNode(null);
+      setSelectedNodes([]);
+      setSelectedEdges([]);
+      setSelectedPoints([]);
+    }
     setIsAddNodeMode(false);
     setIsMergeMode(false);
+    
+    if ((!is3DMode || e.shiftKey) && e.button === 0) {
+      setMarqueeStart(pos);
+      setMarqueeEnd(pos);
+      setDragging({ type: 'marquee', id: '' });
+    }
   };
 
   const enforceLinear = (edge: Edge, currentNodes: Node[], oldEdge?: Edge, oldNodes?: Node[], draggingPointId?: number) => {
@@ -1226,7 +1272,7 @@ export default function App() {
       return changed ? { ...edge, points: newPts } : edge;
   };
 
-  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan'; id: string; pointId?: number }, pos: Point, shiftKey: boolean) => {
+  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan' | 'marquee'; id: string; pointId?: number }, pos: Point, shiftKey: boolean) => {
     const taper = (dist: number, radius: number) => Math.max(0, 1 - Math.pow(dist / radius, 2));
 
     if (dragState.type === 'node') {
@@ -1365,12 +1411,68 @@ export default function App() {
               isLinkedEdge = true;
           }
 
-          if (e.id !== draggingEdge.id && !softSelectionEnabled && !isLinkedEdge) return e;
+          const isDraggingPointSelected = selectedPoints.some(p => p.edgeId === draggingEdge.id && p.pointIndex === pid);
+          const hasSelectedPoints = selectedPoints.some(p => p.edgeId === e.id);
+          if (e.id !== draggingEdge.id && !softSelectionEnabled && !isLinkedEdge && (!isDraggingPointSelected || !hasSelectedPoints)) return e;
           
           let newPoints = [...e.points];
           let changed = false;
 
-          if (e.id === draggingEdge.id) {
+          const edgeSelectedPoints = selectedPoints.filter(p => p.edgeId === e.id);
+          
+          if (isDraggingPointSelected && edgeSelectedPoints.length > 0) {
+              const pointsToMove = new Set<number>();
+              
+              edgeSelectedPoints.forEach(sp => {
+                  const mPid = sp.pointIndex;
+                  pointsToMove.add(mPid);
+                  
+                  // if anchor, we might want to also move handles if they aren't explicitly selected
+                  if (mPid % 3 === 2) {
+                      if (mPid - 1 >= 0) pointsToMove.add(mPid - 1);
+                      if (mPid + 1 < newPoints.length) pointsToMove.add(mPid + 1);
+                  }
+              });
+
+              pointsToMove.forEach(mPid => {
+                  const oldTarget = e.points[mPid];
+                  if (mPid % 3 === 2 || (mPid % 3 !== 2 && pointsToMove.has(mPid%3 === 1 ? mPid+1 : mPid-1))) {
+                      // simple linear shift
+                      newPoints[mPid] = { ...oldTarget, x: oldTarget.x + ddx, y: oldTarget.y + ddy, z: oldTarget.z !== undefined ? oldTarget.z + ddz : 4 + ddz };
+                  } else {
+                      // This is a handle being moved independently of its anchor
+                      const handle = oldTarget;
+                      let effectivePos = { x: handle.x + ddx, y: handle.y + ddy, z: pos.z ?? oldTarget.z ?? 4 };
+                      newPoints[mPid] = { ...handle, ...effectivePos };
+                      
+                      const isIncoming = mPid % 3 === 1;
+                      const anchorIdx = isIncoming ? mPid + 1 : mPid - 1;
+                      const oppositeIdx = isIncoming ? mPid + 2 : mPid - 2;
+                      
+                      if (!pointsToMove.has(oppositeIdx) && anchorIdx >= 0 && oppositeIdx >= 0 && oppositeIdx < newPoints.length && !handle.linear) {
+                          const anchor = e.points[anchorIdx];
+                          if (anchor.linked) {
+                              const dxAngle = effectivePos.x - anchor.x;
+                              const dyAngle = effectivePos.y - anchor.y;
+                              const oppPos = e.points[oppositeIdx];
+                              const curDist = Math.hypot(dxAngle, dyAngle);
+                              const oppOldDx = oppPos.x - anchor.x;
+                              const oppOldDy = oppPos.y - anchor.y;
+                              const oppDist = Math.hypot(oppOldDx, oppOldDy);
+                              if (curDist > 0.001) {
+                                  newPoints[oppositeIdx] = {
+                                      ...oppPos,
+                                      x: anchor.x + (-dxAngle / curDist) * oppDist,
+                                      y: anchor.y + (-dyAngle / curDist) * oppDist,
+                                      linear: false
+                                  };
+                              }
+                          }
+                      }
+                  }
+              });
+              changed = true;
+          } else if (e.id === draggingEdge.id) {
               const oldTarget = originPoint;
 
               if (pid % 3 === 2) {
@@ -1483,10 +1585,19 @@ export default function App() {
   const onPointerMove = (e: React.PointerEvent | any) => {
     if (is3DMode) {
       if (!dragging || dragging.type === 'pan') return;
+      if (dragging.type === 'marquee' && marqueeStart) {
+        setMarqueeEnd(getMousePos(e));
+        return;
+      }
     } else {
       const rect = canvasRef.current!.getBoundingClientRect();
       const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       pointersRef.current.set(e.pointerId, rawPos);
+
+      if (dragging?.type === 'marquee' && marqueeStart && pointersRef.current.size === 1) {
+        setMarqueeEnd(getMousePos(e));
+        return;
+      }
 
       if ((pointersRef.current.size === 2 || (dragging?.type === 'pan' && pointersRef.current.size === 1)) && lastPanMidpointRef.current) {
         const pts = Array.from(pointersRef.current.values()) as Point[];
@@ -1524,6 +1635,47 @@ export default function App() {
                 setSelectedEdges(prev => prev.filter(id => id !== dragging.id));
             }
         }
+    }
+
+    if (marqueeStart && marqueeEnd) {
+      if (Math.hypot(marqueeEnd.x - marqueeStart.x, marqueeEnd.y - marqueeStart.y) > 5) {
+        const xMin = Math.min(marqueeStart.x, marqueeEnd.x);
+        const xMax = Math.max(marqueeStart.x, marqueeEnd.x);
+        const yMin = Math.min(marqueeStart.y, marqueeEnd.y);
+        const yMax = Math.max(marqueeStart.y, marqueeEnd.y);
+        
+        const selNodes: string[] = e.shiftKey ? [...selectedNodes] : [];
+        const selEdges: string[] = e.shiftKey ? [...selectedEdges] : [];
+        const selPoints: PointSelection[] = e.shiftKey ? [...selectedPoints] : [];
+        
+        nodes.forEach(n => {
+           if (n.point.x >= xMin && n.point.x <= xMax && n.point.y >= yMin && n.point.y <= yMax) {
+               if (!selNodes.includes(n.id)) selNodes.push(n.id);
+           }
+        });
+        
+        edges.forEach(edge => {
+           let hasPointInside = false;
+           for (let i = 0; i < edge.points.length; i++) {
+               const p = edge.points[i];
+               if (p.x >= xMin && p.x <= xMax && p.y >= yMin && p.y <= yMax) {
+                   hasPointInside = true;
+                   if (!selPoints.find(sp => sp.edgeId === edge.id && sp.pointIndex === i)) {
+                       selPoints.push({ edgeId: edge.id, pointIndex: i });
+                   }
+               }
+           }
+           if (hasPointInside && !selEdges.includes(edge.id)) {
+               selEdges.push(edge.id);
+           }
+        });
+        
+        setSelectedNodes(selNodes);
+        setSelectedEdges(selEdges);
+        setSelectedPoints(selPoints);
+      }
+      setMarqueeStart(null);
+      setMarqueeEnd(null);
     }
 
     if (!is3DMode) {
@@ -1578,6 +1730,8 @@ export default function App() {
         lastPanMidpointRef.current = null;
       }
     }
+    setMarqueeStart(null);
+    setMarqueeEnd(null);
     setDragging(null);
   };
 
@@ -1640,8 +1794,10 @@ export default function App() {
               selectedNode={selectedNode}
               selectedNodes={selectedNodes}
               selectedEdges={selectedEdges}
-              selectedPointIndex={selectedPointIndex}
+              selectedPoints={selectedPoints}
               selectedPolygonFillId={selectedPolygonFillId}
+              marqueeStart={marqueeStart}
+              marqueeEnd={marqueeEnd}
             />
           ) : (
             <>
