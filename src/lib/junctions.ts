@@ -150,12 +150,12 @@ export function getEdgeClearance(nodeId: string, edge: Edge, isSourceQuery: bool
       const r1 = outgoing[i];
       const r2 = outgoing[(i + 1) % N];
       
-      const sw1 = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
-      const sw2 = r2.isSource ? (r2.edge.sidewalkLeft ?? r2.edge.sidewalk ?? 12) : (r2.edge.sidewalkRight ?? r2.edge.sidewalk ?? 12);
+      const sw1 = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 24) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 24);
+      const sw2 = r2.isSource ? (r2.edge.sidewalkLeft ?? r2.edge.sidewalk ?? 24) : (r2.edge.sidewalkRight ?? r2.edge.sidewalk ?? 24);
 
       if (N === 1) {
-          const sw_left = r1.isSource ? (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12);
-          const sw_right = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
+          const sw_left = r1.isSource ? (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 24) : (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 24);
+          const sw_right = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 24) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 24);
           const left = { x: r1.dir.y, y: -r1.dir.x };
           const right = { x: -r1.dir.y, y: r1.dir.x };
           const W = r1.edge.width / 2;

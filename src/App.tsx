@@ -25,9 +25,9 @@ export default function App() {
   ]);
 
   const [edges, setEdges] = useState<Edge[]>([
-    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: 60, sidewalk: 12, color: '#ef4444' },
-    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: 60, sidewalk: 12, color: '#10b981' },
-    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: 12, color: '#3b82f6' },
+    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: 60, sidewalk: 24, color: '#ef4444' },
+    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: 60, sidewalk: 24, color: '#10b981' },
+    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: 24, color: '#3b82f6' },
   ]);
 
   const [selectedEdges, setSelectedEdges] = useState<string[]>([]);
@@ -360,7 +360,7 @@ export default function App() {
     const getNewEdgeParams = (sn: Node, targetPt: Point) => {
         let params: any = {
             width: 60,
-            sidewalk: 12,
+            sidewalk: 24,
             color: COLORS[edges.length % COLORS.length]
         };
 
@@ -852,7 +852,7 @@ export default function App() {
                           { x: sn.point.x + 2*(n.point.x - sn.point.x)/3, y: sn.point.y + 2*(n.point.y - sn.point.y)/3, z: n.point.z ?? 4, linear: true }
                         ],
                         width: 60,
-                        sidewalk: 12,
+                        sidewalk: 24,
                         color: COLORS[edges.length % COLORS.length]
                     };
                     setEdges(prev => [...prev, newEdge]);
@@ -1622,7 +1622,7 @@ export default function App() {
               { x: srcNode.point.x, y: srcNode.point.y + 66, z: srcNode.point.z ?? 4, linear: true }
           ],
           width: 60,
-          sidewalk: 12,
+          sidewalk: 24,
           color: COLORS[prev.length % COLORS.length]
       }]);
   }

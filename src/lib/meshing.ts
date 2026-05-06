@@ -65,12 +65,12 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         const r1 = outgoing[i];
         const r2 = outgoing[(i + 1) % N];
         
-        const sw1 = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
-        const sw2 = r2.isSource ? (r2.edge.sidewalkLeft ?? r2.edge.sidewalk ?? 12) : (r2.edge.sidewalkRight ?? r2.edge.sidewalk ?? 12);
+        const sw1 = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 24) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 24);
+        const sw2 = r2.isSource ? (r2.edge.sidewalkLeft ?? r2.edge.sidewalk ?? 24) : (r2.edge.sidewalkRight ?? r2.edge.sidewalk ?? 24);
 
         if (N === 1) {
-            const sw_left = r1.isSource ? (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12);
-            const sw_right = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 12) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 12);
+            const sw_left = r1.isSource ? (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 24) : (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 24);
+            const sw_right = r1.isSource ? (r1.edge.sidewalkRight ?? r1.edge.sidewalk ?? 24) : (r1.edge.sidewalkLeft ?? r1.edge.sidewalk ?? 24);
             const W = r1.edge.width / 2;
             const OW_L = W + sw_left;
             const OW_R = W + sw_right;
@@ -263,8 +263,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       centerLine.push({ p: p2, dir });
       const left = { x: dir.y, y: -dir.x };
       const right = { x: -dir.y, y: dir.x };
-      const sw_left = edge.sidewalkLeft ?? edge.sidewalk ?? 12;
-      const sw_right = edge.sidewalkRight ?? edge.sidewalk ?? 12;
+      const sw_left = edge.sidewalkLeft ?? edge.sidewalk ?? 24;
+      const sw_right = edge.sidewalkRight ?? edge.sidewalk ?? 24;
       const OW_L = W + sw_left;
       const OW_R = W + sw_right;
       
@@ -357,8 +357,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            if (leftPoints.length === 0) {
                const dir = getDir(sourceNode.point, spline[spline.length - 1]);
                const p2 = spline[spline.length - 1];
-               const sw_left = edge.sidewalkLeft ?? edge.sidewalk ?? 12;
-               const sw_right = edge.sidewalkRight ?? edge.sidewalk ?? 12;
+               const sw_left = edge.sidewalkLeft ?? edge.sidewalk ?? 24;
+               const sw_right = edge.sidewalkRight ?? edge.sidewalk ?? 24;
                const OW_L = W + sw_left;
                const OW_R = W + sw_right;
                leftPoints.push({ x: p2.x + dir.y * W, y: p2.y + -dir.x * W, z: p2.z });
@@ -530,7 +530,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            outerPolygon: outerPoly,
            outerLeftCurve: [obL, ...outerLeftPoints, ...(otbL ? [otbL] : [])],
            outerRightCurve: [obR, ...outerRightPoints, ...(otbR ? [otbR] : [])],
-           sidewalkWidth: edge.sidewalk ?? 12
+           sidewalkWidth: edge.sidewalk ?? 24
        });
 
        let currL = bL;
