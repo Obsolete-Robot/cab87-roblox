@@ -13,7 +13,7 @@ export function SceneContent({
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu, 
   isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints,
   softSelectionEnabled, softSelectionRadius,
-  setView, containerRef, marqueeStart, marqueeEnd
+  setView, containerRef, marqueeStart, marqueeEnd, snapGridSize = 10
 }: any) {
   const controlsRef = useRef<any>(null);
 
@@ -48,12 +48,12 @@ export function SceneContent({
       <Grid 
         infiniteGrid 
         fadeDistance={5000} 
-        sectionColor="#404040" 
-        cellColor="#262626" 
-        position={[0, -20, 0]} 
-        cellSize={20} 
-        sectionSize={100}
-        cellThickness={1}
+        sectionColor="#666666" 
+        cellColor="#444444" 
+        position={[0, 0, 0]} 
+        cellSize={Math.max(1, snapGridSize)} 
+        sectionSize={Math.max(10, snapGridSize * 10)}
+        cellThickness={2}
         sectionThickness={2}
       />
 

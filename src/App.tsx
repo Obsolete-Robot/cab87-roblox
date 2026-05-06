@@ -71,6 +71,69 @@ export default function App() {
   const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
   const [softSelectionRadius, setSoftSelectionRadius] = useState(DEFAULTS.softSelectionRadius);
 
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [snapGridSize, setSnapGridSize] = useState(10);
+
+  const handleMatchSelectedZToLast = () => {
+    let targetZ: number | null = null;
+    
+    // We try to figure out what was the generally "last selected" element.
+    // If they only selected nodes, it's easy. If they only selected points, it's easy.
+    // If both, we'll try nodes first.
+    if (selectedNodes.length > 0) {
+      const lastNodeId = selectedNodes[selectedNodes.length - 1];
+      const lastNode = nodes.find(n => n.id === lastNodeId);
+      if (lastNode) targetZ = lastNode.point.z ?? 4;
+    } else if (selectedPoints.length > 0) {
+      const lastSelection = selectedPoints[selectedPoints.length - 1];
+      const lastEdge = edges.find(e => e.id === lastSelection.edgeId);
+      if (lastEdge) targetZ = lastEdge.points[lastSelection.pointIndex].z ?? 4;
+    }
+
+    if (targetZ !== null) {
+      if (selectedNodes.length > 0) {
+        // Track the deltas so we can apply them to the connected edges
+        const nodeDeltas = new Map<string, number>();
+        
+        setNodes(prev => prev.map(n => {
+            if (selectedNodes.includes(n.id)) {
+                const dz = targetZ! - (n.point.z ?? 4);
+                nodeDeltas.set(n.id, dz);
+                return { ...n, point: { ...n.point, z: targetZ! } };
+            }
+            return n;
+        }));
+        
+        // Ensure that edge start/end points attached to these nodes are also moved by the same delta!
+        setEdges(prevEdges => prevEdges.map(edge => {
+            let changed = false;
+            let newPoints = [...edge.points];
+
+            if (selectedNodes.includes(edge.source) && newPoints.length > 0) {
+               const dz = nodeDeltas.get(edge.source) || 0;
+               newPoints[0] = { ...newPoints[0], z: (newPoints[0].z ?? 4) + dz };
+               changed = true;
+            }
+            if (edge.target && selectedNodes.includes(edge.target) && newPoints.length > 0) {
+               const dz = nodeDeltas.get(edge.target) || 0;
+               newPoints[newPoints.length - 1] = { ...newPoints[newPoints.length - 1], z: (newPoints[newPoints.length - 1].z ?? 4) + dz };
+               changed = true;
+            }
+            return changed ? { ...edge, points: newPoints } : edge;
+        }));
+      }
+
+      if (selectedPoints.length > 0) {
+        setEdges(prev => prev.map(e => {
+          const selectedIndicesForEdge = selectedPoints.filter(sp => sp.edgeId === e.id).map(sp => sp.pointIndex);
+          if (selectedIndicesForEdge.length === 0) return e;
+          const newPoints = e.points.map((p, idx) => selectedIndicesForEdge.includes(idx) ? { ...p, z: targetZ! } : p);
+          return { ...e, points: newPoints };
+        }));
+      }
+    }
+  };
+
   const [polygonFills, setPolygonFills] = useState<{ id: string; points: string[]; color: string }[]>([]);
 
   const handleExport = () => {
@@ -349,7 +412,7 @@ export default function App() {
       showMesh, showControlPoints, isAddNodeMode, isMergeMode,
       chamferAngle, meshResolution, laneWidth, polygonFills,
       softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPoints,
-      selectedPolygonFillId, view
+      selectedPolygonFillId, view, snapGridSize
     );
     ctx.restore();
 
@@ -368,15 +431,28 @@ export default function App() {
       ctx.strokeRect(x, y, w, h);
       ctx.restore();
     }
-  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPoints, selectedPolygonFillId, isAddNodeMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills, marqueeStart, marqueeEnd]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPoints, selectedPolygonFillId, isAddNodeMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills, marqueeStart, marqueeEnd, snapGridSize]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
-    if (e.__scenePos) return e.__scenePos;
-    const rect = canvasRef.current!.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left - view.x) / view.zoom,
-      y: (e.clientY - rect.top - view.y) / view.zoom,
-    };
+    let pos;
+    if (e.__scenePos) {
+      pos = { ...e.__scenePos };
+    } else {
+      const rect = canvasRef.current!.getBoundingClientRect();
+      pos = {
+        x: (e.clientX - rect.left - view.x) / view.zoom,
+        y: (e.clientY - rect.top - view.y) / view.zoom,
+      };
+    }
+
+    if (snapToGrid) {
+      pos.x = Math.round(pos.x / snapGridSize) * snapGridSize;
+      pos.y = Math.round(pos.y / snapGridSize) * snapGridSize;
+      if (pos.z !== undefined) {
+         pos.z = Math.round(pos.z / snapGridSize) * snapGridSize;
+      }
+    }
+    return pos;
   };
 
     const onContextMenu = (e: React.MouseEvent | any) => {
@@ -1798,6 +1874,7 @@ export default function App() {
               selectedPolygonFillId={selectedPolygonFillId}
               marqueeStart={marqueeStart}
               marqueeEnd={marqueeEnd}
+              snapGridSize={snapGridSize}
             />
           ) : (
             <>
@@ -1853,6 +1930,11 @@ export default function App() {
           setSoftSelectionEnabled={setSoftSelectionEnabled}
           softSelectionRadius={softSelectionRadius}
           setSoftSelectionRadius={setSoftSelectionRadius}
+          snapToGrid={snapToGrid}
+          setSnapToGrid={setSnapToGrid}
+          snapGridSize={snapGridSize}
+          setSnapGridSize={setSnapGridSize}
+          onMatchSelectedZToLast={handleMatchSelectedZToLast}
           chamferAngle={chamferAngle}
           setChamferAngle={setChamferAngle}
           meshResolution={meshResolution}

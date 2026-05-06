@@ -23,7 +23,8 @@ export const drawNetwork2D = (
   draggingPoint: Point | null,
   selectedPoints: any[],
   selectedPolygonFillId: string | null,
-  view?: { x: number; y: number; zoom: number }
+  view?: { x: number; y: number; zoom: number },
+  snapGridSize: number = 10
 ) => {
   // Clear the canvas outside of the view transform or just fill the entire view area.
   // Wait, ctx is already transformed. To clear the whole canvas properly:
@@ -33,8 +34,8 @@ export const drawNetwork2D = (
   ctx.restore();
 
   if (view) {
-    const gridSize = 100;
-    const cellGridSize = 20;
+    const gridSize = Math.max(snapGridSize * 10, 100);
+    const cellGridSize = snapGridSize;
     const invZoom = 1 / view.zoom;
     
     const minX = -view.x * invZoom;

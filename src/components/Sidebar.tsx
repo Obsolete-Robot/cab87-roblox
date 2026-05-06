@@ -14,6 +14,11 @@ interface SidebarProps {
   setSoftSelectionEnabled: (v: boolean) => void;
   softSelectionRadius: number;
   setSoftSelectionRadius: (v: number) => void;
+  snapToGrid: boolean;
+  setSnapToGrid: (v: boolean) => void;
+  snapGridSize: number;
+  setSnapGridSize: (v: number) => void;
+  onMatchSelectedZToLast: () => void;
   chamferAngle: number;
   setChamferAngle: (v: number) => void;
   meshResolution: number;
@@ -39,6 +44,11 @@ export default function Sidebar({
   setSoftSelectionEnabled,
   softSelectionRadius,
   setSoftSelectionRadius,
+  snapToGrid,
+  setSnapToGrid,
+  snapGridSize,
+  setSnapGridSize,
+  onMatchSelectedZToLast,
   chamferAngle,
   setChamferAngle,
   meshResolution,
@@ -220,6 +230,53 @@ export default function Sidebar({
               )}
             </section>
   
+  <section>
+              <div 
+                className="flex items-center justify-between cursor-pointer mb-2"
+                onClick={() => toggleSection('grid_snapping')}
+              >
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Grid Snapping & Align</h3>
+                {collapsedSections['grid_snapping'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+              </div>
+              {!collapsedSections['grid_snapping'] && (
+                <div className="space-y-4 bg-slate-800/20 p-3 rounded-lg border border-slate-800/50">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-slate-300">Snap to Grid</span>
+                    <button 
+                      onClick={() => setSnapToGrid(!snapToGrid)}
+                      className={`px-3 py-1 rounded text-xs font-medium transition-colors ${snapToGrid ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}
+                    >
+                      {snapToGrid ? 'ENABLED' : 'DISABLED'}
+                    </button>
+                  </div>
+                  {snapToGrid && (
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-1">
+                        Grid Size ({snapGridSize}px)
+                      </label>
+                      <input
+                        type="range"
+                        min="5"
+                        max="100"
+                        step="5"
+                        value={snapGridSize}
+                        onChange={(e) => setSnapGridSize(parseInt(e.target.value))}
+                        className="w-full accent-blue-500 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
+                  )}
+                  
+                  <div className="pt-2 border-t border-slate-800">
+                     <button
+                        onClick={onMatchSelectedZToLast}
+                        className="w-full px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-semibold flex items-center justify-center transition-colors"
+                     >
+                        Match Selected Height to Last
+                     </button>
+                  </div>
+                </div>
+              )}
+            </section>
         
   <section className="flex-grow flex flex-col min-h-0">
           <div 
