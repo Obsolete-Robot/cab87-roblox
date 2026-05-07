@@ -203,11 +203,11 @@ local function collectMeshRoadData(world, hasGraphRoadData)
 	local sources = {}
 	appendSource(sources, world:FindFirstChild(MINIMAP_ROAD_MESH_NAME))
 	appendBakedGraphSurfaceSources(sources, world, editorRoot)
+	appendSource(sources, world:FindFirstChild(CLIENT_VISUALS_NAME))
+	appendSource(sources, world:FindFirstChild(RUNTIME_MESH_NAME))
 
 	if not hasGraphRoadData then
 		appendSource(sources, world:FindFirstChild(LEGACY_ROAD_NETWORK_NAME))
-		appendSource(sources, world:FindFirstChild(CLIENT_VISUALS_NAME))
-		appendSource(sources, world:FindFirstChild(RUNTIME_MESH_NAME))
 		appendSource(sources, editorRoot and editorRoot:FindFirstChild(LEGACY_ROAD_NETWORK_NAME))
 		appendSource(sources, world:FindFirstChild(GENERATED_ROADS_NAME))
 	end

@@ -12,6 +12,8 @@ RoadGraphData.RUNTIME_DATA_NAME = "AuthoredRoadGraphData"
 RoadGraphData.NODES_NAME = "Nodes"
 RoadGraphData.EDGES_NAME = "Edges"
 RoadGraphData.EDGE_POINTS_NAME = "Points"
+RoadGraphData.POLYGON_FILLS_NAME = "PolygonFills"
+RoadGraphData.POLYGON_FILL_POINTS_NAME = "Points"
 
 local DEFAULT_CHAMFER_ANGLE_DEG = 70
 local DEFAULT_SIDEWALK_WIDTH = 12
@@ -45,6 +47,61 @@ local function sanitizeColor(value)
 		return value
 	end
 	return nil
+end
+
+local function sanitizePolygonFills(fills, nodeLookup)
+	local normalized = {}
+	if type(fills) ~= "table" then
+		return normalized
+	end
+
+	for index, fill in ipairs(fills) do
+		if type(fill) == "table" and type(fill.points) == "table" then
+			local points = {}
+			local used = {}
+			for _, nodeId in ipairs(fill.points) do
+				if type(nodeId) == "string" and nodeLookup[nodeId] and not used[nodeId] then
+					table.insert(points, nodeId)
+					used[nodeId] = true
+				end
+			end
+
+			if #points >= 3 then
+				table.insert(normalized, {
+					id = sanitizeId(fill.id, "pf", index),
+					points = points,
+					color = sanitizeColor(fill.color) or "#10b981",
+				})
+			end
+		end
+	end
+
+	return normalized
+end
+
+local function clonePolygonFills(fills, nodeLookup)
+	local cloned = {}
+	for index, fill in ipairs(fills or {}) do
+		if type(fill) == "table" then
+			local points = {}
+			local used = {}
+			for _, nodeId in ipairs(fill.points or {}) do
+				if type(nodeId) == "string" and (not nodeLookup or nodeLookup[nodeId]) and not used[nodeId] then
+					table.insert(points, nodeId)
+					used[nodeId] = true
+				end
+			end
+
+			if #points >= 3 then
+				table.insert(cloned, {
+					id = sanitizeId(fill.id, "pf", index),
+					points = points,
+					color = sanitizeColor(fill.color) or "#10b981",
+				})
+			end
+		end
+	end
+	return cloned
 end
 
 local function sanitizeScale(value)
@@ -261,6 +318,7 @@ function RoadGraphData.normalizePayload(payload, options)
 		settings = settings,
 		nodes = normalizedNodes,
 		edges = normalizedEdges,
+		polygonFills = sanitizePolygonFills(payload.polygonFills, nodeLookup),
 	}
 
 	if pointScale ~= DEFAULT_IMPORT_SCALE or widthScale ~= DEFAULT_IMPORT_SCALE then
@@ -345,6 +403,7 @@ function RoadGraphData.scaleGraph(graph, options)
 		nodes = nodes,
 		edges = edges,
 		nodeLookup = nodeLookup,
+		polygonFills = clonePolygonFills(graph.polygonFills, nodeLookup),
 	}
 end
 
@@ -446,8 +505,35 @@ function RoadGraphData.writeGraph(root, graph, name)
 		end
 	end
 
+	local polygonFills = clonePolygonFills(graph.polygonFills)
+	if #polygonFills > 0 then
+		local fillsFolder = Instance.new("Folder")
+		fillsFolder.Name = RoadGraphData.POLYGON_FILLS_NAME
+		fillsFolder.Parent = graphFolder
+
+		for index, fill in ipairs(polygonFills) do
+			local fillFolder = Instance.new("Folder")
+			fillFolder.Name = sanitizeId(fill.id, "pf", index)
+			fillFolder:SetAttribute("FillId", sanitizeId(fill.id, "pf", index))
+			fillFolder:SetAttribute("Color", sanitizeColor(fill.color) or "#10b981")
+			fillFolder.Parent = fillsFolder
+
+			local pointsFolder = Instance.new("Folder")
+			pointsFolder.Name = RoadGraphData.POLYGON_FILL_POINTS_NAME
+			pointsFolder.Parent = fillFolder
+
+			for pointIndex, nodeId in ipairs(fill.points or {}) do
+				local pointValue = Instance.new("StringValue")
+				pointValue.Name = string.format("P%04d", pointIndex)
+				pointValue.Value = nodeId
+				pointValue.Parent = pointsFolder
+			end
+		end
+	end
+
 	graphFolder:SetAttribute("NodeCount", #(graph.nodes or {}))
 	graphFolder:SetAttribute("EdgeCount", #(graph.edges or {}))
+	graphFolder:SetAttribute("PolygonFillCount", #polygonFills)
 	return graphFolder
 end
 
@@ -512,6 +598,28 @@ function RoadGraphData.collectGraph(root, config)
 		end
 	end
 
+	local polygonFills = {}
+	local fillsFolder = childFolders(graphFolder, RoadGraphData.POLYGON_FILLS_NAME)
+	for index, fillFolder in ipairs(sortedChildren(fillsFolder)) do
+		if fillFolder:IsA("Folder") then
+			local points = {}
+			local pointsFolder = childFolders(fillFolder, RoadGraphData.POLYGON_FILL_POINTS_NAME)
+			for _, pointValue in ipairs(sortedChildren(pointsFolder)) do
+				if pointValue:IsA("StringValue") and nodeLookup[pointValue.Value] then
+					table.insert(points, pointValue.Value)
+				end
+			end
+
+			if #points >= 3 then
+				table.insert(polygonFills, {
+					id = sanitizeId(fillFolder:GetAttribute("FillId") or fillFolder.Name, "pf", index),
+					points = points,
+					color = sanitizeColor(fillFolder:GetAttribute("Color")) or "#10b981",
+				})
+			end
+		end
+	end
+
 	if #nodes == 0 or #edges == 0 then
 		return nil
 	end
@@ -526,6 +634,7 @@ function RoadGraphData.collectGraph(root, config)
 		nodes = nodes,
 		edges = edges,
 		nodeLookup = nodeLookup,
+		polygonFills = polygonFills,
 	}
 end
 
@@ -565,6 +674,7 @@ function RoadGraphData.toPayload(graph)
 		settings = graph.settings,
 		nodes = nodes,
 		edges = edges,
+		polygonFills = clonePolygonFills(graph.polygonFills),
 	}
 end
 

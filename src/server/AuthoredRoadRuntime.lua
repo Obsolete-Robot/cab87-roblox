@@ -5,6 +5,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
 local RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
+local RoadMeshBuilder = require(Shared:WaitForChild("RoadMeshBuilder"))
 local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
@@ -19,6 +20,9 @@ local BAKED_SURFACES_NAME = "RoadGraphBakedSurfaces"
 local BAKED_COLLISION_NAME = "RoadGraphBakedCollision"
 local LEGACY_COLLISION_NAME = "RoadNetworkCollision"
 local LEGACY_RUNTIME_COLLISION_GENERATOR = "Cab87LegacyRoadRuntimeCollision"
+local ROAD_GRAPH_RUNTIME_MESH_GENERATOR = "Cab87RoadGraphRuntimeMesh"
+local ROAD_GRAPH_RUNTIME_CHUNK_STUDS = 768
+local ROAD_GRAPH_RUNTIME_MAX_COLLISION_INPUT_TRIANGLES = 900
 local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
 local MINIMAP_ROAD_MESH_GENERATOR = "Cab87MinimapRoadMesh"
 local MINIMAP_ROAD_MESH_VERSION = 3
@@ -175,6 +179,19 @@ local function hideEditorRootForPlay(root, options)
 
 	options = options or {}
 	local preserveBakedGraph = options.preserveBakedGraph == true
+	if not preserveBakedGraph then
+		for _, childName in ipairs({
+			BAKED_RUNTIME_NAME,
+			BAKED_SURFACES_NAME,
+			BAKED_COLLISION_NAME,
+			MINIMAP_ROAD_MESH_NAME,
+		}) do
+			local child = root:FindFirstChild(childName)
+			if child then
+				child:Destroy()
+			end
+		end
+	end
 	local bakedContainer = if preserveBakedGraph then root:FindFirstChild(BAKED_RUNTIME_NAME) or root else nil
 	local bakedSurfaces = bakedContainer and bakedContainer:FindFirstChild(BAKED_SURFACES_NAME)
 	local bakedCollision = bakedContainer and bakedContainer:FindFirstChild(BAKED_COLLISION_NAME)
@@ -367,46 +384,35 @@ local function projectCabSpawnToDriveSurface(position, driveSurfaces)
 	return position
 end
 
-local function useBakedGraphMeshes(root)
-	local bakedContainer = root:FindFirstChild(BAKED_RUNTIME_NAME) or root
-	local sourceMeshFolder = bakedContainer:FindFirstChild(BAKED_SURFACES_NAME)
-	local sourceCollisionFolder = bakedContainer:FindFirstChild(BAKED_COLLISION_NAME)
-	if not (sourceMeshFolder and sourceCollisionFolder) then
-		return nil
+local function createRuntimeGraphMeshes(world, meshData)
+	local result = RoadMeshBuilder.createClassifiedChunkedCollisionMeshes(world, meshData, {
+		collisionFolderName = BAKED_COLLISION_NAME,
+		generatedBy = ROAD_GRAPH_RUNTIME_MESH_GENERATOR,
+		chunkSize = ROAD_GRAPH_RUNTIME_CHUNK_STUDS,
+		maxCollisionInputTriangles = ROAD_GRAPH_RUNTIME_MAX_COLLISION_INPUT_TRIANGLES,
+		collisionThickness = 0.2,
+		collisionSurfaceOffset = 0,
+	})
+
+	if #result.collisionParts == 0 then
+		local reason = #result.errors > 0 and table.concat(result.errors, " | ") or "no runtime mesh parts were created"
+		error("Road graph runtime mesh generation failed: " .. reason, 0)
 	end
 
-	local visibleParts = {}
-	local collisionParts = {}
-	collectBaseParts(sourceMeshFolder, visibleParts)
-	collectBaseParts(sourceCollisionFolder, collisionParts)
-	if #visibleParts == 0 or #collisionParts == 0 then
-		return nil
-	end
-
-	for _, part in ipairs(visibleParts) do
-		part.Anchored = true
-		part.CanCollide = false
-		part.CanQuery = false
-		part.CanTouch = false
-	end
-
-	for _, part in ipairs(collisionParts) do
-		part.Anchored = true
-		part.CanCollide = true
-		part.CanQuery = true
-		part.CanTouch = false
-		part.Transparency = 1
+	for _, part in ipairs(result.collisionParts) do
+		part:SetAttribute("BakedRoadGraphMesh", true)
+		part:SetAttribute("BakeMode", "runtimeEditableMeshCollision")
 		part:SetAttribute("DriveSurface", true)
 	end
 
 	return {
-		meshFolder = sourceMeshFolder,
-		collisionFolder = sourceCollisionFolder,
-		visibleParts = visibleParts,
-		collisionParts = collisionParts,
-		driveSurfaces = collisionParts,
-		errors = {},
-		source = "baked",
+		meshFolder = nil,
+		collisionFolder = result.collisionFolder,
+		visibleParts = {},
+		collisionParts = result.collisionParts,
+		driveSurfaces = result.driveSurfaces,
+		errors = result.errors,
+		source = "runtime-editable-collision",
 	}
 end
 
@@ -443,18 +449,12 @@ end
 
 local function buildGraphMeshes(root, world, graph)
 	local meshData = RoadGraphMesher.buildNetworkMesh(graph, graph.settings)
-
-	local bakedMeshResult = useBakedGraphMeshes(root)
-	if bakedMeshResult then
-		roadDebugLog(
-			"using baked graph meshes: visibleParts=%d collisionParts=%d",
-			#bakedMeshResult.visibleParts,
-			#bakedMeshResult.collisionParts
-		)
-		return meshData, bakedMeshResult
-	end
-
-	error("Baked road graph geometry was not found. Click Bake Runtime Geometry in the Road Graph Builder plugin before Play.", 0)
+	local runtimeMeshResult = createRuntimeGraphMeshes(world, meshData)
+	roadDebugLog(
+		"generated runtime graph collision meshes: collisionParts=%d",
+		#runtimeMeshResult.collisionParts
+	)
+	return meshData, runtimeMeshResult
 end
 
 local function useBakedMinimapRoadMesh(root, world)
@@ -731,7 +731,7 @@ local function createGraphWorld(root, graph)
 	world.Name = RUNTIME_WORLD_NAME
 	world:SetAttribute("GeneratorVersion", "road-graph-v1")
 	world:SetAttribute("Source", RoadGraphData.EDITOR_ROOT_NAME)
-	world:SetAttribute("NeedsClientRoadMesh", false)
+	world:SetAttribute("NeedsClientRoadMesh", true)
 	world.Parent = Workspace
 
 	RoadGraphData.writeGraph(world, graph, RoadGraphData.RUNTIME_DATA_NAME)
@@ -756,13 +756,24 @@ local function createGraphWorld(root, graph)
 		spawnPose = cabCompanySpawnPose
 	end
 
+	local roadEdgeTriangleCount = #(meshData.roadEdgeTriangles or {})
+	local roadHubTriangleCount = #(meshData.roadHubTriangles or {})
+	local polygonFillTriangleCount = 0
+	for _, fill in ipairs(meshData.polygonTriangles or meshData.polygonFills or {}) do
+		polygonFillTriangleCount += #(fill.triangles or {})
+	end
+
 	world:SetAttribute("AuthoredRoadFormat", "RoadGraph")
 	world:SetAttribute("AuthoredRoadNodeCount", #(graph.nodes or {}))
 	world:SetAttribute("AuthoredRoadEdgeCount", #(graph.edges or {}))
 	world:SetAttribute("AuthoredRoadRoadTriangles", #(meshData.roadTriangles or {}))
+	world:SetAttribute("AuthoredRoadRoadEdgeTriangles", roadEdgeTriangleCount)
+	world:SetAttribute("AuthoredRoadRoadHubTriangles", roadHubTriangleCount)
 	world:SetAttribute("AuthoredRoadSidewalkTriangles", #(meshData.sidewalkTriangles or {}))
 	world:SetAttribute("AuthoredRoadCrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
+	world:SetAttribute("AuthoredRoadPolygonFillTriangles", polygonFillTriangleCount)
 	world:SetAttribute("AuthoredRoadMeshSource", meshBuild.source or "runtime")
+	world:SetAttribute("AuthoredRoadVisualSource", "client-runtime-editable-mesh")
 	world:SetAttribute("AuthoredRoadServerCollisionSource", BAKED_COLLISION_NAME)
 	world:SetAttribute("AuthoredRoadServerMeshError", "")
 	world:SetAttribute("MinimapRoadMeshSource", minimapMesh and MINIMAP_ROAD_MESH_NAME or BAKED_SURFACES_NAME)
@@ -770,12 +781,15 @@ local function createGraphWorld(root, graph)
 	world:SetAttribute("MinimapRoadMeshDedicated", minimapMesh ~= nil)
 
 	roadDebugLog(
-		"road graph world built: nodes=%d edges=%d roadTris=%d sidewalkTris=%d crosswalkTris=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
+		"road graph world built: nodes=%d edges=%d roadTris=%d roadEdgeTris=%d roadHubTris=%d sidewalkTris=%d crosswalkTris=%d polygonFillTris=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
 		#(graph.nodes or {}),
 		#(graph.edges or {}),
 		#(meshData.roadTriangles or {}),
+		roadEdgeTriangleCount,
+		roadHubTriangleCount,
 		#(meshData.sidewalkTriangles or {}),
 		#(meshData.crosswalkTriangles or {}),
+		polygonFillTriangleCount,
 		#driveSurfaces,
 		spawnPose.position.X,
 		spawnPose.position.Y,
@@ -792,8 +806,20 @@ local function createGraphWorld(root, graph)
 		roadDebugWarn("some minimap road mesh surfaces were skipped: %s", table.concat(minimapMeshErrors, " | "))
 	end
 
-	hideEditorRootForPlay(root, { preserveBakedGraph = true })
+	hideEditorRootForPlay(root, { preserveBakedGraph = false })
 	return world, driveSurfaces, crashObstacles, spawnPose
+end
+
+local function collectRuntimeGraph(root)
+	local graph = RoadGraphData.collectGraph(root, Config)
+	if not graph then
+		return nil
+	end
+
+	return RoadGraphData.scaleGraph(graph, {
+		pointScale = graph.importPointScale,
+		widthScale = graph.importWidthScale,
+	}) or graph
 end
 
 function AuthoredRoadRuntime.getRoot()
@@ -829,7 +855,7 @@ function AuthoredRoadRuntime.createWorld(root, roadSource)
 		return createLegacyCurveWorld(root)
 	end
 
-	local graph = RoadGraphData.collectGraph(root, Config)
+	local graph = collectRuntimeGraph(root)
 	if graph then
 		return createGraphWorld(root, graph)
 	end

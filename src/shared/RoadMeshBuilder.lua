@@ -23,8 +23,31 @@ local DEFAULT_SURFACES = {
 	},
 }
 
-local MIN_PART_DIMENSION = 0.01
 local DEFAULT_CHUNK_SIZE = 1024
+local DEFAULT_POLYGON_FILL_COLOR = Color3.fromRGB(16, 185, 129)
+local DEFAULT_POLYGON_FILL_MATERIAL = Enum.Material.SmoothPlastic
+local MIN_TRIANGLE_AREA = 0.0001
+local VERTEX_CACHE_SCALE = 1000
+local DEFAULT_MAX_SURFACE_TRIANGLES = 6000
+local DEFAULT_MAX_COLLISION_INPUT_TRIANGLES = 900
+
+local function colorFromValue(value, defaultColor)
+	if typeof(value) == "Color3" then
+		return value
+	end
+	if type(value) == "string" then
+		local hex = string.gsub(value, "#", "")
+		if #hex == 6 then
+			local r = tonumber(string.sub(hex, 1, 2), 16)
+			local g = tonumber(string.sub(hex, 3, 4), 16)
+			local b = tonumber(string.sub(hex, 5, 6), 16)
+			if r and g and b then
+				return Color3.fromRGB(r, g, b)
+			end
+		end
+	end
+	return defaultColor
+end
 
 local function newMeshState()
 	local ok, editableMeshOrErr = pcall(function()
@@ -37,6 +60,9 @@ local function newMeshState()
 	return {
 		mesh = editableMeshOrErr,
 		faces = 0,
+		skippedFaces = 0,
+		errors = {},
+		vertexIds = {},
 	}
 end
 
@@ -46,16 +72,81 @@ local function destroyEditableMesh(editableMesh)
 	end)
 end
 
-local function addVertex(state, position)
-	return state.mesh:AddVertex(position)
+local retainedEditableMeshes = {}
+
+local function retainEditableMesh(meshPart, editableMesh)
+	if not (meshPart and editableMesh) then
+		return
+	end
+
+	retainedEditableMeshes[meshPart] = editableMesh
+	meshPart.Destroying:Connect(function()
+		local retainedMesh = retainedEditableMeshes[meshPart]
+		retainedEditableMeshes[meshPart] = nil
+		if retainedMesh then
+			destroyEditableMesh(retainedMesh)
+		end
+	end)
+end
+
+local function recordMeshError(state, message)
+	state.skippedFaces += 1
+	if #state.errors < 6 then
+		table.insert(state.errors, tostring(message))
+	end
+end
+
+local function quantizeCoordinate(value)
+	if value >= 0 then
+		return math.floor(value * VERTEX_CACHE_SCALE + 0.5)
+	end
+	return math.ceil(value * VERTEX_CACHE_SCALE - 0.5)
+end
+
+local function vertexKey(position)
+	return tostring(quantizeCoordinate(position.X))
+		.. ":"
+		.. tostring(quantizeCoordinate(position.Y))
+		.. ":"
+		.. tostring(quantizeCoordinate(position.Z))
+end
+
+local function getVertexId(state, position)
+	local key = vertexKey(position)
+	local vertexId = state.vertexIds[key]
+	if vertexId then
+		return vertexId
+	end
+
+	vertexId = state.mesh:AddVertex(position)
+	state.vertexIds[key] = vertexId
+	return vertexId
 end
 
 local function addTriangle(state, a, b, c)
-	local va = addVertex(state, a)
-	local vb = addVertex(state, b)
-	local vc = addVertex(state, c)
-	state.mesh:AddTriangle(va, vb, vc)
+	if not (typeof(a) == "Vector3" and typeof(b) == "Vector3" and typeof(c) == "Vector3") then
+		recordMeshError(state, "triangle had non-Vector3 points")
+		return false
+	end
+
+	if (b - a):Cross(c - a).Magnitude <= MIN_TRIANGLE_AREA then
+		recordMeshError(state, "triangle was degenerate")
+		return false
+	end
+
+	local ok, err = pcall(function()
+		local va = getVertexId(state, a)
+		local vb = getVertexId(state, b)
+		local vc = getVertexId(state, c)
+		state.mesh:AddTriangle(va, vb, vc)
+	end)
+	if not ok then
+		recordMeshError(state, err)
+		return false
+	end
+
 	state.faces += 1
+	return true
 end
 
 local function addQuad(state, a, b, c, d)
@@ -64,74 +155,6 @@ local function addQuad(state, a, b, c, d)
 end
 
 local applyMeshPartOptions
-
-local function configurePart(part, options, triangleCount)
-	options = options or {}
-	applyMeshPartOptions(part, options, triangleCount)
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
-	part.CastShadow = options.castShadow == true
-	return part
-end
-
-local function addTriangleWedges(parent, name, a, b, c, options)
-	options = options or {}
-	local ab = b - a
-	local ac = c - a
-	local bc = c - b
-	local abd = ab:Dot(ab)
-	local acd = ac:Dot(ac)
-	local bcd = bc:Dot(bc)
-
-	if abd > acd and abd > bcd then
-		c, a = a, c
-	elseif acd > bcd and acd > abd then
-		a, b = b, a
-	end
-
-	ab = b - a
-	ac = c - a
-	bc = c - b
-	if ab.Magnitude <= 0.001 or ac.Magnitude <= 0.001 or bc.Magnitude <= 0.001 then
-		return {}
-	end
-
-	local normal = ac:Cross(ab)
-	if normal.Magnitude <= 0.001 then
-		return {}
-	end
-
-	local right = normal.Unit
-	local up = bc:Cross(right)
-	if up.Magnitude <= 0.001 then
-		return {}
-	end
-	up = up.Unit
-	local back = bc.Unit
-	local height = math.max(math.abs(ab:Dot(up)), MIN_PART_DIMENSION)
-	local depthA = math.max(math.abs(ab:Dot(back)), MIN_PART_DIMENSION)
-	local depthB = math.max(math.abs(ac:Dot(back)), MIN_PART_DIMENSION)
-	local thickness = math.max(tonumber(options.thickness) or 0.05, 0.01)
-	local parts = {}
-
-	local wedgeA = Instance.new("WedgePart")
-	wedgeA.Name = name .. "_A"
-	wedgeA.Size = Vector3.new(thickness, height, depthA)
-	wedgeA.CFrame = CFrame.fromMatrix((a + b) * 0.5, right, up, back)
-	configurePart(wedgeA, options, 1)
-	wedgeA.Parent = parent
-	table.insert(parts, wedgeA)
-
-	local wedgeB = Instance.new("WedgePart")
-	wedgeB.Name = name .. "_B"
-	wedgeB.Size = Vector3.new(thickness, height, depthB)
-	wedgeB.CFrame = CFrame.fromMatrix((a + c) * 0.5, -right, up, -back)
-	configurePart(wedgeB, options, 1)
-	wedgeB.Parent = parent
-	table.insert(parts, wedgeB)
-
-	return parts
-end
 
 local function contentFromAssetId(assetId)
 	local numericAssetId = tonumber(assetId)
@@ -144,7 +167,7 @@ local function contentFromAssetId(assetId)
 			return Content.fromAssetId(numericAssetId)
 		end)
 		if ok and contentOrErr then
-			return contentOrErr
+			return contentOrErr, nil
 		end
 	end
 
@@ -152,9 +175,19 @@ local function contentFromAssetId(assetId)
 		return Content.fromUri("rbxassetid://" .. tostring(numericAssetId))
 	end)
 	if ok and contentOrErr then
-		return contentOrErr
+		return contentOrErr, nil
 	end
 	return nil, tostring(contentOrErr)
+end
+
+local function createLiveMeshContent(editableMesh)
+	local okObjectContent, objectContentOrErr = pcall(function()
+		return Content.fromObject(editableMesh)
+	end)
+	if not okObjectContent or not objectContentOrErr then
+		return nil, "Mesh object content creation failed: " .. tostring(objectContentOrErr)
+	end
+	return objectContentOrErr, nil
 end
 
 function applyMeshPartOptions(meshPart, options, triangleCount)
@@ -171,7 +204,7 @@ function applyMeshPartOptions(meshPart, options, triangleCount)
 		meshPart.DoubleSided = true
 	end)
 	pcall(function()
-		meshPart.CollisionFidelity = Enum.CollisionFidelity.PreciseConvexDecomposition
+		meshPart.CollisionFidelity = options.collisionFidelity or Enum.CollisionFidelity.Default
 	end)
 	meshPart:SetAttribute("GeneratedBy", options.generatedBy or "Cab87RoadGraph")
 	if triangleCount then
@@ -186,30 +219,21 @@ function applyMeshPartOptions(meshPart, options, triangleCount)
 end
 
 local function createMeshPartFromContent(meshContent, parent, name, options, triangleCount)
-	local okPart, sourceMeshPartOrErr = pcall(function()
-		return AssetService:CreateMeshPartAsync(meshContent)
+	options = options or {}
+	local createOptions = {
+		CollisionFidelity = options.collisionFidelity or Enum.CollisionFidelity.Default,
+		RenderFidelity = options.renderFidelity or Enum.RenderFidelity.Automatic,
+	}
+
+	local okPart, meshPartOrErr = pcall(function()
+		return AssetService:CreateMeshPartAsync(meshContent, createOptions)
 	end)
-	if not okPart or not sourceMeshPartOrErr then
-		return nil, tostring(sourceMeshPartOrErr)
+	if not okPart or not meshPartOrErr then
+		return nil, tostring(meshPartOrErr)
 	end
 
-	local sourceMeshPart = sourceMeshPartOrErr
-	local meshPart = Instance.new("MeshPart")
+	local meshPart = meshPartOrErr
 	meshPart.Name = name
-	meshPart.Size = sourceMeshPart.Size
-	meshPart.CFrame = sourceMeshPart.CFrame
-	pcall(function()
-		meshPart.PivotOffset = sourceMeshPart.PivotOffset
-	end)
-	local okApply, applyErr = pcall(function()
-		meshPart:ApplyMesh(sourceMeshPart)
-	end)
-	sourceMeshPart:Destroy()
-	if not okApply then
-		meshPart:Destroy()
-		return nil, tostring(applyErr)
-	end
-
 	applyMeshPartOptions(meshPart, options, triangleCount)
 	meshPart.Parent = parent
 	return meshPart, nil
@@ -218,21 +242,53 @@ end
 local function createMeshPartFromState(state, parent, name, options)
 	options = options or {}
 	if state.faces == 0 then
-		return nil, "No mesh faces were generated"
-	end
-
-	local okContent, meshContentOrErr = pcall(function()
-		return Content.fromObject(state.mesh)
-	end)
-	if not okContent or not meshContentOrErr then
+		local detail = if #state.errors > 0 then ": " .. table.concat(state.errors, " | ") else ""
 		destroyEditableMesh(state.mesh)
-		return nil, "Mesh content creation failed: " .. tostring(meshContentOrErr)
+		return nil, "No mesh faces were generated" .. detail
 	end
 
-	local meshContent = meshContentOrErr
+	local meshContent, contentErr = createLiveMeshContent(state.mesh)
+	if not meshContent then
+		destroyEditableMesh(state.mesh)
+		return nil, contentErr
+	end
+
 	local meshPart, err = createMeshPartFromContent(meshContent, parent, name, options, state.faces)
+	if meshPart then
+		retainEditableMesh(meshPart, state.mesh)
+		if state.skippedFaces > 0 then
+			meshPart:SetAttribute("SkippedTriangleCount", state.skippedFaces)
+			if #state.errors > 0 then
+				meshPart:SetAttribute("SkippedTriangleReason", table.concat(state.errors, " | "))
+			end
+		end
+		meshPart:SetAttribute("MeshContentMode", "liveEditableObject")
+		return meshPart, nil
+	end
+
 	destroyEditableMesh(state.mesh)
+	return nil, err
+end
+
+function RoadMeshBuilder.createMeshPartFromAssetId(parent, name, assetId, options)
+	local meshContent, contentErr = contentFromAssetId(assetId)
+	if not meshContent then
+		return nil, contentErr
+	end
+
+	local meshPart, err = createMeshPartFromContent(meshContent, parent, name, options, options and options.triangleCount)
+	if meshPart then
+		meshPart:SetAttribute("MeshAssetId", tonumber(assetId) or tostring(assetId))
+		meshPart:SetAttribute("MeshContentMode", "asset")
+	end
 	return meshPart, err
+end
+
+function RoadMeshBuilder.destroyState(state)
+	if state and state.mesh then
+		destroyEditableMesh(state.mesh)
+		state.mesh = nil
+	end
 end
 
 function RoadMeshBuilder.createSurfaceState(triangles)
@@ -291,7 +347,9 @@ function RoadMeshBuilder.createSurfaceMesh(parent, name, triangles, options)
 		return nil, err
 	end
 
-	return createMeshPartFromState(state, parent, name, options)
+	local surfaceOptions = table.clone(options or {})
+	surfaceOptions.collisionFidelity = surfaceOptions.collisionFidelity or Enum.CollisionFidelity.Box
+	return createMeshPartFromState(state, parent, name, surfaceOptions)
 end
 
 function RoadMeshBuilder.createCollisionMesh(parent, name, triangles, options)
@@ -308,33 +366,9 @@ function RoadMeshBuilder.createCollisionMesh(parent, name, triangles, options)
 	collisionOptions.transparency = 1
 	collisionOptions.castShadow = false
 	collisionOptions.driveSurface = true
+	collisionOptions.collisionFidelity = collisionOptions.collisionFidelity
+		or Enum.CollisionFidelity.PreciseConvexDecomposition
 	return createMeshPartFromState(state, parent, name, collisionOptions)
-end
-
-function RoadMeshBuilder.createMeshPartFromAssetId(parent, name, assetId, options)
-	local content, err = contentFromAssetId(assetId)
-	if not content then
-		return nil, err
-	end
-
-	return createMeshPartFromContent(content, parent, name, options, options and options.triangleCount)
-end
-
-function RoadMeshBuilder.createPrimitiveTriangleParts(parent, namePrefix, triangles, options)
-	options = options or {}
-	local parts = {}
-	for index, triangle in ipairs(triangles or {}) do
-		local a = triangle[1]
-		local b = triangle[2]
-		local c = triangle[3]
-		if a and b and c then
-			local triangleParts = addTriangleWedges(parent, string.format("%s_%04d", namePrefix, index), a, b, c, options)
-			for _, part in ipairs(triangleParts) do
-				table.insert(parts, part)
-			end
-		end
-	end
-	return parts
 end
 
 local function recreateFolder(parent, name)
@@ -385,40 +419,46 @@ local function buildSurfacePair(meshParent, collisionParent, key, triangles, opt
 	return visiblePart, collisionPart, nil
 end
 
-local function buildPrimitiveSurfacePair(meshParent, collisionParent, key, triangles, options)
-	local style = DEFAULT_SURFACES[key]
-	if not style or #(triangles or {}) == 0 then
-		return {}, {}, nil
+local function getPolygonFillGroups(meshData)
+	return meshData.polygonFills or meshData.polygonTriangles or {}
+end
+
+local function polygonFillName(prefix, fill, index)
+	local id = tostring(fill.id or index)
+	id = string.gsub(id, "[^%w_%-]", "_")
+	return string.format("%s_%03d_%s", prefix, index, id)
+end
+
+local function buildPolygonFillSurfaceMeshes(meshParent, fillGroups, options)
+	options = options or {}
+	local parts = {}
+	local errors = {}
+	local prefix = options.namePrefix or "PolygonFillSurface"
+
+	for index, fill in ipairs(fillGroups or {}) do
+		local triangles = fill.triangles or {}
+		if #triangles > 0 then
+			local part, err = RoadMeshBuilder.createSurfaceMesh(meshParent, polygonFillName(prefix, fill, index), triangles, {
+				color = colorFromValue(fill.color, options.color or DEFAULT_POLYGON_FILL_COLOR),
+				material = options.material or DEFAULT_POLYGON_FILL_MATERIAL,
+				surfaceType = options.surfaceType or "polygonFill",
+				generatedBy = options.generatedBy,
+				canCollide = false,
+				canQuery = false,
+				canTouch = false,
+				castShadow = false,
+				transparency = options.transparency,
+			})
+			if part then
+				part:SetAttribute("PolygonFillId", tostring(fill.id or index))
+				table.insert(parts, part)
+			elseif err then
+				table.insert(errors, string.format("polygonFill[%s]: %s", tostring(fill.id or index), tostring(err)))
+			end
+		end
 	end
 
-	local surfaceType = string.gsub(key, "s$", "")
-	local visibleParts = RoadMeshBuilder.createPrimitiveTriangleParts(meshParent, style.name, triangles, {
-		color = style.color,
-		material = style.material,
-		surfaceType = surfaceType,
-		generatedBy = options.generatedBy,
-		canCollide = false,
-		canQuery = false,
-		canTouch = false,
-		castShadow = false,
-		thickness = options.visualThickness or 0.04,
-	})
-
-	local collisionParts = RoadMeshBuilder.createPrimitiveTriangleParts(collisionParent, style.collisionName, triangles, {
-		color = style.color,
-		material = style.material,
-		surfaceType = surfaceType,
-		generatedBy = options.generatedBy,
-		canCollide = true,
-		canQuery = true,
-		canTouch = false,
-		transparency = 1,
-		castShadow = false,
-		driveSurface = true,
-		thickness = options.collisionThickness or 0.2,
-	})
-
-	return visibleParts, collisionParts, nil
+	return parts, if #errors > 0 then table.concat(errors, " | ") else nil
 end
 
 local function triangleCenter(triangle)
@@ -468,6 +508,27 @@ local function bucketTrianglesByCenter(triangles, chunkSize)
 	return buckets, keys
 end
 
+local function triangleBatches(triangles, maxTriangles)
+	local batches = {}
+	maxTriangles = math.max(math.floor(tonumber(maxTriangles) or #triangles), 1)
+	for startIndex = 1, #triangles, maxTriangles do
+		local batch = {}
+		local endIndex = math.min(startIndex + maxTriangles - 1, #triangles)
+		for index = startIndex, endIndex do
+			table.insert(batch, triangles[index])
+		end
+		table.insert(batches, batch)
+	end
+	return batches
+end
+
+local function chunkName(baseName, chunkIndex, batchIndex)
+	if batchIndex and batchIndex > 1 then
+		return string.format("%s_%03d_%02d", baseName, chunkIndex, batchIndex)
+	end
+	return string.format("%s_%03d", baseName, chunkIndex)
+end
+
 local function buildChunkedSurface(meshParent, key, triangles, options)
 	local style = DEFAULT_SURFACES[key]
 	if not style or #(triangles or {}) == 0 then
@@ -476,34 +537,41 @@ local function buildChunkedSurface(meshParent, key, triangles, options)
 
 	local surfaceType = string.gsub(key, "s$", "")
 	local chunkSize = math.max(tonumber(options.chunkSize) or DEFAULT_CHUNK_SIZE, 128)
+	local maxTriangles = math.max(
+		math.floor(tonumber(options.maxSurfaceTriangles) or DEFAULT_MAX_SURFACE_TRIANGLES),
+		1
+	)
 	local buckets, keys = bucketTrianglesByCenter(triangles, chunkSize)
 	local parts = {}
 	local errors = {}
 
 	for chunkIndex, bucketKey in ipairs(keys) do
 		local bucket = buckets[bucketKey]
-		local meshPart, err = RoadMeshBuilder.createSurfaceMesh(
-			meshParent,
-			string.format("%s_%03d", style.name, chunkIndex),
-			bucket.triangles,
-			{
-				color = options.color or style.color,
-				material = options.material or style.material,
-				surfaceType = surfaceType,
-				generatedBy = options.generatedBy,
-				canCollide = false,
-				canQuery = false,
-				canTouch = false,
-				castShadow = false,
-				transparency = options.transparency,
-			}
-		)
-		if meshPart then
-			meshPart:SetAttribute("MeshChunkKey", bucketKey)
-			meshPart:SetAttribute("MeshChunkSize", chunkSize)
-			table.insert(parts, meshPart)
-		elseif err then
-			table.insert(errors, string.format("%s[%s]: %s", key, bucketKey, tostring(err)))
+		for batchIndex, batch in ipairs(triangleBatches(bucket.triangles, maxTriangles)) do
+			local meshPart, err = RoadMeshBuilder.createSurfaceMesh(
+				meshParent,
+				chunkName(style.name, chunkIndex, batchIndex),
+				batch,
+				{
+					color = options.color or style.color,
+					material = options.material or style.material,
+					surfaceType = surfaceType,
+					generatedBy = options.generatedBy,
+					canCollide = false,
+					canQuery = false,
+					canTouch = false,
+					castShadow = false,
+					transparency = options.transparency,
+				}
+			)
+			if meshPart then
+				meshPart:SetAttribute("MeshChunkKey", bucketKey)
+				meshPart:SetAttribute("MeshChunkSize", chunkSize)
+				meshPart:SetAttribute("MeshBatchIndex", batchIndex)
+				table.insert(parts, meshPart)
+			elseif err then
+				table.insert(errors, string.format("%s[%s/%d]: %s", key, bucketKey, batchIndex, tostring(err)))
+			end
 		end
 	end
 
@@ -511,6 +579,169 @@ local function buildChunkedSurface(meshParent, key, triangles, options)
 		return parts, table.concat(errors, " | ")
 	end
 	return parts, nil
+end
+
+local function buildChunkedCollision(collisionParent, key, triangles, options)
+	local style = DEFAULT_SURFACES[key]
+	if not style or #(triangles or {}) == 0 then
+		return {}, nil
+	end
+
+	local surfaceType = string.gsub(key, "s$", "")
+	local chunkSize = math.max(tonumber(options.chunkSize) or DEFAULT_CHUNK_SIZE, 128)
+	local maxTriangles = math.max(
+		math.floor(tonumber(options.maxCollisionInputTriangles) or DEFAULT_MAX_COLLISION_INPUT_TRIANGLES),
+		1
+	)
+	local buckets, keys = bucketTrianglesByCenter(triangles, chunkSize)
+	local parts = {}
+	local errors = {}
+
+	for chunkIndex, bucketKey in ipairs(keys) do
+		local bucket = buckets[bucketKey]
+		for batchIndex, batch in ipairs(triangleBatches(bucket.triangles, maxTriangles)) do
+			local collisionPart, err = RoadMeshBuilder.createCollisionMesh(
+				collisionParent,
+				chunkName(style.collisionName, chunkIndex, batchIndex),
+				batch,
+				{
+					color = style.color,
+					material = style.material,
+					surfaceType = surfaceType,
+					generatedBy = options.generatedBy,
+					thickness = options.collisionThickness,
+					surfaceOffset = options.collisionSurfaceOffset,
+				}
+			)
+			if collisionPart then
+				collisionPart:SetAttribute("MeshChunkKey", bucketKey)
+				collisionPart:SetAttribute("MeshChunkSize", chunkSize)
+				collisionPart:SetAttribute("MeshBatchIndex", batchIndex)
+				table.insert(parts, collisionPart)
+			elseif err then
+				table.insert(errors, string.format("%s collision[%s/%d]: %s", key, bucketKey, batchIndex, tostring(err)))
+			end
+		end
+	end
+
+	if #errors > 0 then
+		return parts, table.concat(errors, " | ")
+	end
+	return parts, nil
+end
+
+local function buildChunkedPolygonFillSurfaceMeshes(meshParent, fillGroups, options)
+	options = options or {}
+	local parts = {}
+	local errors = {}
+	local prefix = options.namePrefix or "PolygonFillSurface"
+	local maxTriangles = math.max(
+		math.floor(tonumber(options.maxSurfaceTriangles) or DEFAULT_MAX_SURFACE_TRIANGLES),
+		1
+	)
+
+	for fillIndex, fill in ipairs(fillGroups or {}) do
+		local triangles = fill.triangles or {}
+		if #triangles > 0 then
+			for batchIndex, batch in ipairs(triangleBatches(triangles, maxTriangles)) do
+				local part, err = RoadMeshBuilder.createSurfaceMesh(
+					meshParent,
+					chunkName(polygonFillName(prefix, fill, fillIndex), fillIndex, batchIndex),
+					batch,
+					{
+						color = colorFromValue(fill.color, options.color or DEFAULT_POLYGON_FILL_COLOR),
+						material = options.material or DEFAULT_POLYGON_FILL_MATERIAL,
+						surfaceType = options.surfaceType or "polygonFill",
+						generatedBy = options.generatedBy,
+						canCollide = false,
+						canQuery = false,
+						canTouch = false,
+						castShadow = false,
+						transparency = options.transparency,
+					}
+				)
+				if part then
+					part:SetAttribute("PolygonFillId", tostring(fill.id or fillIndex))
+					part:SetAttribute("MeshBatchIndex", batchIndex)
+					table.insert(parts, part)
+				elseif err then
+					table.insert(
+						errors,
+						string.format("polygonFill[%s/%d]: %s", tostring(fill.id or fillIndex), batchIndex, tostring(err))
+					)
+				end
+			end
+		end
+	end
+
+	if #errors > 0 then
+		return parts, table.concat(errors, " | ")
+	end
+	return parts, nil
+end
+
+local function buildChunkedPolygonFillCollisionMeshes(collisionParent, fillGroups, options)
+	options = options or {}
+	local parts = {}
+	local errors = {}
+	local prefix = options.collisionNamePrefix or "PolygonFillCollision"
+	local maxTriangles = math.max(
+		math.floor(tonumber(options.maxCollisionInputTriangles) or DEFAULT_MAX_COLLISION_INPUT_TRIANGLES),
+		1
+	)
+
+	for fillIndex, fill in ipairs(fillGroups or {}) do
+		local triangles = fill.triangles or {}
+		if #triangles > 0 then
+			for batchIndex, batch in ipairs(triangleBatches(triangles, maxTriangles)) do
+				local part, err = RoadMeshBuilder.createCollisionMesh(
+					collisionParent,
+					chunkName(polygonFillName(prefix, fill, fillIndex), fillIndex, batchIndex),
+					batch,
+					{
+						color = colorFromValue(fill.color, options.color or DEFAULT_POLYGON_FILL_COLOR),
+						material = options.material or DEFAULT_POLYGON_FILL_MATERIAL,
+						surfaceType = options.surfaceType or "polygonFill",
+						generatedBy = options.generatedBy,
+						thickness = options.collisionThickness,
+						surfaceOffset = options.collisionSurfaceOffset,
+					}
+				)
+				if part then
+					part:SetAttribute("PolygonFillId", tostring(fill.id or fillIndex))
+					part:SetAttribute("MeshBatchIndex", batchIndex)
+					table.insert(parts, part)
+				elseif err then
+					table.insert(
+						errors,
+						string.format("polygonFill collision[%s/%d]: %s", tostring(fill.id or fillIndex), batchIndex, tostring(err))
+					)
+				end
+			end
+		end
+	end
+
+	if #errors > 0 then
+		return parts, table.concat(errors, " | ")
+	end
+	return parts, nil
+end
+
+local function collectPolygonFillTriangles(fillGroups)
+	local triangles = {}
+	local firstFill = nil
+
+	for _, fill in ipairs(fillGroups or {}) do
+		local fillTriangles = fill.triangles or {}
+		if #fillTriangles > 0 and not firstFill then
+			firstFill = fill
+		end
+		for _, triangle in ipairs(fillTriangles) do
+			table.insert(triangles, triangle)
+		end
+	end
+
+	return triangles, firstFill
 end
 
 function RoadMeshBuilder.createClassifiedMeshes(parent, meshData, options)
@@ -544,11 +775,184 @@ function RoadMeshBuilder.createClassifiedMeshes(parent, meshData, options)
 		end
 	end
 
+	local fillParts, fillErr = buildPolygonFillSurfaceMeshes(meshFolder, getPolygonFillGroups(meshData), options)
+	if fillErr then
+		table.insert(result.errors, fillErr)
+	end
+	for _, part in ipairs(fillParts) do
+		table.insert(result.visibleParts, part)
+	end
+
+	if options.includePolygonFillCollision ~= false then
+		local fillCollisionParts, fillCollisionErr = buildChunkedPolygonFillCollisionMeshes(
+			collisionFolder,
+			getPolygonFillGroups(meshData),
+			options
+		)
+		if fillCollisionErr then
+			table.insert(result.errors, fillCollisionErr)
+		end
+		for _, part in ipairs(fillCollisionParts) do
+			table.insert(result.collisionParts, part)
+			table.insert(result.driveSurfaces, part)
+		end
+	end
+
 	if #result.visibleParts == 0 then
 		meshFolder:Destroy()
 	end
 	if #result.collisionParts == 0 then
 		collisionFolder:Destroy()
+	end
+
+	return result
+end
+
+function RoadMeshBuilder.createClassifiedCompactSurfaceMeshes(parent, meshData, options)
+	options = options or {}
+	local meshFolder = recreateFolder(parent, options.meshFolderName or "RoadGraphSurfaces")
+
+	local result = {
+		meshFolder = meshFolder,
+		visibleParts = {},
+		errors = {},
+	}
+
+	local surfaceSets = {
+		{ key = "roads", triangles = meshData.roadTriangles, surfaceType = "road" },
+		{ key = "sidewalks", triangles = meshData.sidewalkTriangles },
+		{ key = "crosswalks", triangles = meshData.crosswalkTriangles },
+	}
+
+	for _, set in ipairs(surfaceSets) do
+		local style = DEFAULT_SURFACES[set.key]
+		local triangles = set.triangles or {}
+		if style and #triangles > 0 then
+			local surfaceType = set.surfaceType or string.gsub(set.key, "s$", "")
+			local part, err = RoadMeshBuilder.createSurfaceMesh(meshFolder, style.name, triangles, {
+				color = style.color,
+				material = style.material,
+				surfaceType = surfaceType,
+				generatedBy = options.generatedBy,
+				canCollide = false,
+				canQuery = false,
+				canTouch = false,
+				castShadow = false,
+				transparency = options.transparency,
+			})
+			if part then
+				part:SetAttribute("MeshMode", "compactSurface")
+				if set.key == "roads" then
+					part:SetAttribute("RoadEdgeTriangles", #(meshData.roadEdgeTriangles or {}))
+					part:SetAttribute("RoadHubTriangles", #(meshData.roadHubTriangles or {}))
+				end
+				table.insert(result.visibleParts, part)
+			elseif err then
+				table.insert(result.errors, string.format("%s: %s", set.key, tostring(err)))
+			end
+		end
+	end
+
+	local fillTriangles, firstFill = collectPolygonFillTriangles(getPolygonFillGroups(meshData))
+	if #fillTriangles > 0 then
+		local part, err = RoadMeshBuilder.createSurfaceMesh(meshFolder, options.polygonFillName or "PolygonFillSurface", fillTriangles, {
+			color = colorFromValue(firstFill and firstFill.color, options.color or DEFAULT_POLYGON_FILL_COLOR),
+			material = options.material or DEFAULT_POLYGON_FILL_MATERIAL,
+			surfaceType = options.surfaceType or "polygonFill",
+			generatedBy = options.generatedBy,
+			canCollide = false,
+			canQuery = false,
+			canTouch = false,
+			castShadow = false,
+			transparency = options.transparency,
+		})
+		if part then
+			part:SetAttribute("MeshMode", "compactSurface")
+			part:SetAttribute("PolygonFillCount", #(getPolygonFillGroups(meshData) or {}))
+			table.insert(result.visibleParts, part)
+		elseif err then
+			table.insert(result.errors, "polygonFill: " .. tostring(err))
+		end
+	end
+
+	if #result.visibleParts == 0 then
+		meshFolder:Destroy()
+		result.meshFolder = nil
+	end
+
+	return result
+end
+
+function RoadMeshBuilder.createClassifiedChunkedMeshes(parent, meshData, options)
+	options = options or {}
+	local meshFolder = recreateFolder(parent, options.meshFolderName or "RoadGraphSurfaces")
+	local collisionFolder = recreateFolder(parent, options.collisionFolderName or "RoadGraphCollision")
+
+	local result = {
+		meshFolder = meshFolder,
+		collisionFolder = collisionFolder,
+		visibleParts = {},
+		collisionParts = {},
+		driveSurfaces = {},
+		errors = {},
+	}
+
+	local trianglesByKey = {
+		roads = meshData.roadTriangles,
+		sidewalks = meshData.sidewalkTriangles,
+		crosswalks = meshData.crosswalkTriangles,
+	}
+	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks" }
+
+	for _, key in ipairs(surfaceKeys) do
+		local visibleParts, visibleErr = buildChunkedSurface(meshFolder, key, trianglesByKey[key], options)
+		if visibleErr then
+			table.insert(result.errors, visibleErr)
+		end
+		for _, part in ipairs(visibleParts) do
+			table.insert(result.visibleParts, part)
+		end
+
+		local collisionParts, collisionErr = buildChunkedCollision(collisionFolder, key, trianglesByKey[key], options)
+		if collisionErr then
+			table.insert(result.errors, collisionErr)
+		end
+		for _, part in ipairs(collisionParts) do
+			table.insert(result.collisionParts, part)
+			table.insert(result.driveSurfaces, part)
+		end
+	end
+
+	if options.includePolygonFillCollision ~= false then
+		local fillCollisionParts, fillCollisionErr = buildChunkedPolygonFillCollisionMeshes(
+			collisionFolder,
+			getPolygonFillGroups(meshData),
+			options
+		)
+		if fillCollisionErr then
+			table.insert(result.errors, fillCollisionErr)
+		end
+		for _, part in ipairs(fillCollisionParts) do
+			table.insert(result.collisionParts, part)
+			table.insert(result.driveSurfaces, part)
+		end
+	end
+
+	local fillParts, fillErr = buildChunkedPolygonFillSurfaceMeshes(meshFolder, getPolygonFillGroups(meshData), options)
+	if fillErr then
+		table.insert(result.errors, fillErr)
+	end
+	for _, part in ipairs(fillParts) do
+		table.insert(result.visibleParts, part)
+	end
+
+	if #result.visibleParts == 0 then
+		meshFolder:Destroy()
+		result.meshFolder = nil
+	end
+	if #result.collisionParts == 0 then
+		collisionFolder:Destroy()
+		result.collisionFolder = nil
 	end
 
 	return result
@@ -581,6 +985,14 @@ function RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, meshData, 
 		end
 	end
 
+	local fillParts, fillErr = buildChunkedPolygonFillSurfaceMeshes(meshFolder, getPolygonFillGroups(meshData), options)
+	if fillErr then
+		table.insert(result.errors, fillErr)
+	end
+	for _, part in ipairs(fillParts) do
+		table.insert(result.visibleParts, part)
+	end
+
 	if #result.visibleParts == 0 then
 		meshFolder:Destroy()
 		result.meshFolder = nil
@@ -589,33 +1001,28 @@ function RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, meshData, 
 	return result
 end
 
-function RoadMeshBuilder.createClassifiedPrimitiveMeshes(parent, meshData, options)
+function RoadMeshBuilder.createClassifiedChunkedCollisionMeshes(parent, meshData, options)
 	options = options or {}
-	local meshFolder = recreateFolder(parent, options.meshFolderName or "RoadGraphBakedSurfaces")
-	local collisionFolder = recreateFolder(parent, options.collisionFolderName or "RoadGraphBakedCollision")
+	local collisionFolder = recreateFolder(parent, options.collisionFolderName or "RoadGraphCollision")
 
 	local result = {
-		meshFolder = meshFolder,
 		collisionFolder = collisionFolder,
-		visibleParts = {},
 		collisionParts = {},
 		driveSurfaces = {},
 		errors = {},
 	}
 
-	local surfaceSets = {
+	local trianglesByKey = {
 		roads = meshData.roadTriangles,
 		sidewalks = meshData.sidewalkTriangles,
 		crosswalks = meshData.crosswalkTriangles,
 	}
+	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks" }
 
-	for key, triangles in pairs(surfaceSets) do
-		local visibleParts, collisionParts, err = buildPrimitiveSurfacePair(meshFolder, collisionFolder, key, triangles, options)
+	for _, key in ipairs(surfaceKeys) do
+		local collisionParts, err = buildChunkedCollision(collisionFolder, key, trianglesByKey[key], options)
 		if err then
-			table.insert(result.errors, string.format("%s: %s", key, tostring(err)))
-		end
-		for _, part in ipairs(visibleParts) do
-			table.insert(result.visibleParts, part)
+			table.insert(result.errors, err)
 		end
 		for _, part in ipairs(collisionParts) do
 			table.insert(result.collisionParts, part)
@@ -623,14 +1030,31 @@ function RoadMeshBuilder.createClassifiedPrimitiveMeshes(parent, meshData, optio
 		end
 	end
 
-	if #result.visibleParts == 0 then
-		meshFolder:Destroy()
+	if options.includePolygonFillCollision ~= false then
+		local fillCollisionParts, fillCollisionErr = buildChunkedPolygonFillCollisionMeshes(
+			collisionFolder,
+			getPolygonFillGroups(meshData),
+			options
+		)
+		if fillCollisionErr then
+			table.insert(result.errors, fillCollisionErr)
+		end
+		for _, part in ipairs(fillCollisionParts) do
+			table.insert(result.collisionParts, part)
+			table.insert(result.driveSurfaces, part)
+		end
 	end
+
 	if #result.collisionParts == 0 then
 		collisionFolder:Destroy()
+		result.collisionFolder = nil
 	end
 
 	return result
+end
+
+function RoadMeshBuilder.createPolygonFillSurfaceMeshes(parent, meshData, options)
+	return buildPolygonFillSurfaceMeshes(parent, getPolygonFillGroups(meshData), options)
 end
 
 return RoadMeshBuilder

@@ -2,7 +2,6 @@
 -- Install to:
 --   %LOCALAPPDATA%\Roblox\Plugins\Cab87RoadGraphBuilder.plugin.lua
 
-local AssetService = game:GetService("AssetService")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Selection = game:GetService("Selection")
@@ -35,82 +34,20 @@ local IMPORT_POINT_SCALE_SETTING = "cab87_road_graph_import_point_scale"
 local IMPORT_WIDTH_SCALE_SETTING = "cab87_road_graph_import_width_scale"
 local MAP_ID_SETTING = "cab87_road_graph_map_id"
 local DEFAULT_MAP_ID = "cab87_map"
+local DEFAULT_IMPORT_PLANE_Y = 0.52
 local DEFAULT_IMPORT_SCALE = 1
 local MIN_IMPORT_SCALE = 0.1
 local MAX_IMPORT_SCALE = 4
-local IMPORT_SCALE_STEP = 0.05
+local IMPORT_SCALE_STEP = 0.01
+local BAKE_CHUNK_SIZE_STUDS = 768
+local BAKE_MAX_SURFACE_TRIANGLES = 6000
+local BAKE_MAX_COLLISION_INPUT_TRIANGLES = 900
 
 local MARKER_DESCRIPTIONS = {
 	CabCompany = "Cab spawn marker",
 	CabRefuel = "Free refuel marker",
 	CabService = "Cab recover and garage/shop marker",
 	PlayerSpawn = "Player spawn marker",
-}
-
-local BAKE_SPECS = {
-	{
-		key = "roadSurface",
-		assetPrefix = "RoadSurface",
-		triangleSet = "roadTriangles",
-		partName = "RoadSurface",
-		folder = "surface",
-		surfaceType = "road",
-		color = Color3.fromRGB(28, 28, 32),
-		material = Enum.Material.Asphalt,
-	},
-	{
-		key = "sidewalkSurface",
-		assetPrefix = "SidewalkSurface",
-		triangleSet = "sidewalkTriangles",
-		partName = "SidewalkSurface",
-		folder = "surface",
-		surfaceType = "sidewalk",
-		color = Color3.fromRGB(116, 116, 108),
-		material = Enum.Material.Concrete,
-	},
-	{
-		key = "crosswalkSurface",
-		assetPrefix = "CrosswalkSurface",
-		triangleSet = "crosswalkTriangles",
-		partName = "CrosswalkSurface",
-		folder = "surface",
-		surfaceType = "crosswalk",
-		color = Color3.fromRGB(231, 226, 204),
-		material = Enum.Material.SmoothPlastic,
-	},
-	{
-		key = "roadCollision",
-		assetPrefix = "RoadCollision",
-		triangleSet = "roadTriangles",
-		partName = "RoadCollision",
-		folder = "collision",
-		surfaceType = "road",
-		color = Color3.fromRGB(28, 28, 32),
-		material = Enum.Material.Asphalt,
-		collision = true,
-	},
-	{
-		key = "sidewalkCollision",
-		assetPrefix = "SidewalkCollision",
-		triangleSet = "sidewalkTriangles",
-		partName = "SidewalkCollision",
-		folder = "collision",
-		surfaceType = "sidewalk",
-		color = Color3.fromRGB(116, 116, 108),
-		material = Enum.Material.Concrete,
-		collision = true,
-	},
-	{
-		key = "crosswalkCollision",
-		assetPrefix = "CrosswalkCollision",
-		triangleSet = "crosswalkTriangles",
-		partName = "CrosswalkCollision",
-		folder = "collision",
-		surfaceType = "crosswalk",
-		color = Color3.fromRGB(231, 226, 204),
-		material = Enum.Material.SmoothPlastic,
-		collision = true,
-	},
 }
 
 local toolbar = plugin:CreateToolbar("Cab87")
@@ -316,6 +253,7 @@ local function makeSliderRow(labelText, defaultValue)
 	track.Size = UDim2.new(1, -106, 0, 8)
 	track.BackgroundColor3 = Color3.fromRGB(35, 39, 46)
 	track.BorderSizePixel = 0
+	track.Active = true
 	track.Parent = row
 
 	local trackCorner = Instance.new("UICorner")
@@ -337,6 +275,8 @@ local function makeSliderRow(labelText, defaultValue)
 	knob.Size = UDim2.fromOffset(16, 16)
 	knob.BackgroundColor3 = Color3.fromRGB(255, 230, 160)
 	knob.BorderSizePixel = 0
+	knob.Active = true
+	knob.AutoButtonColor = false
 	knob.Text = ""
 	knob.Parent = track
 
@@ -360,7 +300,13 @@ local function makeSliderRow(labelText, defaultValue)
 	end
 
 	local function setFromInputPosition(inputObject)
-		local width = math.max(track.AbsoluteSize.X, 1)
+		local width = track.AbsoluteSize.X
+		if width <= 1 then
+			width = math.max(row.AbsoluteSize.X - 106, 0)
+		end
+		if width <= 1 then
+			return
+		end
 		local ratio = math.clamp((inputObject.Position.X - track.AbsolutePosition.X) / width, 0, 1)
 		setValue(MIN_IMPORT_SCALE + ratio * (MAX_IMPORT_SCALE - MIN_IMPORT_SCALE))
 	end
@@ -402,7 +348,7 @@ local function makeSliderRow(labelText, defaultValue)
 	return slider
 end
 
-local importPlaneY = tonumber(plugin:GetSetting(IMPORT_PLANE_Y_SETTING)) or 0
+local importPlaneY = tonumber(plugin:GetSetting(IMPORT_PLANE_Y_SETTING)) or DEFAULT_IMPORT_PLANE_Y
 local importPointScale = sanitizeImportScale(plugin:GetSetting(IMPORT_POINT_SCALE_SETTING))
 local importWidthScale = sanitizeImportScale(plugin:GetSetting(IMPORT_WIDTH_SCALE_SETTING))
 local mapId = tostring(plugin:GetSetting(MAP_ID_SETTING) or DEFAULT_MAP_ID)
@@ -424,7 +370,14 @@ local selectCabServiceButton = makeButton("Select Service")
 local selectPlayerSpawnButton = makeButton("Select Player Spawn")
 
 local function setStatus(message)
-	status.Text = tostring(message)
+	local text = tostring(message)
+	status.Text = text
+	local lower = string.lower(text)
+	if string.find(lower, "fail", 1, true) or string.find(lower, "error", 1, true) or string.find(lower, "missing", 1, true) then
+		warn("[cab87 road graph builder] " .. text)
+	else
+		print("[cab87 road graph builder] " .. text)
+	end
 end
 
 local function stripUtf8Bom(text)
@@ -447,7 +400,29 @@ local function getSharedModules()
 		return nil, nil, nil, "Shared road graph modules are missing. Start Rojo sync or rebuild the place from source."
 	end
 
-	return require(graphDataModule), require(mesherModule), require(meshBuilderModule), nil
+	local function requireFresh(moduleScript)
+		local clone = moduleScript:Clone()
+		clone.Name = moduleScript.Name .. "_PluginFreshRequire"
+		clone.Parent = moduleScript.Parent
+		local ok, result = pcall(require, clone)
+		clone:Destroy()
+		return ok, result
+	end
+
+	local okGraphData, graphDataOrErr = requireFresh(graphDataModule)
+	if not okGraphData then
+		return nil, nil, nil, "RoadGraphData failed to load: " .. tostring(graphDataOrErr)
+	end
+	local okMesher, mesherOrErr = requireFresh(mesherModule)
+	if not okMesher then
+		return nil, nil, nil, "RoadGraphMesher failed to load: " .. tostring(mesherOrErr)
+	end
+	local okMeshBuilder, meshBuilderOrErr = requireFresh(meshBuilderModule)
+	if not okMeshBuilder then
+		return nil, nil, nil, "RoadMeshBuilder failed to load: " .. tostring(meshBuilderOrErr)
+	end
+
+	return graphDataOrErr, mesherOrErr, meshBuilderOrErr, nil
 end
 
 local function getOrCreateRoot()
@@ -510,6 +485,37 @@ local function refreshImportPlane()
 	return true
 end
 
+local function findDefaultBaseplate()
+	local baseplate = Workspace:FindFirstChild("Baseplate")
+	if baseplate and baseplate:IsA("BasePart") and baseplate.Size.X >= 512 and baseplate.Size.Z >= 512 then
+		return baseplate
+	end
+	return nil
+end
+
+local function keepGraphAboveDefaultBaseplate()
+	if math.abs(importPlaneY) > 0.001 or not findDefaultBaseplate() then
+		return
+	end
+
+	importPlaneY = DEFAULT_IMPORT_PLANE_Y
+	importPlaneInput.Text = tostring(importPlaneY)
+	plugin:SetSetting(IMPORT_PLANE_Y_SETTING, importPlaneY)
+end
+
+local function hideDefaultBaseplate()
+	local baseplate = findDefaultBaseplate()
+	if not baseplate then
+		return
+	end
+
+	baseplate:SetAttribute("Cab87HiddenByRoadGraphBuilder", true)
+	baseplate.Transparency = 1
+	baseplate.CanCollide = false
+	baseplate.CanTouch = false
+	baseplate.CanQuery = false
+end
+
 local function refreshImportScales()
 	importPointScale = sanitizeImportScale(importPointScaleSlider.getValue())
 	importWidthScale = sanitizeImportScale(importWidthScaleSlider.getValue())
@@ -550,6 +556,13 @@ local function clearChild(root, name)
 	end
 end
 
+local function createFolder(parent, name)
+	local folder = Instance.new("Folder")
+	folder.Name = name
+	folder.Parent = parent
+	return folder
+end
+
 local function getOrCreateAssetsFolder(root)
 	local assets = root:FindFirstChild(ASSETS_NAME)
 	if assets and not assets:IsA("Folder") then
@@ -588,13 +601,6 @@ local function clearPreviewMeshes(root)
 	clearChild(root, ROAD_GRAPH_COLLISION_NAME)
 end
 
-local function createFolder(parent, name)
-	local folder = Instance.new("Folder")
-	folder.Name = name
-	folder.Parent = parent
-	return folder
-end
-
 local function setBakeScaleAttributes(instance)
 	if not instance then
 		return
@@ -603,227 +609,12 @@ local function setBakeScaleAttributes(instance)
 	instance:SetAttribute("WidthScale", importWidthScale)
 end
 
-local function assetAttr(spec, suffix)
-	return spec.assetPrefix .. suffix
-end
-
-local function clearAssetManifestEntry(assets, spec)
-	assets:SetAttribute(assetAttr(spec, "AssetId"), nil)
-	assets:SetAttribute(assetAttr(spec, "Version"), nil)
-	assets:SetAttribute(assetAttr(spec, "TriangleCount"), nil)
-	assets:SetAttribute(assetAttr(spec, "BakeMode"), nil)
-end
-
-local function isAssetUploadUnavailable(message)
-	local text = string.lower(tostring(message or ""))
-	return string.find(text, "not available", 1, true) ~= nil
-		or string.find(text, "createassetasync", 1, true) ~= nil
-			and string.find(text, "not available", 1, true) ~= nil
-end
-
-local function getCreatorRequestParameters(name, description, includeName)
-	local request = {}
-	local creatorId = tonumber(game.CreatorId)
-	if creatorId and creatorId > 0 then
-		request.CreatorId = creatorId
-		if game.CreatorType == Enum.CreatorType.Group then
-			request.CreatorType = Enum.AssetCreatorType.Group
-		else
-			request.CreatorType = Enum.AssetCreatorType.User
-		end
+local function countPolygonFillTriangles(meshData)
+	local count = 0
+	for _, fill in ipairs(meshData.polygonFills or meshData.polygonTriangles or {}) do
+		count += #(fill.triangles or {})
 	end
-	if includeName then
-		request.Name = name
-		request.Description = description
-	end
-	return request
-end
-
-local function uploadOrUpdateMeshAsset(assets, spec, editableMesh, triangleCount)
-	local existingAssetId = tonumber(assets:GetAttribute(assetAttr(spec, "AssetId")))
-	local assetName = string.format("cab87_%s_%s", mapId, spec.assetPrefix)
-	local description = string.format("Cab87 road graph mesh %s for map %s", spec.assetPrefix, mapId)
-
-	if existingAssetId then
-		local request = getCreatorRequestParameters(assetName, description, false)
-		local ok, result, versionOrErr = pcall(function()
-			return AssetService:CreateAssetVersionAsync(editableMesh, Enum.AssetType.Mesh, existingAssetId, request)
-		end)
-		if not ok then
-			return nil, "CreateAssetVersionAsync failed: " .. tostring(result)
-		end
-		if result ~= Enum.CreateAssetResult.Success then
-			return nil, string.format("asset update failed: %s %s", tostring(result), tostring(versionOrErr))
-		end
-
-		assets:SetAttribute(assetAttr(spec, "Version"), tonumber(versionOrErr) or 0)
-		assets:SetAttribute(assetAttr(spec, "TriangleCount"), triangleCount)
-		assets:SetAttribute(assetAttr(spec, "BakeMode"), "updated")
-		return existingAssetId, "updated", versionOrErr
-	end
-
-	local request = getCreatorRequestParameters(assetName, description, true)
-	local ok, result, assetIdOrErr = pcall(function()
-		return AssetService:CreateAssetAsync(editableMesh, Enum.AssetType.Mesh, request)
-	end)
-	if not ok then
-		return nil, "CreateAssetAsync failed: " .. tostring(result)
-	end
-	if result ~= Enum.CreateAssetResult.Success then
-		return nil, string.format("asset create failed: %s %s", tostring(result), tostring(assetIdOrErr))
-	end
-
-	assets:SetAttribute(assetAttr(spec, "AssetId"), tonumber(assetIdOrErr))
-	assets:SetAttribute(assetAttr(spec, "Version"), 0)
-	assets:SetAttribute(assetAttr(spec, "TriangleCount"), triangleCount)
-	assets:SetAttribute(assetAttr(spec, "BakeMode"), "created")
-	return tonumber(assetIdOrErr), "created", nil
-end
-
-local function createBakedPart(RoadMeshBuilder, parent, spec, assetId, triangleCount)
-	local part, err = RoadMeshBuilder.createMeshPartFromAssetId(parent, spec.partName, assetId, {
-		color = spec.color,
-		material = spec.material,
-		surfaceType = spec.surfaceType,
-		generatedBy = BAKED_MESH_GENERATOR_NAME,
-		canCollide = spec.collision == true,
-		canQuery = spec.collision == true,
-		canTouch = false,
-		transparency = if spec.collision then 1 else 0,
-		castShadow = false,
-		driveSurface = spec.collision == true,
-		triangleCount = triangleCount,
-	})
-	if not part then
-		return nil, err
-	end
-
-	part:SetAttribute("MapId", mapId)
-	part:SetAttribute("MeshAssetId", assetId)
-	part:SetAttribute("BakedRoadGraphMesh", true)
-	return part, nil
-end
-
-local function createBakedMinimapRoadMesh(parent, meshData, RoadMeshBuilder)
-	clearChild(parent, MINIMAP_ROAD_MESH_NAME)
-
-	local result = RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, meshData, {
-		meshFolderName = MINIMAP_ROAD_MESH_NAME,
-		generatedBy = MINIMAP_MESH_GENERATOR_NAME,
-		chunkSize = MINIMAP_MESH_CHUNK_STUDS,
-		color = Color3.fromRGB(255, 255, 255),
-		material = Enum.Material.SmoothPlastic,
-		transparency = 1,
-	})
-	local folder = result.meshFolder
-	if not folder then
-		return nil, "minimap mesh produced no parts"
-	end
-
-	if #result.visibleParts > MINIMAP_MESH_MAX_PARTS then
-		local partCount = #result.visibleParts
-		folder:Destroy()
-		return nil, string.format(
-			"minimap mesh produced %d parts, above limit %d",
-			partCount,
-			MINIMAP_MESH_MAX_PARTS
-		)
-	end
-
-	for _, part in ipairs(result.visibleParts) do
-		part.Anchored = true
-		part.CanCollide = false
-		part.CanTouch = false
-		part.CanQuery = false
-		part.CastShadow = false
-		part.Transparency = 1
-		part.Color = Color3.fromRGB(255, 255, 255)
-		part.Material = Enum.Material.SmoothPlastic
-		part:SetAttribute("MapId", mapId)
-		part:SetAttribute("BakedRoadGraphMesh", true)
-		part:SetAttribute("BakedMinimapRoadMesh", true)
-		part:SetAttribute("MinimapRoadMesh", true)
-	end
-
-	folder:SetAttribute("MapId", mapId)
-	folder:SetAttribute("BakedMinimapRoadMesh", true)
-	folder:SetAttribute("GeneratedBy", MINIMAP_MESH_GENERATOR_NAME)
-	folder:SetAttribute("Version", MINIMAP_MESH_VERSION)
-	folder:SetAttribute("MeshMode", "bakedGraphSurfaces")
-	folder:SetAttribute("SurfacePartCount", #result.visibleParts)
-	folder:SetAttribute("ChunkSize", MINIMAP_MESH_CHUNK_STUDS)
-	if #result.errors > 0 then
-		return result, table.concat(result.errors, " | ")
-	end
-	return result, nil
-end
-
-local function createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, reason)
-	clearChild(root, BAKED_RUNTIME_NAME)
-	clearChild(root, BAKED_SURFACES_NAME)
-	clearChild(root, BAKED_COLLISION_NAME)
-	clearChild(root, MINIMAP_ROAD_MESH_NAME)
-
-	local bakedRoot = Instance.new("Model")
-	bakedRoot.Name = BAKED_RUNTIME_NAME
-	bakedRoot:SetAttribute("MapId", mapId)
-	bakedRoot:SetAttribute("BakedRoadGraphRuntime", true)
-	bakedRoot:SetAttribute("BakeMode", "primitive")
-	bakedRoot:SetAttribute("UploadReason", tostring(reason or "asset upload unavailable"))
-	setBakeScaleAttributes(bakedRoot)
-	bakedRoot.Parent = root
-
-	local result = RoadMeshBuilder.createClassifiedPrimitiveMeshes(bakedRoot, meshData, {
-		meshFolderName = BAKED_SURFACES_NAME,
-		collisionFolderName = BAKED_COLLISION_NAME,
-		generatedBy = BAKED_MESH_GENERATOR_NAME,
-		collisionThickness = 0.2,
-		visualThickness = 0.04,
-	})
-
-	if #result.visibleParts == 0 or #result.collisionParts == 0 then
-		bakedRoot:Destroy()
-		return nil, "primitive fallback produced no usable geometry"
-	end
-
-	for _, part in ipairs(result.visibleParts) do
-		part:SetAttribute("MapId", mapId)
-		part:SetAttribute("BakedRoadGraphMesh", true)
-		part:SetAttribute("BakeMode", "primitive")
-	end
-	for _, part in ipairs(result.collisionParts) do
-		part:SetAttribute("MapId", mapId)
-		part:SetAttribute("BakedRoadGraphMesh", true)
-		part:SetAttribute("BakeMode", "primitive")
-		part:SetAttribute("DriveSurface", true)
-	end
-
-	local minimapResult, minimapErr = createBakedMinimapRoadMesh(bakedRoot, meshData, RoadMeshBuilder)
-
-	local assets = getOrCreateAssetsFolder(root)
-	setBakeScaleAttributes(assets)
-	assets:SetAttribute("Stale", false)
-	assets:SetAttribute("BakeMode", "primitive")
-	assets:SetAttribute("PrimitiveFallbackReason", tostring(reason or "asset upload unavailable"))
-	assets:SetAttribute("LastBakeUnix", os.time())
-	assets:SetAttribute("BakedPartCount", #result.visibleParts + #result.collisionParts)
-	assets:SetAttribute("MinimapPartCount", minimapResult and #minimapResult.visibleParts or 0)
-	assets:SetAttribute("RoadTriangles", #(meshData.roadTriangles or {}))
-	assets:SetAttribute("SidewalkTriangles", #(meshData.sidewalkTriangles or {}))
-	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
-
-	clearPreviewMeshes(root)
-	setStatus(string.format(
-		"Asset upload API unavailable, so baked %s at %s as saved WedgePart geometry: %d visible parts, %d collision parts, %d minimap parts. No package or mesh asset IDs were uploaded. Save the place; runtime will use this persistent fallback.%s",
-		BAKED_RUNTIME_NAME,
-		scaleSummary(),
-		#result.visibleParts,
-		#result.collisionParts,
-		minimapResult and #minimapResult.visibleParts or 0,
-		minimapErr and ("\nMinimap warning: " .. tostring(minimapErr)) or ""
-	))
-	result.bakeMode = "primitive"
-	return result, nil
+	return count
 end
 
 local function bakeMeshAssets()
@@ -831,6 +622,8 @@ local function bakeMeshAssets()
 		return nil
 	end
 	refreshImportScales()
+	keepGraphAboveDefaultBaseplate()
+	setStatus("Building optimized road graph preview MeshParts...")
 
 	local RoadGraphData, RoadGraphMesher, RoadMeshBuilder, moduleErr = getSharedModules()
 	if moduleErr then
@@ -855,129 +648,118 @@ local function bakeMeshAssets()
 	end
 
 	local meshData = RoadGraphMesher.buildNetworkMesh(scaledGraph, scaledGraph.settings)
-	local assets = getOrCreateAssetsFolder(root)
-	setBakeScaleAttributes(assets)
-	local oldBakedRuntime = root:FindFirstChild(BAKED_RUNTIME_NAME)
-	local oldBakedSurfaces = root:FindFirstChild(BAKED_SURFACES_NAME)
-	local oldBakedCollision = root:FindFirstChild(BAKED_COLLISION_NAME)
-	local oldMinimapMesh = root:FindFirstChild(MINIMAP_ROAD_MESH_NAME)
-	if oldBakedRuntime then
-		oldBakedRuntime:Destroy()
-	end
-	if oldBakedSurfaces then
-		oldBakedSurfaces:Destroy()
-	end
-	if oldBakedCollision then
-		oldBakedCollision:Destroy()
-	end
-	if oldMinimapMesh then
-		oldMinimapMesh:Destroy()
-	end
-	local bakedSurfaces = createFolder(root, BAKED_SURFACES_NAME)
-	local bakedCollision = createFolder(root, BAKED_COLLISION_NAME)
-	setBakeScaleAttributes(bakedSurfaces)
-	setBakeScaleAttributes(bakedCollision)
-
-	local created = 0
-	local updated = 0
-	local bakedParts = 0
 	local errors = {}
-	local uploadUnavailableReason = nil
-	for _, spec in ipairs(BAKE_SPECS) do
-		local triangles = meshData[spec.triangleSet] or {}
-		if #triangles == 0 then
-			clearAssetManifestEntry(assets, spec)
-			continue
-		end
 
-		local state, stateErr
-		if spec.collision then
-			state, stateErr = RoadMeshBuilder.createCollisionState(triangles, {
-				thickness = 0.2,
-				surfaceOffset = 0,
-			})
-		else
-			state, stateErr = RoadMeshBuilder.createSurfaceState(triangles)
-		end
+	clearChild(root, BAKED_RUNTIME_NAME)
+	clearChild(root, BAKED_SURFACES_NAME)
+	clearChild(root, BAKED_COLLISION_NAME)
+	clearChild(root, MINIMAP_ROAD_MESH_NAME)
+	clearChild(root, ASSETS_NAME)
 
-		if not state or state.faces == 0 then
-			table.insert(errors, spec.assetPrefix .. ": " .. tostring(stateErr or "no faces"))
-			continue
-		end
+	local bakedRoot = Instance.new("Model")
+	bakedRoot.Name = BAKED_RUNTIME_NAME
+	bakedRoot:SetAttribute("MapId", mapId)
+	bakedRoot:SetAttribute("BakedRoadGraphRuntime", true)
+	bakedRoot:SetAttribute("BakeMode", "editorPreviewEditableMesh")
+	setBakeScaleAttributes(bakedRoot)
+	bakedRoot.Parent = root
 
-		local assetId, modeOrErr = uploadOrUpdateMeshAsset(assets, spec, state.mesh, state.faces)
-		if not assetId then
-			if isAssetUploadUnavailable(modeOrErr) then
-				uploadUnavailableReason = modeOrErr
-				break
-			end
-			table.insert(errors, spec.assetPrefix .. ": " .. tostring(modeOrErr))
-			continue
-		end
-
-		if modeOrErr == "created" then
-			created += 1
-		else
-			updated += 1
-		end
-
-		local parent = if spec.folder == "collision" then bakedCollision else bakedSurfaces
-		local part, partErr = createBakedPart(RoadMeshBuilder, parent, spec, assetId, state.faces)
-		if part then
-			bakedParts += 1
-		else
-			table.insert(errors, spec.assetPrefix .. " part: " .. tostring(partErr))
-		end
+	local result = RoadMeshBuilder.createClassifiedChunkedMeshes(bakedRoot, meshData, {
+		meshFolderName = BAKED_SURFACES_NAME,
+		collisionFolderName = BAKED_COLLISION_NAME,
+		generatedBy = BAKED_MESH_GENERATOR_NAME,
+		chunkSize = BAKE_CHUNK_SIZE_STUDS,
+		maxSurfaceTriangles = BAKE_MAX_SURFACE_TRIANGLES,
+		maxCollisionInputTriangles = BAKE_MAX_COLLISION_INPUT_TRIANGLES,
+		collisionThickness = 0.2,
+		collisionSurfaceOffset = 0,
+	})
+	for _, err in ipairs(result.errors or {}) do
+		table.insert(errors, tostring(err))
 	end
 
-	if uploadUnavailableReason then
-		bakedSurfaces:Destroy()
-		bakedCollision:Destroy()
-		return createPrimitiveBakeFallback(root, meshData, RoadMeshBuilder, uploadUnavailableReason)
-	end
-
-	if bakedParts == 0 then
-		bakedSurfaces:Destroy()
-		bakedCollision:Destroy()
-		setStatus("Bake failed: " .. (#errors > 0 and table.concat(errors, " | ") or "no mesh parts were created"))
+	if #result.visibleParts == 0 or #result.collisionParts == 0 then
+		bakedRoot:Destroy()
+		local reason = #errors > 0 and table.concat(errors, " | ") or "no optimized mesh parts were created"
+		setStatus("Bake failed: " .. reason)
 		return nil
 	end
 
-	local minimapResult, minimapErr = createBakedMinimapRoadMesh(root, meshData, RoadMeshBuilder)
-	if minimapErr then
-		table.insert(errors, "minimap: " .. tostring(minimapErr))
+	hideDefaultBaseplate()
+	for _, part in ipairs(result.visibleParts) do
+		part:SetAttribute("MapId", mapId)
+		part:SetAttribute("BakedRoadGraphMesh", true)
+		part:SetAttribute("BakeMode", "editorPreviewEditableMesh")
+		if part:GetAttribute("SurfaceType") == "polygonFill" then
+			part:SetAttribute("BakedPolygonFillMesh", true)
+		end
+	end
+	for _, part in ipairs(result.collisionParts) do
+		part:SetAttribute("MapId", mapId)
+		part:SetAttribute("BakedRoadGraphMesh", true)
+		part:SetAttribute("BakeMode", "editorPreviewEditableMesh")
+		part:SetAttribute("DriveSurface", true)
 	end
 
+	local minimapResult = RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(bakedRoot, meshData, {
+		meshFolderName = MINIMAP_ROAD_MESH_NAME,
+		generatedBy = MINIMAP_MESH_GENERATOR_NAME,
+		chunkSize = MINIMAP_MESH_CHUNK_STUDS,
+		color = Color3.fromRGB(255, 255, 255),
+		material = Enum.Material.SmoothPlastic,
+		transparency = 1,
+	})
+	for _, err in ipairs(minimapResult.errors or {}) do
+		table.insert(errors, "minimap: " .. tostring(err))
+	end
+	if minimapResult and minimapResult.meshFolder then
+		minimapResult.meshFolder:SetAttribute("MapId", mapId)
+		minimapResult.meshFolder:SetAttribute("BakedMinimapRoadMesh", true)
+		minimapResult.meshFolder:SetAttribute("GeneratedBy", MINIMAP_MESH_GENERATOR_NAME)
+		minimapResult.meshFolder:SetAttribute("Version", MINIMAP_MESH_VERSION)
+		minimapResult.meshFolder:SetAttribute("MeshMode", "editorPreviewEditableMesh")
+		minimapResult.meshFolder:SetAttribute("SurfacePartCount", #minimapResult.visibleParts)
+		minimapResult.meshFolder:SetAttribute("ChunkSize", MINIMAP_MESH_CHUNK_STUDS)
+		for _, part in ipairs(minimapResult.visibleParts) do
+			part:SetAttribute("MapId", mapId)
+			part:SetAttribute("BakedRoadGraphMesh", true)
+			part:SetAttribute("BakedMinimapRoadMesh", true)
+			part:SetAttribute("MinimapRoadMesh", true)
+		end
+	end
+
+	local assets = getOrCreateAssetsFolder(root)
+	setBakeScaleAttributes(assets)
 	clearPreviewMeshes(root)
 	assets:SetAttribute("Stale", false)
-	assets:SetAttribute("BakeMode", "meshAsset")
-	assets:SetAttribute("PrimitiveFallbackReason", nil)
+	assets:SetAttribute("BakeMode", "editorPreviewEditableMesh")
 	assets:SetAttribute("LastBakeUnix", os.time())
-	assets:SetAttribute("BakedPartCount", bakedParts)
+	assets:SetAttribute("BakedPartCount", #result.visibleParts + #result.collisionParts)
 	assets:SetAttribute("MinimapPartCount", minimapResult and #minimapResult.visibleParts or 0)
 	assets:SetAttribute("RoadTriangles", #(meshData.roadTriangles or {}))
 	assets:SetAttribute("SidewalkTriangles", #(meshData.sidewalkTriangles or {}))
 	assets:SetAttribute("CrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
+	assets:SetAttribute("PolygonFillTriangles", countPolygonFillTriangles(meshData))
+	assets:SetAttribute("ChunkSize", BAKE_CHUNK_SIZE_STUDS)
+	assets:SetAttribute("MaxSurfaceTriangles", BAKE_MAX_SURFACE_TRIANGLES)
+	assets:SetAttribute("MaxCollisionInputTriangles", BAKE_MAX_COLLISION_INPUT_TRIANGLES)
 
 	setStatus(string.format(
-		"Baked map %s at %s: %d mesh assets created, %d updated, %d asset-backed parts, %d minimap parts.%s",
+		"Built map %s at %s: %d optimized preview MeshParts, %d minimap parts. Play regenerates these from RoadGraph data.%s",
 		mapId,
 		scaleSummary(),
-		created,
-		updated,
-		bakedParts,
+		#result.visibleParts + #result.collisionParts,
 		minimapResult and #minimapResult.visibleParts or 0,
 		#errors > 0 and ("\nWarnings: " .. table.concat(errors, " | ")) or ""
 	))
+	Selection:Set({ bakedRoot })
 
 	return {
-		created = created,
-		updated = updated,
-		bakedParts = bakedParts,
+		bakedParts = #result.visibleParts + #result.collisionParts,
 		minimapParts = minimapResult and #minimapResult.visibleParts or 0,
 		pointScale = importPointScale,
 		widthScale = importWidthScale,
-		bakeMode = "meshAsset",
+		bakeMode = "editorPreviewEditableMesh",
 		errors = errors,
 	}
 end
@@ -1014,6 +796,8 @@ local function importGraphJson()
 		return
 	end
 	refreshImportScales()
+	keepGraphAboveDefaultBaseplate()
+	setStatus("Importing road graph JSON...")
 
 	local RoadGraphData, _RoadGraphMesher, _RoadMeshBuilder, moduleErr = getSharedModules()
 	if moduleErr then
@@ -1052,6 +836,11 @@ local function importGraphJson()
 	ChangeHistoryService:SetWaypoint("cab87 road graph before import")
 	local root = getOrCreateRoot()
 	RoadGraphData.writeGraph(root, graph)
+	setStatus(string.format(
+		"Imported graph data: %d nodes, %d edges. Building optimized preview MeshParts...",
+		#graph.nodes,
+		#graph.edges
+	))
 	markBakedAssetsStale(root, "graph imported")
 	local okBake, bakeResultOrErr = pcall(bakeMeshAssets)
 	ChangeHistoryService:SetWaypoint("cab87 road graph after import")
@@ -1060,9 +849,6 @@ local function importGraphJson()
 		return
 	end
 	if not bakeResultOrErr then
-		return
-	end
-	if bakeResultOrErr.bakeMode == "primitive" then
 		return
 	end
 
@@ -1172,7 +958,12 @@ end)
 
 importPlaneInput.FocusLost:Connect(refreshImportPlane)
 mapIdInput.FocusLost:Connect(refreshMapId)
-importButton.MouseButton1Click:Connect(importGraphJson)
+importButton.MouseButton1Click:Connect(function()
+	local ok, err = pcall(importGraphJson)
+	if not ok then
+		setStatus("Import failed: " .. tostring(err))
+	end
+end)
 bakeAssetsButton.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 road graph before bake")
 	local ok, err = pcall(bakeMeshAssets)

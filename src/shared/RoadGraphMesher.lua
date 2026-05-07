@@ -2,6 +2,7 @@ local RoadGraphMesher = {}
 
 local EPSILON = 1e-4
 local DEFAULT_MESH_RESOLUTION = 20
+local nodesById
 
 local function clonePoint(point)
 	return Vector3.new(point.X, point.Y, point.Z)
@@ -60,6 +61,497 @@ end
 local function addTrianglesToBounds(bounds, triangles)
 	for _, triangle in ipairs(triangles or {}) do
 		addPolygonToBounds(bounds, triangle)
+	end
+end
+
+local function polygonSignedAreaXZ(points)
+	local area = 0
+	for i = 1, #points do
+		local p1 = points[i]
+		local p2 = points[(i % #points) + 1]
+		area += p1.X * p2.Z - p2.X * p1.Z
+	end
+	return area * 0.5
+end
+
+local function findEdgeBetween(edges, sourceId, targetId)
+	for _, edge in ipairs(edges or {}) do
+		if (edge.source == sourceId and edge.target == targetId) or (edge.source == targetId and edge.target == sourceId) then
+			return edge
+		end
+	end
+	return nil
+end
+
+local function findRoadPolygon(roadPolygons, edgeId)
+	for _, roadPolygon in ipairs(roadPolygons or {}) do
+		if roadPolygon.id == edgeId then
+			return roadPolygon
+		end
+	end
+	return nil
+end
+
+local function findHub(hubs, nodeId)
+	for _, hub in ipairs(hubs or {}) do
+		if hub.id == nodeId then
+			return hub
+		end
+	end
+	return nil
+end
+
+local function appendPoints(target, points, reverse)
+	if not points then
+		return
+	end
+
+	if reverse then
+		for i = #points, 1, -1 do
+			table.insert(target, points[i])
+		end
+	else
+		for _, point in ipairs(points or {}) do
+			table.insert(target, point)
+		end
+	end
+end
+
+local function orderedUniqueAroundCenter(center, points)
+	local records = {}
+	local used = {}
+
+	for _, point in ipairs(points or {}) do
+		if horizontalDistance(point, center) > EPSILON then
+			local key = string.format("%.2f:%.2f", point.X, point.Z)
+			if not used[key] then
+				used[key] = true
+				local dx = point.X - center.X
+				local dz = point.Z - center.Z
+				table.insert(records, {
+					point = point,
+					angle = math.atan2(dz, dx),
+					distanceSq = dx * dx + dz * dz,
+				})
+			end
+		end
+	end
+
+	table.sort(records, function(a, b)
+		if math.abs(a.angle - b.angle) <= EPSILON then
+			return a.distanceSq < b.distanceSq
+		end
+		return a.angle < b.angle
+	end)
+
+	local result = {}
+	for _, record in ipairs(records) do
+		table.insert(result, record.point)
+	end
+	return result
+end
+
+local function pointInPolygonXZ(point, polygon)
+	if #polygon == 0 then
+		return false
+	end
+
+	local isInside = false
+	local minX = polygon[1].X
+	local maxX = polygon[1].X
+	local minZ = polygon[1].Z
+	local maxZ = polygon[1].Z
+	for index = 2, #polygon do
+		minX = math.min(minX, polygon[index].X)
+		maxX = math.max(maxX, polygon[index].X)
+		minZ = math.min(minZ, polygon[index].Z)
+		maxZ = math.max(maxZ, polygon[index].Z)
+	end
+
+	if point.X < minX or point.X > maxX or point.Z < minZ or point.Z > maxZ then
+		return false
+	end
+
+	for i = 1, #polygon do
+		local j = if i == 1 then #polygon else i - 1
+		local pi = polygon[i]
+		local pj = polygon[j]
+		if
+			(pi.Z > point.Z) ~= (pj.Z > point.Z)
+			and point.X < (pj.X - pi.X) * (point.Z - pi.Z) / (pj.Z - pi.Z) + pi.X
+		then
+			isInside = not isInside
+		end
+	end
+
+	return isInside
+end
+
+local function circumcircleContains(point, a, b, c)
+	local ax = a.X
+	local az = a.Z
+	local bx = b.X
+	local bz = b.Z
+	local cx = c.X
+	local cz = c.Z
+
+	local denom = 2 * (ax * (bz - cz) + bx * (cz - az) + cx * (az - bz))
+	if math.abs(denom) <= EPSILON then
+		return false
+	end
+
+	local aLen = ax * ax + az * az
+	local bLen = bx * bx + bz * bz
+	local cLen = cx * cx + cz * cz
+	local ux = (aLen * (bz - cz) + bLen * (cz - az) + cLen * (az - bz)) / denom
+	local uz = (aLen * (cx - bx) + bLen * (ax - cx) + cLen * (bx - ax)) / denom
+	local dx = ux - point.X
+	local dz = uz - point.Z
+	local radiusDx = ux - ax
+	local radiusDz = uz - az
+
+	return dx * dx + dz * dz <= radiusDx * radiusDx + radiusDz * radiusDz + 0.001
+end
+
+local function edgeKey(a, b)
+	if a < b then
+		return tostring(a) .. ":" .. tostring(b)
+	end
+	return tostring(b) .. ":" .. tostring(a)
+end
+
+local function triangulateDelaunay(points)
+	local pointCount = #points
+	if pointCount < 3 then
+		return {}
+	end
+
+	local minX = points[1].X
+	local maxX = points[1].X
+	local minZ = points[1].Z
+	local maxZ = points[1].Z
+	for index = 2, pointCount do
+		local point = points[index]
+		minX = math.min(minX, point.X)
+		maxX = math.max(maxX, point.X)
+		minZ = math.min(minZ, point.Z)
+		maxZ = math.max(maxZ, point.Z)
+	end
+
+	local width = maxX - minX
+	local height = maxZ - minZ
+	local delta = math.max(width, height)
+	if delta <= EPSILON then
+		return {}
+	end
+
+	local midX = (minX + maxX) * 0.5
+	local midZ = (minZ + maxZ) * 0.5
+	local vertices = table.clone(points)
+	table.insert(vertices, Vector3.new(midX - 20 * delta, 0, midZ - delta))
+	table.insert(vertices, Vector3.new(midX, 0, midZ + 20 * delta))
+	table.insert(vertices, Vector3.new(midX + 20 * delta, 0, midZ - delta))
+
+	local superA = pointCount + 1
+	local superB = pointCount + 2
+	local superC = pointCount + 3
+	local triangles = {
+		{ superA, superB, superC },
+	}
+
+	for pointIndex = 1, pointCount do
+		local point = vertices[pointIndex]
+		local badTriangles = {}
+		local badLookup = {}
+		local boundaryEdges = {}
+
+		for triangleIndex, triangle in ipairs(triangles) do
+			if
+				circumcircleContains(
+					point,
+					vertices[triangle[1]],
+					vertices[triangle[2]],
+					vertices[triangle[3]]
+				)
+			then
+				table.insert(badTriangles, triangle)
+				badLookup[triangleIndex] = true
+			end
+		end
+
+		for _, triangle in ipairs(badTriangles) do
+			local edges = {
+				{ triangle[1], triangle[2] },
+				{ triangle[2], triangle[3] },
+				{ triangle[3], triangle[1] },
+			}
+			for _, edge in ipairs(edges) do
+				local key = edgeKey(edge[1], edge[2])
+				local record = boundaryEdges[key]
+				if record then
+					record.count += 1
+				else
+					boundaryEdges[key] = {
+						a = edge[1],
+						b = edge[2],
+						count = 1,
+					}
+				end
+			end
+		end
+
+		local retainedTriangles = {}
+		for triangleIndex, triangle in ipairs(triangles) do
+			if not badLookup[triangleIndex] then
+				table.insert(retainedTriangles, triangle)
+			end
+		end
+		triangles = retainedTriangles
+
+		for _, edge in pairs(boundaryEdges) do
+			if edge.count == 1 then
+				table.insert(triangles, { edge.a, edge.b, pointIndex })
+			end
+		end
+	end
+
+	local result = {}
+	for _, triangle in ipairs(triangles) do
+		if triangle[1] <= pointCount and triangle[2] <= pointCount and triangle[3] <= pointCount then
+			table.insert(result, triangle)
+		end
+	end
+	return result
+end
+
+local function buildGridMesh(boundaryPoints)
+	local totalSegLen = 0
+	local count = 0
+	for i = 1, #boundaryPoints - 1 do
+		local distance = horizontalDistance(boundaryPoints[i + 1], boundaryPoints[i])
+		if distance > 0.001 then
+			totalSegLen += distance
+			count += 1
+		end
+	end
+
+	local spacing = if count > 0 then (totalSegLen / count) * 1.5 else 30
+	local minX = math.huge
+	local maxX = -math.huge
+	local minZ = math.huge
+	local maxZ = -math.huge
+	for _, point in ipairs(boundaryPoints) do
+		minX = math.min(minX, point.X)
+		maxX = math.max(maxX, point.X)
+		minZ = math.min(minZ, point.Z)
+		maxZ = math.max(maxZ, point.Z)
+	end
+
+	local width = maxX - minX
+	local height = maxZ - minZ
+	if width > 10000 or height > 10000 then
+		return {}
+	end
+
+	local internalPoints = {}
+	for x = minX + spacing, maxX - EPSILON, spacing do
+		for z = minZ + spacing, maxZ - EPSILON, spacing do
+			local point = Vector3.new(x, 0, z)
+			if pointInPolygonXZ(point, boundaryPoints) then
+				local tooClose = false
+				for _, boundaryPoint in ipairs(boundaryPoints) do
+					if horizontalDistance(boundaryPoint, point) < spacing * 0.7 then
+						tooClose = true
+						break
+					end
+				end
+				if not tooClose then
+					table.insert(internalPoints, point)
+				end
+			end
+		end
+	end
+
+	for index, point in ipairs(internalPoints) do
+		local sumY = 0
+		local sumW = 0
+		for _, boundaryPoint in ipairs(boundaryPoints) do
+			local distance = horizontalDistance(boundaryPoint, point)
+			local weight = 1 / (distance * distance * distance + 0.0001)
+			sumY += boundaryPoint.Y * weight
+			sumW += weight
+		end
+		internalPoints[index] = Vector3.new(point.X, if sumW > 0 then sumY / sumW else 0, point.Z)
+	end
+
+	local allPoints = {}
+	appendPoints(allPoints, boundaryPoints, false)
+	appendPoints(allPoints, internalPoints, false)
+
+	local used = {}
+	local filteredPoints = {}
+	for _, point in ipairs(allPoints) do
+		local key = string.format("%.2f,%.2f", point.X, point.Z)
+		if not used[key] then
+			used[key] = true
+			table.insert(filteredPoints, point)
+		end
+	end
+
+	if #filteredPoints < 3 then
+		return {}
+	end
+
+	local triangles = triangulateDelaunay(filteredPoints)
+	local result = {}
+	for _, triangle in ipairs(triangles) do
+		local p0 = filteredPoints[triangle[1]]
+		local p1 = filteredPoints[triangle[2]]
+		local p2 = filteredPoints[triangle[3]]
+		local centroid = Vector3.new((p0.X + p1.X + p2.X) / 3, 0, (p0.Z + p1.Z + p2.Z) / 3)
+		if pointInPolygonXZ(centroid, boundaryPoints) then
+			addTriangle(result, p0, p1, p2)
+		end
+	end
+
+	return result
+end
+
+local function buildPolygonFillTriangles(mesh, graph)
+	local polygonFills = graph.polygonFills or {}
+	if #polygonFills == 0 then
+		return
+	end
+
+	local nodes = graph.nodes or {}
+	local edges = graph.edges or {}
+	local nodeLookup = graph.nodeLookup or nodesById(nodes)
+	local joinThreshold = 150
+
+	for _, fill in ipairs(polygonFills) do
+		if #(fill.points or {}) < 3 then
+			continue
+		end
+
+		local fillNodes = {}
+		for _, nodeId in ipairs(fill.points) do
+			local node = nodeLookup[nodeId]
+			if node then
+				table.insert(fillNodes, node)
+			end
+		end
+		if #fillNodes < 3 then
+			continue
+		end
+
+		local signedArea = 0
+		for i = 1, #fillNodes do
+			local p1 = fillNodes[i].point
+			local p2 = fillNodes[(i % #fillNodes) + 1].point
+			signedArea += p1.X * p2.Z - p2.X * p1.Z
+		end
+		local isClockwise = signedArea > 0
+
+		local segments = {}
+		for i = 1, #fill.points do
+			local n1Id = fill.points[i]
+			local n2Id = fill.points[(i % #fill.points) + 1]
+			local n1 = nodeLookup[n1Id]
+			local n2 = nodeLookup[n2Id]
+			if not (n1 and n2) then
+				continue
+			end
+
+			local edge = findEdgeBetween(edges, n1Id, n2Id)
+			local roadPolygon = edge and findRoadPolygon(mesh.roadPolygons, edge.id) or nil
+			local curve = {}
+			if roadPolygon then
+				local isForward = edge.source == n1Id
+				local useRightCurve = if isClockwise then isForward else not isForward
+				local chosenCurve = if useRightCurve then roadPolygon.outerRightCurve else roadPolygon.outerLeftCurve
+				appendPoints(curve, chosenCurve, not isForward)
+			else
+				table.insert(curve, n1.point)
+				table.insert(curve, n2.point)
+			end
+			table.insert(segments, curve)
+		end
+
+		local boundaryPoints = {}
+		for i = 1, #segments do
+			local curve = segments[i]
+			local nextCurve = segments[(i % #segments) + 1]
+			appendPoints(boundaryPoints, curve, false)
+
+			local endPoint = curve[#curve]
+			local startPoint = nextCurve and nextCurve[1]
+			local nodeId = fill.points[(i % #fill.points) + 1]
+			local hub = findHub(mesh.hubs, nodeId)
+			if endPoint and startPoint and hub and #(hub.outerPolygon or {}) > 0 then
+				local minEnd = math.huge
+				local minStart = math.huge
+				local endIndex = nil
+				local startIndex = nil
+				for hubIndex, hubPoint in ipairs(hub.outerPolygon) do
+					local endDistance = horizontalDistance(hubPoint, endPoint)
+					local startDistance = horizontalDistance(hubPoint, startPoint)
+					if endDistance < minEnd then
+						minEnd = endDistance
+						endIndex = hubIndex
+					end
+					if startDistance < minStart then
+						minStart = startDistance
+						startIndex = hubIndex
+					end
+				end
+
+				if endIndex and startIndex and minEnd < joinThreshold and minStart < joinThreshold then
+					local path1 = { hub.outerPolygon[endIndex] }
+					local k1 = endIndex
+					while k1 ~= startIndex and #path1 < #hub.outerPolygon + 2 do
+						k1 = (k1 % #hub.outerPolygon) + 1
+						table.insert(path1, hub.outerPolygon[k1])
+					end
+
+					local path2 = { hub.outerPolygon[endIndex] }
+					local k2 = endIndex
+					while k2 ~= startIndex and #path2 < #hub.outerPolygon + 2 do
+						k2 -= 1
+						if k2 < 1 then
+							k2 = #hub.outerPolygon
+						end
+						table.insert(path2, hub.outerPolygon[k2])
+					end
+
+					appendPoints(boundaryPoints, if isClockwise then path2 else path1, false)
+				end
+			end
+		end
+
+		if #boundaryPoints < 3 then
+			continue
+		end
+
+		local uniqueBoundaryPoints = {}
+		for i = 1, #boundaryPoints do
+			local point = boundaryPoints[i]
+			local nextPoint = boundaryPoints[(i % #boundaryPoints) + 1]
+			if horizontalDistance(point, nextPoint) > 0.01 then
+				table.insert(uniqueBoundaryPoints, point)
+			end
+		end
+
+		local fillTriangles = buildGridMesh(uniqueBoundaryPoints)
+		if #fillTriangles > 0 then
+			local record = {
+				id = fill.id,
+				color = fill.color or "#10b981",
+				boundary = uniqueBoundaryPoints,
+				triangles = fillTriangles,
+			}
+			table.insert(mesh.polygonFills, record)
+			table.insert(mesh.polygonTriangles, record)
+		end
 	end
 end
 
@@ -145,7 +637,7 @@ local function sampleSpline(points, segmentLength)
 	return result
 end
 
-local function nodesById(nodes)
+function nodesById(nodes)
 	local lookup = {}
 	for _, node in ipairs(nodes or {}) do
 		lookup[node.id] = node
@@ -609,6 +1101,8 @@ local function makeMeshData()
 		crosswalkTriangles = {},
 		hubs = {},
 		roadPolygons = {},
+		polygonFills = {},
+		polygonTriangles = {},
 		sidewalkPolygons = {},
 		crosswalks = {},
 		centerLines = {},
@@ -765,18 +1259,22 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 			clearances[connectionKey(outgoingEdge.edge, outgoingEdge.isSource)] = maxDist
 		end
 
+		local orderedHubPolygon = orderedUniqueAroundCenter(node.point, hubPolygon)
+		local orderedHubOuterPolygon = orderedUniqueAroundCenter(node.point, hubOuterPolygon)
+
 		table.insert(mesh.hubs, {
 			id = node.id,
-			polygon = hubPolygon,
+			polygon = orderedHubPolygon,
 			corners = corners,
-			outerPolygon = hubOuterPolygon,
+			outerPolygon = orderedHubOuterPolygon,
 			outerCorners = outerCorners,
 		})
 
-		if #hubPolygon >= 3 then
-			for i = 1, #hubPolygon do
-				addTriangle(mesh.roadTriangles, node.point, hubPolygon[i], hubPolygon[(i % #hubPolygon) + 1])
-				addTriangle(mesh.roadHubTriangles, node.point, hubPolygon[i], hubPolygon[(i % #hubPolygon) + 1])
+		if #orderedHubPolygon >= 3 then
+			for i = 1, #orderedHubPolygon do
+				local nextPoint = orderedHubPolygon[(i % #orderedHubPolygon) + 1]
+				addTriangle(mesh.roadTriangles, node.point, nextPoint, orderedHubPolygon[i])
+				addTriangle(mesh.roadHubTriangles, node.point, nextPoint, orderedHubPolygon[i])
 			end
 		end
 
@@ -971,13 +1469,21 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 			table.insert(mesh.roadPolygons, {
 				id = edge.id,
 				polygon = polygon,
-				leftCurve = leftPoints,
-				rightCurve = rightPoints,
+				leftCurve = { baseLeft, table.unpack(leftPoints) },
+				rightCurve = { baseRight, table.unpack(rightPoints) },
 				outerPolygon = outerPolygon,
-				outerLeftCurve = outerLeftPoints,
-				outerRightCurve = outerRightPoints,
+				outerLeftCurve = { outerBaseLeft, table.unpack(outerLeftPoints) },
+				outerRightCurve = { outerBaseRight, table.unpack(outerRightPoints) },
 				sidewalkWidth = getEdgeSidewalk(edge, settings),
 			})
+
+			if targetBaseLeft and targetBaseRight and outerTargetBaseLeft and outerTargetBaseRight then
+				local roadPolygon = mesh.roadPolygons[#mesh.roadPolygons]
+				table.insert(roadPolygon.leftCurve, targetBaseLeft)
+				table.insert(roadPolygon.rightCurve, targetBaseRight)
+				table.insert(roadPolygon.outerLeftCurve, outerTargetBaseLeft)
+				table.insert(roadPolygon.outerRightCurve, outerTargetBaseRight)
+			end
 
 			local currentLeft = baseLeft
 			local currentRight = baseRight
@@ -1012,9 +1518,14 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		end
 	end
 
+	buildPolygonFillTriangles(mesh, graph)
+
 	addTrianglesToBounds(mesh.bounds, mesh.roadTriangles)
 	addTrianglesToBounds(mesh.bounds, mesh.sidewalkTriangles)
 	addTrianglesToBounds(mesh.bounds, mesh.crosswalkTriangles)
+	for _, fill in ipairs(mesh.polygonFills) do
+		addTrianglesToBounds(mesh.bounds, fill.triangles)
+	end
 	return mesh
 end
 
