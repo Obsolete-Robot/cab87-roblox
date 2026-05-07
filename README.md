@@ -52,7 +52,6 @@ Use `g.Clear()` if you just want to remove the generated world.
 This repo includes a plugin file at:
 - `studio-plugin/Cab87MapTools.plugin.lua`
 - `studio-plugin/Cab87RoadGraphBuilder.plugin.lua`
-- `studio-plugin/Cab87RoadCurveTools.plugin.lua` (legacy spline editor/reference)
 - `studio-plugin/Cab87ManagerTools.plugin.lua`
 
 Fast install on Windows:
@@ -71,7 +70,6 @@ Then restart Studio. You will get these tools:
   - **Add Cab Spawn**, **Add Refuel**, **Add Service**, **Add Player Spawn**
 - **cab87 roads** toolbar
   - **Road Graph Builder** (supported graph JSON importer/mesh builder)
-  - **Road Editor** (legacy spline editor/reference)
 
 Road Graph Builder panel actions:
 - Clear All Road Data to empty `Cab87RoadEditor` before importing a fresh road.
@@ -86,9 +84,9 @@ Use **Cab87 -> Add Manager** to create `Workspace.Cab87Manager`. The manager pan
 Set **Road Source** to choose which authored road data is real in Play:
 - **Auto**: use a valid `RoadGraph` first, then fall back to legacy curve roads.
 - **RoadGraph**: use only baked graph-road geometry from `Cab87RoadEditor/RoadGraph`.
-- **LegacyCurve**: use the legacy Road Editor `RoadNetwork` visual mesh plus generated runtime collision.
+- **LegacyCurve**: compatibility path for older legacy curve-editor maps.
 
-The legacy Road Editor can still be used for curve-authored roads. Rebuild its `RoadNetwork` mesh before Play.
+The legacy Road Editor plugin is no longer installed by `install-studio-plugin.bat`.
 Use **Clear All Road Data** first when you want to remove old graph, legacy, baked, marker, and preview data before importing a fresh curve JSON.
 
 When you click **Generate Map**, check Studio Output for seed + generator version.
@@ -159,16 +157,16 @@ The add-on creates a UV-mapped plane matching the movie aspect ratio and assigns
    - **Wireframe Mesh** can be toggled on to inspect generated mesh edges.
 5. Press Play and test traversal.
 
-### Legacy web curve authoring workflow
+### Legacy Web Curve Authoring Workflow
 
-Use the static browser tool in `tools/road-curve-editor` when you want to trace a 2D reference and import it into Studio:
+This flow is kept only for older maps that still have legacy curve-editor data. New authored maps should use the graph-road workflow above.
 
 1. Open `tools/road-curve-editor/index.html`, or run `tools/road-curve-editor/run.bat`.
 2. Import a trace image and lay out one or more splines in the browser tool.
    - Open **Soft Select** or press **S** to drag broad regions of spline points and junctions with radius falloff.
 3. Export `cab87-road-curves.json` to save the full browser session, including the trace image and its transform.
 4. Reopen that same file in the browser tool with **Import Session JSON** if you want to resume editing later.
-5. In Studio, set **Import Plane Y** in the Road Editor.
+5. In Studio, set **Import Plane Y** in the legacy Road Editor if it is installed manually.
 6. Click **Import Curve JSON (Append)** to add to the current spline set, or **Import Curve JSON (Replace)** to replace the current authored splines while keeping markers such as `CabCompanyNode`, `CabRefuelPoint`, `CabServicePoint`, and `PlayerSpawnPoint`.
 7. The plugin imports the control points into `Cab87RoadEditor/Splines` and rebuilds the road network from the imported data.
 

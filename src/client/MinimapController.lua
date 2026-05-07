@@ -30,10 +30,22 @@ local MINIMAP_ROAD_COLOR = Color3.fromRGB(255, 255, 255)
 local MINIMAP_SIDEWALK_COLOR = Color3.fromRGB(232, 234, 237)
 local MINIMAP_CROSSWALK_COLOR = Color3.fromRGB(248, 249, 250)
 local MINIMAP_ROUTE_COLOR = Color3.fromRGB(26, 115, 232)
+local MINIMAP_PASSENGER_MARKER_STROKE = Color3.fromRGB(18, 18, 20)
 local MINIMAP_ROUTE_LIFT = 4
 local MINIMAP_ROAD_LIFT = 0.12
+local MINIMAP_LOG_PREFIX = "[cab87 minimap]"
+local MAX_SOURCE_DEBUG_PARTS = 6
 
 local player = Players.LocalPlayer
+
+local function minimapDebugLog(message, ...)
+	if Config.minimapDebugLogging ~= true and Config.authoredRoadDebugLogging ~= true then
+		return
+	end
+
+	local ok, formatted = pcall(string.format, tostring(message), ...)
+	print(MINIMAP_LOG_PREFIX .. " " .. (ok and formatted or tostring(message)))
+end
 
 local function getConfigNumber(key, fallback)
 	local value = Config[key]
@@ -128,6 +140,96 @@ local function includePartBounds(bounds, part)
 	end
 end
 
+local function safeProperty(instance, propertyName)
+	local ok, value = pcall(function()
+		return instance[propertyName]
+		end)
+	if ok then
+		return value
+	end
+	return nil
+end
+
+local function describePart(part)
+	if not part then
+		return "nil"
+	end
+
+	local className = part.ClassName
+	local meshId = safeProperty(part, "MeshId")
+	local meshContent = safeProperty(part, "MeshContent")
+	return string.format(
+		"%s class=%s size=(%.1f,%.1f,%.1f) surfaceType=%s meshMode=%s contentMode=%s tris=%s meshId=%s meshContent=%s",
+		part.Name,
+		className,
+		part.Size.X,
+		part.Size.Y,
+		part.Size.Z,
+		tostring(part:GetAttribute("SurfaceType")),
+		tostring(part:GetAttribute("MeshMode")),
+		tostring(part:GetAttribute("MeshContentMode")),
+		tostring(part:GetAttribute("TriangleCount") or part:GetAttribute("EditableMeshFaceCount")),
+		tostring(meshId),
+		tostring(meshContent)
+	)
+end
+
+local function hasUsableMeshContent(part)
+	if not part then
+		return false
+	end
+	if not part:IsA("MeshPart") then
+		return true
+	end
+
+	local meshId = safeProperty(part, "MeshId")
+	if type(meshId) == "string" and meshId ~= "" then
+		return true
+	end
+
+	local meshContent = safeProperty(part, "MeshContent")
+	if meshContent and tostring(meshContent) ~= "Content{SourceType=None}" then
+		return true
+	end
+
+	return false
+end
+
+local function shouldUsePartForMinimapRoadMesh(part)
+	local surfaceType = part and part:GetAttribute("SurfaceType")
+	return surfaceType == "road" or surfaceType == "crosswalk"
+end
+
+local function describeSource(source)
+	if not source then
+		return "nil"
+	end
+
+	return string.format(
+		"%s class=%s generatedBy=%s version=%s surfacePartsAttr=%s minimap=%s",
+		source:GetFullName(),
+		source.ClassName,
+		tostring(source:GetAttribute("GeneratedBy")),
+		tostring(source:GetAttribute("Version")),
+		tostring(source:GetAttribute("SurfacePartCount")),
+		tostring(source:GetAttribute("MinimapRoadMesh") or source:GetAttribute("BakedMinimapRoadMesh"))
+	)
+end
+
+local function formatBounds(bounds)
+	if not bounds or bounds.minX == math.huge then
+		return "empty"
+	end
+
+	return string.format(
+		"min=(%.1f,%.1f) max=(%.1f,%.1f)",
+		bounds.minX,
+		bounds.minZ,
+		bounds.maxX,
+		bounds.maxZ
+	)
+end
+
 local function addRoadSegment(segments, bounds, a, b, width)
 	if distanceXZ(a, b) < 0.5 then
 		return
@@ -176,6 +278,38 @@ local function collectRoadPartsFromContainer(container)
 	return parts
 end
 
+local function filterUsableRoadParts(parts, source)
+	local usableParts = {}
+	local skippedParts = 0
+	local skippedSurfaceParts = 0
+	for _, part in ipairs(parts or {}) do
+		if not shouldUsePartForMinimapRoadMesh(part) then
+			skippedSurfaceParts += 1
+			if skippedSurfaceParts <= MAX_SOURCE_DEBUG_PARTS then
+				minimapDebugLog("skipping non-road minimap part from %s: %s", source and source.Name or "?", describePart(part))
+			end
+		elseif hasUsableMeshContent(part) then
+			table.insert(usableParts, part)
+		else
+			skippedParts += 1
+			if skippedParts <= MAX_SOURCE_DEBUG_PARTS then
+				minimapDebugLog("skipping unusable mesh part from %s: %s", source and source.Name or "?", describePart(part))
+			end
+		end
+	end
+
+	if skippedParts > 0 or skippedSurfaceParts > 0 then
+		minimapDebugLog(
+			"source %s usable mesh parts: usable=%d skippedInvalidContent=%d skippedNonRoadSurface=%d",
+			source and source.Name or "?",
+			#usableParts,
+			skippedParts,
+			skippedSurfaceParts
+		)
+	end
+	return usableParts
+end
+
 local function appendSource(sources, source)
 	if source then
 		table.insert(sources, source)
@@ -213,10 +347,21 @@ local function collectMeshRoadData(world, hasGraphRoadData)
 	end
 
 	for _, source in ipairs(sources) do
-		local parts = collectRoadPartsFromContainer(source)
+		local allParts = collectRoadPartsFromContainer(source)
+		minimapDebugLog("candidate mesh source: %s partCount=%d", describeSource(source), #allParts)
+		for index = 1, math.min(#allParts, MAX_SOURCE_DEBUG_PARTS) do
+			minimapDebugLog("candidate part[%d]: %s", index, describePart(allParts[index]))
+		end
+		local parts = filterUsableRoadParts(allParts, source)
 		if #parts > 0 then
 			local maxMeshParts = math.max(math.floor(getConfigNumber("minimapViewportMaxMeshParts", 256)), 1)
 			if #parts > maxMeshParts then
+				minimapDebugLog(
+					"skipping mesh source %s: partCount=%d exceeds minimapViewportMaxMeshParts=%d",
+					source.Name,
+					#parts,
+					maxMeshParts
+				)
 				continue
 			end
 
@@ -224,6 +369,12 @@ local function collectMeshRoadData(world, hasGraphRoadData)
 			for _, part in ipairs(parts) do
 				includePartBounds(bounds, part)
 			end
+			minimapDebugLog(
+				"selected mesh source: %s partCount=%d bounds=%s",
+				describeSource(source),
+				#parts,
+				formatBounds(bounds)
+			)
 			return {
 				meshParts = parts,
 				bounds = bounds,
@@ -430,6 +581,7 @@ end
 
 local function readRoadData(world)
 	if not world then
+		minimapDebugLog("readRoadData: no Cab87World yet")
 		return nil
 	end
 
@@ -443,26 +595,46 @@ local function readRoadData(world)
 
 	if graph then
 		graph.meshParts = if mesh and mesh.source ~= GENERATED_ROADS_NAME then mesh.meshParts else nil
+		minimapDebugLog(
+			"readRoadData: graph source=%s graphSegments=%d meshSource=%s meshParts=%d",
+			tostring(graph.source),
+			#(graph.segments or {}),
+			tostring(mesh and mesh.source),
+			mesh and #(mesh.meshParts or {}) or 0
+		)
 		return graph
 	end
 
 	if mesh then
 		mesh.segments = authored and authored.segments or {}
 		mesh.junctionSegments = authored and authored.junctionSegments or {}
+		minimapDebugLog(
+			"readRoadData: mesh source=%s meshParts=%d fallbackSegments=%d",
+			tostring(mesh.source),
+			#(mesh.meshParts or {}),
+			#(mesh.segments or {})
+		)
 		return mesh
 	end
 
 	if authored then
 		if #authored.segments > 0 or #authored.junctionSegments > 0 then
+			minimapDebugLog(
+				"readRoadData: authored spline source segments=%d junctionSegments=%d",
+				#authored.segments,
+				#authored.junctionSegments
+			)
 			return authored
 		end
 	end
 
 	local generated = collectGeneratedRoadData(world)
 	if generated and #generated.segments > 0 then
+		minimapDebugLog("readRoadData: generated road fallback segments=%d", #generated.segments)
 		return generated
 	end
 
+	minimapDebugLog("readRoadData: no road data found in %s", world:GetFullName())
 	return nil
 end
 
@@ -583,20 +755,47 @@ local function createUi(parentGui)
 	destinationMarkerStroke.Thickness = 2
 	destinationMarkerStroke.Parent = destinationMarker
 
-	local playerMarker = Instance.new("TextLabel")
+	local passengerLayer = Instance.new("Frame")
+	passengerLayer.Name = "PassengerPickups"
+	passengerLayer.BackgroundTransparency = 1
+	passengerLayer.ClipsDescendants = true
+	passengerLayer.Size = UDim2.fromScale(1, 1)
+	passengerLayer.ZIndex = 4
+	passengerLayer.Parent = viewport
+
+	local playerMarker = Instance.new("Frame")
 	playerMarker.Name = "PlayerMarker"
 	playerMarker.AnchorPoint = Vector2.new(0.5, 0.5)
 	playerMarker.Position = UDim2.fromScale(0.5, 0.5)
-	playerMarker.Size = UDim2.fromOffset(24, 24)
-	playerMarker.BackgroundTransparency = 1
-	playerMarker.Font = Enum.Font.GothamBlack
-	playerMarker.Text = utf8.char(9650)
-	playerMarker.TextColor3 = Color3.fromRGB(255, 206, 38)
-	playerMarker.TextSize = 22
-	playerMarker.TextStrokeColor3 = Color3.fromRGB(18, 18, 20)
-	playerMarker.TextStrokeTransparency = 0.2
+	playerMarker.Size = UDim2.fromOffset(14, 24)
+	playerMarker.BackgroundColor3 = Color3.fromRGB(255, 206, 38)
+	playerMarker.BorderSizePixel = 0
 	playerMarker.ZIndex = 5
 	playerMarker.Parent = viewport
+
+	local playerMarkerCorner = Instance.new("UICorner")
+	playerMarkerCorner.CornerRadius = UDim.new(0, 3)
+	playerMarkerCorner.Parent = playerMarker
+
+	local playerMarkerStroke = Instance.new("UIStroke")
+	playerMarkerStroke.Color = Color3.fromRGB(18, 18, 20)
+	playerMarkerStroke.Transparency = 0.08
+	playerMarkerStroke.Thickness = 2
+	playerMarkerStroke.Parent = playerMarker
+
+	local playerMarkerHood = Instance.new("Frame")
+	playerMarkerHood.Name = "Hood"
+	playerMarkerHood.AnchorPoint = Vector2.new(0.5, 0)
+	playerMarkerHood.Position = UDim2.fromScale(0.5, 0)
+	playerMarkerHood.Size = UDim2.new(0.55, 0, 0.28, 0)
+	playerMarkerHood.BackgroundColor3 = Color3.fromRGB(255, 238, 130)
+	playerMarkerHood.BorderSizePixel = 0
+	playerMarkerHood.ZIndex = 6
+	playerMarkerHood.Parent = playerMarker
+
+	local playerMarkerHoodCorner = Instance.new("UICorner")
+	playerMarkerHoodCorner.CornerRadius = UDim.new(0, 2)
+	playerMarkerHoodCorner.Parent = playerMarkerHood
 
 	return {
 		root = root,
@@ -614,6 +813,8 @@ local function createUi(parentGui)
 		routeLine = routeLine,
 		routeSegments = routeSegments,
 		destinationMarker = destinationMarker,
+		passengerLayer = passengerLayer,
+		passengerMarkers = {},
 		playerMarker = playerMarker,
 	}
 end
@@ -636,7 +837,8 @@ local function addMeshClone(ui, sourcePart)
 		return sourcePart:Clone()
 	end)
 	if not ok or not cloneOrErr or not cloneOrErr:IsA("BasePart") then
-		return
+		minimapDebugLog("mesh clone failed: source=%s error=%s", describePart(sourcePart), tostring(cloneOrErr))
+		return false
 	end
 
 	local clone = cloneOrErr
@@ -653,6 +855,10 @@ local function addMeshClone(ui, sourcePart)
 	clone.CFrame = clone.CFrame + Vector3.new(0, MINIMAP_ROAD_LIFT, 0)
 	clone.Parent = ui.meshRoadModel
 	table.insert(ui.meshClones, clone)
+	if #ui.meshClones <= MAX_SOURCE_DEBUG_PARTS then
+		minimapDebugLog("mesh clone[%d]: source={%s} clone={%s}", #ui.meshClones, describePart(sourcePart), describePart(clone))
+	end
+	return true
 end
 
 local function buildRoadUi(ui, mapData)
@@ -667,15 +873,33 @@ local function buildRoadUi(ui, mapData)
 
 	local hasMesh = false
 	if mapData.meshParts and #mapData.meshParts > 0 then
+		local failedClones = 0
 		for _, part in ipairs(mapData.meshParts) do
-			addMeshClone(ui, part)
+			if not addMeshClone(ui, part) then
+				failedClones += 1
+			end
 		end
 		ui.meshViewport.Visible = #ui.meshClones > 0
 		hasMesh = ui.meshViewport.Visible
+		minimapDebugLog(
+			"buildRoadUi: source=%s sourceParts=%d clonedParts=%d failedClones=%d meshViewportVisible=%s",
+			tostring(mapData.source),
+			#mapData.meshParts,
+			#ui.meshClones,
+			failedClones,
+			tostring(ui.meshViewport.Visible)
+		)
 	end
 
 	if not hasMesh then
 		ui.meshViewport.Visible = false
+		minimapDebugLog(
+			"buildRoadUi: using 2D fallback source=%s graph=%s segments=%d junctionSegments=%d",
+			tostring(mapData.source),
+			tostring(mapData.graph ~= nil),
+			#(mapData.segments or {}),
+			#(mapData.junctionSegments or {})
+		)
 	end
 
 	local segments = {}
@@ -781,11 +1005,169 @@ local function getCabDestination(cab)
 	return destination
 end
 
-local function updateRoadSegment(item, playerPosition, scale, halfWidth, halfHeight, viewportWidth, viewportHeight)
-	local ax = halfWidth + (item.ax - playerPosition.X) * scale
-	local ay = halfHeight + (item.az - playerPosition.Z) * scale
-	local bx = halfWidth + (item.bx - playerPosition.X) * scale
-	local by = halfHeight + (item.bz - playerPosition.Z) * scale
+local function cabHasPassenger(cab)
+	if not cab then
+		return false
+	end
+
+	local modeAttribute = Config.passengerFareModeAttribute
+	return type(modeAttribute) == "string" and cab:GetAttribute(modeAttribute) == "delivery"
+end
+
+local function getMinimapForward(forward)
+	if typeof(forward) ~= "Vector3" then
+		return Vector3.new(0, 0, -1)
+	end
+
+	local horizontal = Vector3.new(forward.X, 0, forward.Z)
+	if horizontal.Magnitude <= 0.001 then
+		return Vector3.new(0, 0, -1)
+	end
+	return horizontal.Unit
+end
+
+local function getMinimapRight(mapForward)
+	return Vector3.new(-mapForward.Z, 0, mapForward.X)
+end
+
+local function yawFromForward(forward)
+	local mapForward = getMinimapForward(forward)
+	return math.atan2(mapForward.X, mapForward.Z)
+end
+
+local function forwardFromYaw(yaw)
+	return Vector3.new(math.sin(yaw), 0, math.cos(yaw))
+end
+
+local function shortestAngleDelta(fromYaw, toYaw)
+	return math.atan2(math.sin(toYaw - fromYaw), math.cos(toYaw - fromYaw))
+end
+
+local function relativeHeadingDegrees(forward, mapForward)
+	return -math.deg(shortestAngleDelta(yawFromForward(mapForward), yawFromForward(forward)))
+end
+
+local function smoothForwardToward(currentForward, targetForward, dt)
+	local smoothing = math.max(getConfigNumber("minimapRotationSmoothing", 2), 0)
+	if smoothing <= 0 then
+		return getMinimapForward(targetForward)
+	end
+
+	local currentYaw = yawFromForward(currentForward)
+	local targetYaw = yawFromForward(targetForward)
+	local alpha = 1 - math.exp(-smoothing * math.max(dt, 0))
+	return forwardFromYaw(currentYaw + shortestAngleDelta(currentYaw, targetYaw) * alpha)
+end
+
+local function isJunctionNode(graph, node)
+	if not (graph and node) then
+		return false
+	end
+
+	local outgoing = {}
+	for _, edge in ipairs(graph.edges or {}) do
+		local otherNodeId = nil
+		if edge.source == node.id then
+			otherNodeId = edge.target
+		elseif edge.target == node.id then
+			otherNodeId = edge.source
+		end
+
+		local otherNode = otherNodeId and graph.nodeLookup and graph.nodeLookup[otherNodeId]
+		if otherNode and typeof(otherNode.point) == "Vector3" then
+			local offset = Vector3.new(otherNode.point.X - node.point.X, 0, otherNode.point.Z - node.point.Z)
+			if offset.Magnitude > 0.001 then
+				table.insert(outgoing, offset.Unit)
+			end
+		end
+	end
+
+	if #outgoing ~= 2 then
+		return #outgoing > 0
+	end
+	return outgoing[1]:Dot(outgoing[2]) > -0.95
+end
+
+local function positionIsInJunction(mapData, position)
+	local graph = mapData and mapData.graph
+	if not graph then
+		return false
+	end
+
+	local holdDistance = math.max(getConfigNumber("minimapJunctionOrientationHoldStuds", 72), 0)
+	local holdDistanceSq = holdDistance * holdDistance
+	if holdDistanceSq <= 0 then
+		return false
+	end
+
+	for _, node in ipairs(graph.nodes or {}) do
+		if typeof(node.point) == "Vector3" and isJunctionNode(graph, node) then
+			local dx = position.X - node.point.X
+			local dz = position.Z - node.point.Z
+			if dx * dx + dz * dz <= holdDistanceSq then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function closestRoadForward(mapData, position, referenceForward)
+	if positionIsInJunction(mapData, position) then
+		return nil
+	end
+
+	local bestForward = nil
+	local bestDistanceSq = math.huge
+	local px = position.X
+	local pz = position.Z
+	local reference = getMinimapForward(referenceForward)
+
+	for _, segment in ipairs(mapData and mapData.segments or {}) do
+		local ax = tonumber(segment.ax)
+		local az = tonumber(segment.az)
+		local bx = tonumber(segment.bx)
+		local bz = tonumber(segment.bz)
+		if ax and az and bx and bz then
+			local dx = bx - ax
+			local dz = bz - az
+			local lengthSq = dx * dx + dz * dz
+			if lengthSq > 0.25 then
+				local t = math.clamp(((px - ax) * dx + (pz - az) * dz) / lengthSq, 0, 1)
+				local cx = ax + dx * t
+				local cz = az + dz * t
+				local distanceSq = (px - cx) * (px - cx) + (pz - cz) * (pz - cz)
+				if distanceSq < bestDistanceSq then
+					local forward = Vector3.new(dx, 0, dz).Unit
+					if forward:Dot(reference) < 0 then
+						forward = -forward
+					end
+					bestForward = forward
+					bestDistanceSq = distanceSq
+				end
+			end
+		end
+	end
+
+	return bestForward
+end
+
+local function getPlayerScreenY(viewportHeight)
+	local scale = math.clamp(getConfigNumber("minimapPlayerVerticalScale", 2 / 3), 0.5, 0.85)
+	return viewportHeight * scale
+end
+
+local function projectToMinimap(position, playerPosition, mapForward, mapRight, halfWidth, playerScreenY, scale)
+	local offset = Vector3.new(position.X - playerPosition.X, 0, position.Z - playerPosition.Z)
+	return halfWidth + offset:Dot(mapRight) * scale, playerScreenY - offset:Dot(mapForward) * scale
+end
+
+local function updateRoadSegment(item, playerPosition, mapForward, mapRight, scale, halfWidth, playerScreenY, viewportWidth, viewportHeight)
+	local a = Vector3.new(item.ax, playerPosition.Y, item.az)
+	local b = Vector3.new(item.bx, playerPosition.Y, item.bz)
+	local ax, ay = projectToMinimap(a, playerPosition, mapForward, mapRight, halfWidth, playerScreenY, scale)
+	local bx, by = projectToMinimap(b, playerPosition, mapForward, mapRight, halfWidth, playerScreenY, scale)
 	local dx = bx - ax
 	local dy = by - ay
 	local length = math.sqrt(dx * dx + dy * dy)
@@ -808,7 +1190,7 @@ local function updateRoadSegment(item, playerPosition, scale, halfWidth, halfHei
 	setClippedLineFrame(item.frame, ax, ay, bx, by, roadPixels, viewportWidth, viewportHeight)
 end
 
-local function updateMeshViewport(ui, playerPosition, worldSpan)
+local function updateMeshViewport(ui, playerPosition, mapForward, worldSpan)
 	if #ui.meshClones == 0 then
 		ui.meshViewport.Visible = false
 		return
@@ -816,11 +1198,13 @@ local function updateMeshViewport(ui, playerPosition, worldSpan)
 
 	local fieldOfView = math.rad(ui.meshCamera.FieldOfView)
 	local cameraHeight = worldSpan / (2 * math.tan(fieldOfView * 0.5))
-	local target = Vector3.new(playerPosition.X, playerPosition.Y, playerPosition.Z)
+	local playerVerticalScale = math.clamp(getConfigNumber("minimapPlayerVerticalScale", 2 / 3), 0.5, 0.85)
+	local targetOffset = (playerVerticalScale - 0.5) * worldSpan
+	local target = Vector3.new(playerPosition.X, playerPosition.Y, playerPosition.Z) + mapForward * targetOffset
 	ui.meshCamera.CFrame = CFrame.lookAt(
 		target + Vector3.new(0, cameraHeight, 0),
 		target,
-		Vector3.new(0, 0, -1)
+		mapForward
 	)
 	ui.meshViewport.Visible = true
 end
@@ -837,6 +1221,61 @@ local function getGpsGuide(world)
 
 	local markerFolder = world:FindFirstChild(getConfigString("passengerMarkersFolderName", "PassengerMarkers"))
 	return markerFolder and markerFolder:FindFirstChild(getConfigString("passengerDeliveryGuideFolderName", "DeliveryGuide"))
+end
+
+local function markerHasVisibleParts(marker)
+	for _, descendant in ipairs(marker:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant.Transparency < 0.99 then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getPickupMarkerPosition(marker)
+	if marker:IsA("BasePart") then
+		return marker.Position
+	end
+
+	if marker:IsA("Model") then
+		local ok, cframe = pcall(function()
+			return marker:GetBoundingBox()
+		end)
+		if ok and typeof(cframe) == "CFrame" then
+			return cframe.Position
+		end
+	end
+
+	return nil
+end
+
+local function collectPassengerPickupPositions(world)
+	local markerFolder = world and world:FindFirstChild(getConfigString("passengerMarkersFolderName", "PassengerMarkers"))
+	if not markerFolder then
+		return {}
+	end
+
+	local markerInstances = markerFolder:GetChildren()
+	table.sort(markerInstances, function(a, b)
+		return a.Name < b.Name
+	end)
+
+	local positions = {}
+	for _, marker in ipairs(markerInstances) do
+		if marker:GetAttribute("PickupStopId") ~= nil then
+			local visibleAttribute = marker:GetAttribute("Visible")
+			local visible = if visibleAttribute ~= nil then visibleAttribute == true else markerHasVisibleParts(marker)
+			if visible then
+				local position = getPickupMarkerPosition(marker)
+				if position then
+					table.insert(positions, position)
+				end
+			end
+		end
+	end
+
+	return positions
 end
 
 local function getWorldRouteSegmentParts(world)
@@ -964,16 +1403,25 @@ local function hideDestinationGuide(ui)
 	end
 end
 
-local function updateMinimapRouteSegment(frame, part, playerPosition, scale, halfWidth, halfHeight, viewportWidth, viewportHeight)
+local function updateMinimapRouteSegment(
+	frame,
+	part,
+	playerPosition,
+	mapForward,
+	mapRight,
+	scale,
+	halfWidth,
+	playerScreenY,
+	viewportWidth,
+	viewportHeight
+)
 	local halfLength = part.Size.Z * 0.5
 	local center = part.Position
 	local direction = part.CFrame.LookVector
 	local a = center - direction * halfLength
 	local b = center + direction * halfLength
-	local ax = halfWidth + (a.X - playerPosition.X) * scale
-	local ay = halfHeight + (a.Z - playerPosition.Z) * scale
-	local bx = halfWidth + (b.X - playerPosition.X) * scale
-	local by = halfHeight + (b.Z - playerPosition.Z) * scale
+	local ax, ay = projectToMinimap(a, playerPosition, mapForward, mapRight, halfWidth, playerScreenY, scale)
+	local bx, by = projectToMinimap(b, playerPosition, mapForward, mapRight, halfWidth, playerScreenY, scale)
 	local dx = bx - ax
 	local dy = by - ay
 	local length = math.sqrt(dx * dx + dy * dy)
@@ -992,14 +1440,24 @@ local function updateMinimapRouteSegment(frame, part, playerPosition, scale, hal
 	setClippedLineFrame(frame, ax, ay, bx, by, linePixels, viewportWidth, viewportHeight)
 end
 
-local function updateDestinationMarker(ui, cab, playerPosition, scale, viewportWidth, viewportHeight, halfWidth, halfHeight)
+local function updateDestinationMarker(
+	ui,
+	cab,
+	playerPosition,
+	mapForward,
+	mapRight,
+	scale,
+	viewportWidth,
+	viewportHeight,
+	halfWidth,
+	playerScreenY
+)
 	local destination = getCabDestination(cab)
 	if not destination then
 		return
 	end
 
-	local targetX = halfWidth + (destination.X - playerPosition.X) * scale
-	local targetY = halfHeight + (destination.Z - playerPosition.Z) * scale
+	local targetX, targetY = projectToMinimap(destination, playerPosition, mapForward, mapRight, halfWidth, playerScreenY, scale)
 	local markerSize = math.max(getConfigNumber("minimapDestinationMarkerPixels", 16), 8)
 	local padding = markerSize * 0.5 + 4
 	local routeColor = MINIMAP_ROUTE_COLOR
@@ -1014,7 +1472,19 @@ local function updateDestinationMarker(ui, cab, playerPosition, scale, viewportW
 	ui.destinationMarker.Visible = visible
 end
 
-local function updateDestinationGuide(ui, world, cab, playerPosition, scale, halfWidth, halfHeight, viewportWidth, viewportHeight)
+local function updateDestinationGuide(
+	ui,
+	world,
+	cab,
+	playerPosition,
+	mapForward,
+	mapRight,
+	scale,
+	halfWidth,
+	playerScreenY,
+	viewportWidth,
+	viewportHeight
+)
 	hideDestinationGuide(ui)
 
 	local routeParts = getWorldRouteSegmentParts(world)
@@ -1028,9 +1498,11 @@ local function updateDestinationGuide(ui, world, cab, playerPosition, scale, hal
 			ui.routeSegments[index],
 			part,
 			playerPosition,
+			mapForward,
+			mapRight,
 			scale,
 			halfWidth,
-			halfHeight,
+			playerScreenY,
 			viewportWidth,
 			viewportHeight
 		)
@@ -1040,7 +1512,122 @@ local function updateDestinationGuide(ui, world, cab, playerPosition, scale, hal
 		ui.routeSegments[index].Visible = false
 	end
 
-	updateDestinationMarker(ui, cab, playerPosition, scale, viewportWidth, viewportHeight, halfWidth, halfHeight)
+	updateDestinationMarker(ui, cab, playerPosition, mapForward, mapRight, scale, viewportWidth, viewportHeight, halfWidth, playerScreenY)
+end
+
+local function createPassengerPickupMarker(parent, index)
+	local marker = Instance.new("Frame")
+	marker.Name = string.format("PassengerPickupMarker_%02d", index)
+	marker.AnchorPoint = Vector2.new(0.5, 1)
+	marker.BackgroundTransparency = 1
+	marker.BorderSizePixel = 0
+	marker.Visible = false
+	marker.ZIndex = 4
+	marker.Parent = parent
+
+	local tip = Instance.new("Frame")
+	tip.Name = "Tip"
+	tip.AnchorPoint = Vector2.new(0.5, 0.5)
+	tip.Position = UDim2.fromScale(0.5, 0.72)
+	tip.Size = UDim2.fromScale(0.5, 0.4)
+	tip.BackgroundColor3 = getConfigColor("passengerPickupColor", Color3.fromRGB(70, 255, 120))
+	tip.BorderSizePixel = 0
+	tip.Rotation = 45
+	tip.ZIndex = 4
+	tip.Parent = marker
+
+	local tipStroke = Instance.new("UIStroke")
+	tipStroke.Color = MINIMAP_PASSENGER_MARKER_STROKE
+	tipStroke.Transparency = 0.12
+	tipStroke.Thickness = 1.5
+	tipStroke.Parent = tip
+
+	local head = Instance.new("Frame")
+	head.Name = "Head"
+	head.AnchorPoint = Vector2.new(0.5, 0)
+	head.Position = UDim2.fromScale(0.5, 0)
+	head.Size = UDim2.fromScale(0.86, 0.68)
+	head.BackgroundColor3 = getConfigColor("passengerPickupColor", Color3.fromRGB(70, 255, 120))
+	head.BorderSizePixel = 0
+	head.ZIndex = 5
+	head.Parent = marker
+
+	local headCorner = Instance.new("UICorner")
+	headCorner.CornerRadius = UDim.new(1, 0)
+	headCorner.Parent = head
+
+	local headStroke = Instance.new("UIStroke")
+	headStroke.Color = MINIMAP_PASSENGER_MARKER_STROKE
+	headStroke.Transparency = 0.08
+	headStroke.Thickness = 1.5
+	headStroke.Parent = head
+
+	return marker
+end
+
+local function ensurePassengerPickupMarkers(ui, count)
+	while #ui.passengerMarkers < count do
+		table.insert(ui.passengerMarkers, createPassengerPickupMarker(ui.passengerLayer, #ui.passengerMarkers + 1))
+	end
+end
+
+local function hidePassengerPickupMarkers(ui)
+	for _, marker in ipairs(ui.passengerMarkers) do
+		marker.Visible = false
+	end
+end
+
+local function updatePassengerPickupMarkers(
+	ui,
+	world,
+	cab,
+	playerPosition,
+	mapForward,
+	mapRight,
+	scale,
+	halfWidth,
+	playerScreenY,
+	viewportWidth,
+	viewportHeight
+)
+	if cabHasPassenger(cab) then
+		hidePassengerPickupMarkers(ui)
+		return
+	end
+
+	local positions = collectPassengerPickupPositions(world)
+	ensurePassengerPickupMarkers(ui, #positions)
+
+	local markerColor = getConfigColor("passengerPickupColor", Color3.fromRGB(70, 255, 120))
+	local markerWidth = math.max(getConfigNumber("minimapPassengerMarkerPixels", 16), 10)
+	local markerHeight = markerWidth * 1.25
+	local paddingX = markerWidth * 0.5
+	local paddingY = markerHeight
+	local visibleCount = 0
+
+	for _, position in ipairs(positions) do
+		local x, y = projectToMinimap(position, playerPosition, mapForward, mapRight, halfWidth, playerScreenY, scale)
+		if x + paddingX >= 0 and x - paddingX <= viewportWidth and y + paddingY >= 0 and y <= viewportHeight then
+			visibleCount += 1
+			local marker = ui.passengerMarkers[visibleCount]
+			marker.Position = UDim2.fromOffset(x, y)
+			marker.Size = UDim2.fromOffset(markerWidth, markerHeight)
+			marker.Visible = true
+
+			local head = marker:FindFirstChild("Head")
+			local tip = marker:FindFirstChild("Tip")
+			if head and head:IsA("Frame") then
+				head.BackgroundColor3 = markerColor
+			end
+			if tip and tip:IsA("Frame") then
+				tip.BackgroundColor3 = markerColor
+			end
+		end
+	end
+
+	for index = visibleCount + 1, #ui.passengerMarkers do
+		ui.passengerMarkers[index].Visible = false
+	end
 end
 
 function MinimapController.start(parentGui, cabTracker)
@@ -1056,6 +1643,9 @@ function MinimapController.start(parentGui, cabTracker)
 	local connections = {}
 	local rebuildSerial = 0
 	local updateAccumulator = 0
+	local orientationPollAccumulator = math.huge
+	local orientationTargetForward = nil
+	local orientationForward = nil
 	local destroyed = false
 
 	local function connect(signal, callback)
@@ -1078,6 +1668,14 @@ function MinimapController.start(parentGui, cabTracker)
 
 		currentMap = readRoadData(watchedWorld)
 		roadItems = buildRoadUi(ui, currentMap)
+		orientationPollAccumulator = math.huge
+		minimapDebugLog(
+			"rebuild complete: world=%s mapSource=%s roadItems=%d meshClones=%d",
+			watchedWorld and watchedWorld:GetFullName() or "nil",
+			currentMap and tostring(currentMap.source) or "nil",
+			#roadItems,
+			#ui.meshClones
+		)
 		ui.root.Visible = false
 	end
 
@@ -1098,7 +1696,11 @@ function MinimapController.start(parentGui, cabTracker)
 
 		disconnectWorld()
 		watchedWorld = world
+		minimapDebugLog("watchWorld: %s", watchedWorld and watchedWorld:GetFullName() or "nil")
 		currentMap = nil
+		orientationTargetForward = nil
+		orientationForward = nil
+		orientationPollAccumulator = math.huge
 		roadItems = buildRoadUi(ui, nil)
 		ui.root.Visible = false
 
@@ -1181,6 +1783,7 @@ function MinimapController.start(parentGui, cabTracker)
 		if updateAccumulator < refreshRate then
 			return
 		end
+		local frameDt = updateAccumulator
 		updateAccumulator = 0
 
 		local playerPosition, forward, cab = getTrackedPose(cabTracker)
@@ -1198,26 +1801,81 @@ function MinimapController.start(parentGui, cabTracker)
 		local span = math.max(getConfigNumber("minimapWorldSpanStuds", 720), 120)
 		local scale = math.min(viewportSize.X, viewportSize.Y) / span
 		local halfWidth = viewportSize.X * 0.5
-		local halfHeight = viewportSize.Y * 0.5
+		local playerScreenY = getPlayerScreenY(viewportSize.Y)
+		local fallbackForward = getMinimapForward(forward)
+		local orientationPollSeconds = math.max(getConfigNumber("minimapRoadOrientationPollSeconds", 0.2), 0.05)
+		orientationPollAccumulator += frameDt
+		if orientationPollAccumulator >= orientationPollSeconds or not orientationTargetForward then
+			orientationPollAccumulator = 0
+			local referenceForward = orientationTargetForward or fallbackForward
+			if not orientationTargetForward or math.abs(orientationTargetForward:Dot(fallbackForward)) > 0.35 then
+				referenceForward = fallbackForward
+			end
+			local sampledRoadForward = closestRoadForward(currentMap, playerPosition, referenceForward)
+			if sampledRoadForward then
+				orientationTargetForward = sampledRoadForward
+			elseif not orientationTargetForward then
+				orientationTargetForward = fallbackForward
+			end
+		end
+		orientationForward = if orientationForward
+			then smoothForwardToward(orientationForward, orientationTargetForward, frameDt)
+			else orientationTargetForward
+		local mapForward = orientationForward
+		local mapRight = getMinimapRight(mapForward)
 
 		if #ui.meshClones > 0 then
-			updateMeshViewport(ui, playerPosition, span)
+			updateMeshViewport(ui, playerPosition, mapForward, span)
 			updateViewportDestinationGuide(ui, watchedWorld, cab, scale)
 			hideDestinationGuide(ui)
 		else
 			ui.meshViewport.Visible = false
 			hideViewportDestinationGuide(ui)
 			for _, item in ipairs(roadItems) do
-				updateRoadSegment(item, playerPosition, scale, halfWidth, halfHeight, viewportSize.X, viewportSize.Y)
+				updateRoadSegment(
+					item,
+					playerPosition,
+					mapForward,
+					mapRight,
+					scale,
+					halfWidth,
+					playerScreenY,
+					viewportSize.X,
+					viewportSize.Y
+				)
 			end
-			updateDestinationGuide(ui, watchedWorld, cab, playerPosition, scale, halfWidth, halfHeight, viewportSize.X, viewportSize.Y)
+			updateDestinationGuide(
+				ui,
+				watchedWorld,
+				cab,
+				playerPosition,
+				mapForward,
+				mapRight,
+				scale,
+				halfWidth,
+				playerScreenY,
+				viewportSize.X,
+				viewportSize.Y
+			)
 		end
 
-		ui.playerMarker.Position = UDim2.fromOffset(halfWidth, halfHeight)
-		if forward and forward.Magnitude > 0.001 then
-			ui.playerMarker.Rotation = math.deg(math.atan2(forward.X, -forward.Z))
-		end
-	end)
+		updatePassengerPickupMarkers(
+			ui,
+			watchedWorld,
+			cab,
+			playerPosition,
+			mapForward,
+			mapRight,
+			scale,
+			halfWidth,
+			playerScreenY,
+			viewportSize.X,
+			viewportSize.Y
+		)
+
+		ui.playerMarker.Position = UDim2.fromOffset(halfWidth, playerScreenY)
+		ui.playerMarker.Rotation = relativeHeadingDegrees(fallbackForward, mapForward)
+		end)
 
 	return {
 		destroy = function()

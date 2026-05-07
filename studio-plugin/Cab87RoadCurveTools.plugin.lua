@@ -4239,7 +4239,7 @@ toggleButton.ClickableWhenViewportHidden = true
 
 local widgetInfo = DockWidgetPluginGuiInfo.new(
 	Enum.InitialDockState.Right,
-	true,
+	false,
 	true,
 	340,
 	680,
@@ -4249,7 +4249,7 @@ local widgetInfo = DockWidgetPluginGuiInfo.new(
 
 local widget = plugin:CreateDockWidgetPluginGui("Cab87RoadCurveEditorWidget", widgetInfo)
 widget.Title = "Cab87 Road Editor"
-widget.Enabled = true
+widget.Enabled = false
 
 local root = Instance.new("ScrollingFrame")
 root.Size = UDim2.fromScale(1, 1)

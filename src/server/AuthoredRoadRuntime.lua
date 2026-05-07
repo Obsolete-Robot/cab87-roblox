@@ -43,6 +43,63 @@ local function roadDebugWarn(message, ...)
 	warn(ROAD_LOG_PREFIX .. " " .. (ok and formatted or tostring(message)))
 end
 
+local function safeProperty(instance, propertyName)
+	local ok, value = pcall(function()
+		return instance[propertyName]
+	end)
+	if ok then
+		return value
+	end
+	return nil
+end
+
+local function describeMinimapPart(part)
+	if not part then
+		return "nil"
+	end
+
+	return string.format(
+		"%s class=%s size=(%.1f,%.1f,%.1f) surfaceType=%s meshMode=%s contentMode=%s tris=%s meshId=%s meshContent=%s",
+		part:GetFullName(),
+		part.ClassName,
+		part.Size.X,
+		part.Size.Y,
+		part.Size.Z,
+		tostring(part:GetAttribute("SurfaceType")),
+		tostring(part:GetAttribute("MeshMode")),
+		tostring(part:GetAttribute("MeshContentMode")),
+		tostring(part:GetAttribute("TriangleCount") or part:GetAttribute("EditableMeshFaceCount")),
+		tostring(safeProperty(part, "MeshId")),
+		tostring(safeProperty(part, "MeshContent"))
+	)
+end
+
+local function hasUsableMeshContent(part)
+	if not part then
+		return false
+	end
+	if not part:IsA("MeshPart") then
+		return true
+	end
+
+	local meshId = safeProperty(part, "MeshId")
+	if type(meshId) == "string" and meshId ~= "" then
+		return true
+	end
+
+	local meshContent = safeProperty(part, "MeshContent")
+	if meshContent and tostring(meshContent) ~= "Content{SourceType=None}" then
+		return true
+	end
+
+	return false
+end
+
+local function shouldUsePartForMinimapRoadMesh(part)
+	local surfaceType = part and part:GetAttribute("SurfaceType")
+	return surfaceType == "road" or surfaceType == "crosswalk"
+end
+
 local function normalizeRoadSource(value)
 	if value == ROAD_SOURCE_ROAD_GRAPH or value == ROAD_SOURCE_LEGACY_CURVE then
 		return value
@@ -468,9 +525,32 @@ local function useBakedMinimapRoadMesh(root, world)
 	local bakedContainer = root:FindFirstChild(BAKED_RUNTIME_NAME) or root
 	local sourceFolder = bakedContainer:FindFirstChild(MINIMAP_ROAD_MESH_NAME)
 		or root:FindFirstChild(MINIMAP_ROAD_MESH_NAME)
+	roadDebugLog(
+		"minimap mesh lookup: root=%s bakedContainer=%s sourceFolder=%s rootChildren=%d bakedChildren=%d",
+		root:GetFullName(),
+		bakedContainer:GetFullName(),
+		sourceFolder and sourceFolder:GetFullName() or "nil",
+		#root:GetChildren(),
+		#bakedContainer:GetChildren()
+	)
 	if not sourceFolder then
+		for _, child in ipairs(root:GetChildren()) do
+			roadDebugLog("minimap mesh root child: %s class=%s", child.Name, child.ClassName)
+		end
+		if bakedContainer ~= root then
+			for _, child in ipairs(bakedContainer:GetChildren()) do
+				roadDebugLog("minimap mesh baked child: %s class=%s", child.Name, child.ClassName)
+			end
+		end
 		return nil, { "baked minimap road mesh was not found; click Bake Runtime Geometry with the updated Road Graph Builder plugin" }
 	end
+	roadDebugLog(
+		"minimap mesh source: generatedBy=%s version=%s surfacePartAttr=%s meshMode=%s",
+		tostring(sourceFolder:GetAttribute("GeneratedBy")),
+		tostring(sourceFolder:GetAttribute("Version")),
+		tostring(sourceFolder:GetAttribute("SurfacePartCount")),
+		tostring(sourceFolder:GetAttribute("MeshMode"))
+	)
 	if tonumber(sourceFolder:GetAttribute("Version")) ~= MINIMAP_ROAD_MESH_VERSION then
 		return nil, {
 			string.format(
@@ -484,12 +564,44 @@ local function useBakedMinimapRoadMesh(root, world)
 	local maxSurfaceParts = math.max(math.floor(tonumber(Config.minimapViewportMaxMeshParts) or 256), 1)
 	local sourceParts = {}
 	collectBaseParts(sourceFolder, sourceParts)
+	roadDebugLog("minimap mesh source part scan: parts=%d maxAllowed=%d", #sourceParts, maxSurfaceParts)
+	for index = 1, math.min(#sourceParts, 6) do
+		roadDebugLog("minimap mesh source part[%d]: %s", index, describeMinimapPart(sourceParts[index]))
+	end
+	local usableSourceParts = {}
+	local skippedInvalidParts = 0
+	local skippedSurfaceParts = 0
+	for _, sourcePart in ipairs(sourceParts) do
+		if not shouldUsePartForMinimapRoadMesh(sourcePart) then
+			skippedSurfaceParts += 1
+			if skippedSurfaceParts <= 6 then
+				roadDebugLog("minimap mesh source part skipped non-road surface: %s", describeMinimapPart(sourcePart))
+			end
+		elseif hasUsableMeshContent(sourcePart) then
+			table.insert(usableSourceParts, sourcePart)
+		else
+			skippedInvalidParts += 1
+			if skippedInvalidParts <= 6 then
+				roadDebugLog("minimap mesh source part skipped invalid content: %s", describeMinimapPart(sourcePart))
+			end
+		end
+	end
+	if skippedInvalidParts > 0 or skippedSurfaceParts > 0 then
+		roadDebugLog(
+			"minimap mesh usable source parts: usable=%d skippedInvalidContent=%d skippedNonRoadSurface=%d",
+			#usableSourceParts,
+			skippedInvalidParts,
+			skippedSurfaceParts
+		)
+	end
 
 	if #sourceParts == 0 then
 		return nil, { "baked minimap mesh has no BasePart descendants" }
-	elseif #sourceParts > maxSurfaceParts then
+	elseif #usableSourceParts == 0 then
+		return nil, { "baked minimap mesh parts had no usable mesh content" }
+	elseif #usableSourceParts > maxSurfaceParts then
 		return nil, {
-			string.format("baked minimap mesh has %d surface parts, above limit %d", #sourceParts, maxSurfaceParts),
+			string.format("baked minimap mesh has %d usable surface parts, above limit %d", #usableSourceParts, maxSurfaceParts),
 		}
 	end
 
@@ -503,7 +615,7 @@ local function useBakedMinimapRoadMesh(root, world)
 
 	local errors = {}
 	local clonedParts = 0
-	for _, sourcePart in ipairs(sourceParts) do
+	for _, sourcePart in ipairs(usableSourceParts) do
 		local ok, cloneOrErr = pcall(function()
 			return sourcePart:Clone()
 		end)
@@ -518,7 +630,15 @@ local function useBakedMinimapRoadMesh(root, world)
 			part:SetAttribute("MinimapRoadMesh", true)
 			part.Parent = folder
 			clonedParts += 1
+			if clonedParts <= 6 then
+				roadDebugLog("minimap mesh cloned part[%d]: %s", clonedParts, describeMinimapPart(part))
+			end
 		else
+			roadDebugLog(
+				"minimap mesh clone failed: source=%s error=%s",
+				describeMinimapPart(sourcePart),
+				tostring(cloneOrErr)
+			)
 			table.insert(errors, string.format("%s: %s", sourcePart.Name, tostring(cloneOrErr)))
 		end
 	end

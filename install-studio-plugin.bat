@@ -20,8 +20,19 @@ if not exist "%TARGET_DIR%" (
   )
 )
 
+set "LEGACY_PLUGIN=%TARGET_DIR%\Cab87RoadCurveTools.plugin.lua"
+if exist "%LEGACY_PLUGIN%" (
+  del /Q "%LEGACY_PLUGIN%"
+  if errorlevel 1 (
+    echo [cab87] ERROR: failed to remove legacy plugin:
+    echo %LEGACY_PLUGIN%
+    exit /b 1
+  )
+  echo [cab87] Removed legacy plugin: Cab87RoadCurveTools.plugin.lua
+)
+
 set "COPIED=0"
-for %%F in (Cab87MapTools.plugin.lua Cab87RoadGraphBuilder.plugin.lua Cab87RoadCurveTools.plugin.lua Cab87ManagerTools.plugin.lua) do (
+for %%F in (Cab87MapTools.plugin.lua Cab87RoadGraphBuilder.plugin.lua Cab87ManagerTools.plugin.lua) do (
   set "SRC=%PLUGIN_SRC_DIR%\%%F"
   set "DST=%TARGET_DIR%\%%F"
   if exist "!SRC!" (
