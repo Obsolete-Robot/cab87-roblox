@@ -157,73 +157,49 @@ export default function App() {
     return minKey;
   };
 
+  const topologyKey = useMemo(() => {
+    return edges.map(e => `${e.source}-${e.target || ''}`).sort().join('|') + '|' + nodes.length;
+  }, [edges, nodes.length]);
+
+  const prevTopologyKey = useRef(topologyKey);
+
   useEffect(() => {
+    if (prevTopologyKey.current === topologyKey) return;
+    prevTopologyKey.current = topologyKey;
+
     setPolygonFills(prevPolygonFills => {
       try {
-        const faces = findClosedAreas(nodes, edges);
-        
-        const newPolygonFills: typeof prevPolygonFills = [];
-        const usedOldIds = new Set<string>();
+        let changed = false;
+        const validNodes = new Set(nodes.map(n => n.id));
 
+        // first, clean up any polygon fills that reference deleted nodes
+        const cleanedFills = prevPolygonFills.filter(pf => {
+            const isValid = pf.points.every(pid => validNodes.has(pid));
+            if (!isValid) changed = true;
+            return isValid;
+        });
+
+        const faces = findClosedAreas(nodes, edges);
         faces.forEach(faceNodes => {
           const faceKey = getFaceKey(faceNodes);
           if (deletedFaces.includes(faceKey)) return;
-
-          let bestMatch = null;
-          let bestScore = -1;
-
-          prevPolygonFills.forEach(pf => {
-             if (usedOldIds.has(pf.id)) return;
-             const sharedCount = pf.points.filter((nid: string) => faceNodes.includes(nid)).length;
-             if (sharedCount > bestScore) {
-                 bestScore = sharedCount;
-                 bestMatch = pf;
-             }
-          });
-
-          // Minimum 2 shared nodes to inherit properties (color, id)
-          if (bestMatch && bestScore >= 2) {
-              usedOldIds.add((bestMatch as any).id);
-              newPolygonFills.push({ id: (bestMatch as any).id, points: faceNodes, color: (bestMatch as any).color });
-          } else {
-              const id = Math.random().toString(36).substring(2, 9);
-              const color = '#10b981'; // default fill color (emerald)
-              newPolygonFills.push({ id, points: faceNodes, color });
+          
+          const alreadyExists = cleanedFills.some(pf => getFaceKey(pf.points) === faceKey);
+          if (!alreadyExists) {
+             const id = Math.random().toString(36).substring(2, 9);
+             const color = '#10b981'; // default fill color (emerald)
+             cleanedFills.push({ id, points: faceNodes, color });
+             changed = true;
           }
         });
-        
-        // Determine if there is actually a change to prevent infinite loops
-        let changed = false;
-        if (newPolygonFills.length !== prevPolygonFills.length) {
-          changed = true;
-        } else {
-          for (let i = 0; i < newPolygonFills.length; i++) {
-            const nf = newPolygonFills[i];
-            const of = prevPolygonFills.find(p => p.id === nf.id);
-            if (!of) {
-              changed = true;
-              break;
-            }
-            if (nf.points.length !== of.points.length) {
-              changed = true;
-              break;
-            }
-            for (let j = 0; j < nf.points.length; j++) {
-              if (nf.points[j] !== of.points[j]) {
-                changed = true;
-                break;
-              }
-            }
-          }
-        }
 
-        return changed ? newPolygonFills : prevPolygonFills;
+        return changed ? cleanedFills : prevPolygonFills;
       } catch (err) {
         console.error(err);
         return prevPolygonFills;
       }
     });
-  }, [nodes, edges, deletedFaces]);
+  }, [topologyKey, nodes, edges, deletedFaces]);
 
   const handleExport = () => {
     const data = JSON.stringify({
