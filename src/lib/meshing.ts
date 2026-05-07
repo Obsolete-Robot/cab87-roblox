@@ -1,6 +1,6 @@
 import { DEFAULTS } from './constants';
 import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
-import { getDir } from "./math";
+import { getDir, intersectSegmentPolygon } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
 import * as THREE from 'three';
@@ -714,22 +714,32 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
             
             // Clip curve against hub boundaries so it doesn't draw through the junction area
             const hub2 = mesh.hubs.find(h => h.id === n2_id);
-            if (hub2 && hub2.outerPolygon.length > 0) {
+            if (hub2 && hub2.outerPolygon.length > 0 && curve.length > 1) {
                 let endIdx = curve.length - 1;
                 while (endIdx > 0 && pointInPolygon(curve[endIdx], hub2.outerPolygon)) {
                     endIdx--;
                 }
-                curve.length = endIdx + 1;
+                if (endIdx < curve.length - 1) {
+                    const exactIntersect = intersectSegmentPolygon(curve[endIdx], curve[endIdx + 1], hub2.outerPolygon);
+                    curve.length = endIdx + 1;
+                    if (exactIntersect) {
+                        curve.push(exactIntersect);
+                    }
+                }
             }
             
             const hub1 = mesh.hubs.find(h => h.id === n1_id);
-            if (hub1 && hub1.outerPolygon.length > 0) {
+            if (hub1 && hub1.outerPolygon.length > 0 && curve.length > 1) {
                 let startIdx = 0;
                 while (startIdx < curve.length - 1 && pointInPolygon(curve[startIdx], hub1.outerPolygon)) {
                     startIdx++;
                 }
                 if (startIdx > 0) {
+                    const exactIntersect = intersectSegmentPolygon(curve[startIdx], curve[startIdx - 1], hub1.outerPolygon);
                     curve = curve.slice(startIdx);
+                    if (exactIntersect) {
+                        curve.unshift(exactIntersect);
+                    }
                 }
             }
         }
