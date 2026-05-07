@@ -4,6 +4,33 @@ import { getEdgeClearance } from "./junctions";
 import { getDir } from "./math";
 
 export function findClosedAreas(nodes: Node[], edges: Edge[]): string[][] {
+  const edgeSet = new Set(edges.filter(e => e.target).map(e => e.id));
+  
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const degMap = new Map<string, number>();
+    for (const n of nodes) degMap.set(n.id, 0);
+    
+    for (const eId of edgeSet) {
+      const e = edges.find(ed => ed.id === eId);
+      if (e && e.target) {
+        degMap.set(e.source, (degMap.get(e.source) || 0) + 1);
+        degMap.set(e.target, (degMap.get(e.target) || 0) + 1);
+      }
+    }
+    
+    for (const eId of Array.from(edgeSet)) {
+      const e = edges.find(ed => ed.id === eId);
+      if (e && e.target) {
+        if (degMap.get(e.source)! <= 1 || degMap.get(e.target)! <= 1) {
+          edgeSet.delete(eId);
+          changed = true;
+        }
+      }
+    }
+  }
+
   const halfEdges: {
     edgeId: string;
     from: string;
@@ -14,7 +41,7 @@ export function findClosedAreas(nodes: Node[], edges: Edge[]): string[][] {
   }[] = [];
 
   for (const e of edges) {
-    if (!e.target) continue;
+    if (!e.target || !edgeSet.has(e.id)) continue;
     const pts = getEdgeControlPoints(e, nodes);
     if (pts.length < 2) continue;
 
@@ -97,6 +124,10 @@ export function findClosedAreas(nodes: Node[], edges: Edge[]): string[][] {
     }
 
     if (isClosed && faceNodes.length >= 3) {
+      if (new Set(faceNodes).size !== faceNodes.length) {
+        continue;
+      }
+      
       let signedArea = 0;
       for (let i = 0; i < faceNodes.length; i++) {
         const p1 = nodes.find(n => n.id === faceNodes[i])?.point;

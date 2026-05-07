@@ -157,9 +157,22 @@ export default function App() {
     return minKey;
   };
 
+  const topologyKey = useMemo(() => {
+    const nodeKey = nodes.map(n => n.id).sort().join('|');
+    const edgeKey = edges.map(e => `${e.id}:${e.source}-${e.target || ''}`).sort().join('|');
+    return `${nodeKey}::${edgeKey}`;
+  }, [nodes, edges]);
+
+  const prevTopologyKey = useRef<string | null>(null);
+
   useEffect(() => {
+    if (prevTopologyKey.current === topologyKey) return;
+    prevTopologyKey.current = topologyKey;
+
     setPolygonFills(prevPolygonFills => {
       try {
+        const validNodes = new Set(nodes.map(n => n.id));
+        const validPreviousFills = prevPolygonFills.filter(pf => pf.points.every(pid => validNodes.has(pid)));
         const faces = findClosedAreas(nodes, edges);
 
         const newPolygonFills: typeof prevPolygonFills = [];
@@ -169,10 +182,17 @@ export default function App() {
           const faceKey = getFaceKey(faceNodes);
           if (deletedFaces.includes(faceKey)) return;
 
-          let bestMatch = null;
+          const exactMatch = validPreviousFills.find(pf => !usedOldIds.has(pf.id) && getFaceKey(pf.points) === faceKey);
+          if (exactMatch) {
+              usedOldIds.add(exactMatch.id);
+              newPolygonFills.push({ id: exactMatch.id, points: faceNodes, color: exactMatch.color });
+              return;
+          }
+
+          let bestMatch: typeof prevPolygonFills[number] | null = null;
           let bestScore = -1;
 
-          prevPolygonFills.forEach(pf => {
+          validPreviousFills.forEach(pf => {
              if (usedOldIds.has(pf.id)) return;
              const sharedCount = pf.points.filter((nid: string) => faceNodes.includes(nid)).length;
              if (sharedCount > bestScore) {
@@ -193,29 +213,10 @@ export default function App() {
         });
 
         // Determine if there is actually a change to prevent infinite loops
-        let changed = false;
-        if (newPolygonFills.length !== prevPolygonFills.length) {
-          changed = true;
-        } else {
-          for (let i = 0; i < newPolygonFills.length; i++) {
-            const nf = newPolygonFills[i];
-            const of = prevPolygonFills.find(p => p.id === nf.id);
-            if (!of) {
-              changed = true;
-              break;
-            }
-            if (nf.points.length !== of.points.length) {
-              changed = true;
-              break;
-            }
-            for (let j = 0; j < nf.points.length; j++) {
-              if (nf.points[j] !== of.points[j]) {
-                changed = true;
-                break;
-              }
-            }
-          }
-        }
+        const changed = newPolygonFills.length !== prevPolygonFills.length || newPolygonFills.some((nf) => {
+          const of = prevPolygonFills.find(p => p.id === nf.id);
+          return !of || of.color !== nf.color || of.points.length !== nf.points.length || nf.points.some((pointId, index) => pointId !== of.points[index]);
+        });
 
         return changed ? newPolygonFills : prevPolygonFills;
       } catch (err) {
@@ -223,7 +224,7 @@ export default function App() {
         return prevPolygonFills;
       }
     });
-  }, [nodes, edges, deletedFaces]);
+  }, [topologyKey, nodes, edges, deletedFaces]);
 
   const handleExport = () => {
     const data = JSON.stringify({

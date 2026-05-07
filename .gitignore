@@ -9,6 +9,15 @@ sourcemap.json
 Packages/
 Package.lock
 
+# Node/tooling
+node_modules/
+build/
+dist/
+coverage/
+
 # OS/editor
 .DS_Store
 .vscode/
+*.log
+.env*
+!.env.example
