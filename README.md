@@ -13,6 +13,7 @@ Code-first Roblox starter for a **Crazy Taxi style** prototype using **Rojo + Lu
 
 - [Milestone roadmap](docs/MILESTONE_ROADMAP.md)
 - [Architecture plan](docs/ARCHITECTURE_PLAN.md)
+- [Road-Maker sync and mesher parity](docs/ROAD_MAKER_SYNC.md)
 
 ## Requirements
 
@@ -99,6 +100,7 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
    - `npm ci`
    - `npm run dev`
 2. Open `http://localhost:3000`, author the road graph, and export JSON.
+   - Keep Road-Maker and Roblox mesher changes in sync. See [Road-Maker sync and mesher parity](docs/ROAD_MAKER_SYNC.md).
 3. In Studio, open **Road Graph Builder**.
 4. Set **Import Y** for the Roblox plane height.
 5. Set **Map ID** to a stable level id such as `downtown_v1`.

@@ -1260,13 +1260,12 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		end
 
 		local orderedHubPolygon = orderedUniqueAroundCenter(node.point, hubPolygon)
-		local orderedHubOuterPolygon = orderedUniqueAroundCenter(node.point, hubOuterPolygon)
 
 		table.insert(mesh.hubs, {
 			id = node.id,
 			polygon = orderedHubPolygon,
 			corners = corners,
-			outerPolygon = orderedHubOuterPolygon,
+			outerPolygon = hubOuterPolygon,
 			outerCorners = outerCorners,
 		})
 
@@ -1321,8 +1320,12 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		local targetBaseLeft, targetBaseRight
 		local outerTargetBaseLeft, outerTargetBaseRight
 		if targetNode then
-			targetBaseLeft, targetBaseRight = getEdgeBases(targetNode, edge, false, nodeCorners)
-			outerTargetBaseLeft, outerTargetBaseRight = getEdgeBases(targetNode, edge, false, nodeOuterCorners)
+			local targetBaseA, targetBaseB = getEdgeBases(targetNode, edge, false, nodeCorners)
+			local outerTargetBaseA, outerTargetBaseB = getEdgeBases(targetNode, edge, false, nodeOuterCorners)
+			-- Target node bases are local to the target-facing connection. Road-Maker reverses
+			-- them here so road polygons and polygon-fill boundaries stay edge-forward.
+			targetBaseRight, targetBaseLeft = targetBaseA, targetBaseB
+			outerTargetBaseRight, outerTargetBaseLeft = outerTargetBaseA, outerTargetBaseB
 		end
 
 		local leftPoints = {}
@@ -1421,21 +1424,21 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 					local crosswalkPolygon = { targetBaseLeft, targetBaseRight, newRight, newLeft }
 					if hasCrosswalk(edge.id, false, edges, nodeLookup) then
 						table.insert(mesh.crosswalks, { edgeId = edge.id, nodeId = targetNode.id, polygon = crosswalkPolygon })
-						addQuadTriangles(mesh.crosswalkTriangles, targetBaseLeft, targetBaseRight, newRight, newLeft)
+						addQuadTriangles(mesh.crosswalkTriangles, targetBaseRight, targetBaseLeft, newLeft, newRight)
 					end
 					table.insert(mesh.sidewalkPolygons, { outerTargetBaseLeft, targetBaseLeft, newLeft, newOuterLeft })
 					table.insert(mesh.sidewalkPolygons, { targetBaseRight, outerTargetBaseRight, newOuterRight, newRight })
-					addQuadTriangles(mesh.sidewalkTriangles, outerTargetBaseLeft, targetBaseLeft, newLeft, newOuterLeft)
-					addQuadTriangles(mesh.sidewalkTriangles, targetBaseRight, outerTargetBaseRight, newOuterRight, newRight)
+					addQuadTriangles(mesh.sidewalkTriangles, targetBaseLeft, outerTargetBaseLeft, newOuterLeft, newLeft)
+					addQuadTriangles(mesh.sidewalkTriangles, outerTargetBaseRight, targetBaseRight, newRight, newOuterRight)
 					targetBaseLeft, targetBaseRight = newLeft, newRight
 					outerTargetBaseLeft, outerTargetBaseRight = newOuterLeft, newOuterRight
 				end
 
 				table.insert(fullCenterLine, (targetBaseLeft + targetBaseRight) * 0.5)
-				table.insert(polygon, targetBaseLeft)
 				table.insert(polygon, targetBaseRight)
-				table.insert(outerPolygon, outerTargetBaseLeft)
+				table.insert(polygon, targetBaseLeft)
 				table.insert(outerPolygon, outerTargetBaseRight)
+				table.insert(outerPolygon, outerTargetBaseLeft)
 			else
 				if #leftPoints == 0 then
 					local dir = getDir(sourceNode.point, spline[#spline])
@@ -1506,14 +1509,14 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 			end
 
 			if targetBaseLeft and targetBaseRight and outerTargetBaseLeft and outerTargetBaseRight then
-				addTriangle(mesh.roadTriangles, currentLeft, currentRight, targetBaseLeft)
-				addTriangle(mesh.roadTriangles, currentLeft, targetBaseLeft, targetBaseRight)
-				addTriangle(mesh.roadEdgeTriangles, currentLeft, currentRight, targetBaseLeft)
-				addTriangle(mesh.roadEdgeTriangles, currentLeft, targetBaseLeft, targetBaseRight)
-				addTriangle(mesh.sidewalkTriangles, currentOuterLeft, currentLeft, targetBaseRight)
-				addTriangle(mesh.sidewalkTriangles, currentOuterLeft, targetBaseRight, outerTargetBaseRight)
-				addTriangle(mesh.sidewalkTriangles, currentRight, currentOuterRight, outerTargetBaseLeft)
-				addTriangle(mesh.sidewalkTriangles, currentRight, outerTargetBaseLeft, targetBaseLeft)
+				addTriangle(mesh.roadTriangles, currentLeft, currentRight, targetBaseRight)
+				addTriangle(mesh.roadTriangles, currentLeft, targetBaseRight, targetBaseLeft)
+				addTriangle(mesh.roadEdgeTriangles, currentLeft, currentRight, targetBaseRight)
+				addTriangle(mesh.roadEdgeTriangles, currentLeft, targetBaseRight, targetBaseLeft)
+				addTriangle(mesh.sidewalkTriangles, currentOuterLeft, currentLeft, targetBaseLeft)
+				addTriangle(mesh.sidewalkTriangles, currentOuterLeft, targetBaseLeft, outerTargetBaseLeft)
+				addTriangle(mesh.sidewalkTriangles, currentRight, currentOuterRight, outerTargetBaseRight)
+				addTriangle(mesh.sidewalkTriangles, currentRight, outerTargetBaseRight, targetBaseRight)
 			end
 		end
 	end
