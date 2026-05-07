@@ -392,6 +392,8 @@ local function createRuntimeGraphMeshes(world, meshData)
 		maxCollisionInputTriangles = ROAD_GRAPH_RUNTIME_MAX_COLLISION_INPUT_TRIANGLES,
 		collisionThickness = 0.2,
 		collisionSurfaceOffset = 0,
+		debugBudgetLogging = Config.roadGraphMeshBudgetDebugLogging == true,
+		budgetLogPrefix = "[cab87 road mesh budget server]",
 	})
 
 	if #result.collisionParts == 0 then

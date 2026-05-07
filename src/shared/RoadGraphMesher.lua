@@ -713,6 +713,14 @@ local function getEdgeTransitionSmoothness(edge)
 	return math.max(tonumber(edge.transitionSmoothness) or 0, 0)
 end
 
+local function getNodeTransitionSmoothness(node)
+	return math.max(tonumber(node and node.transitionSmoothness) or 0, 0)
+end
+
+local function getConnectionTransitionSmoothness(outgoing, node)
+	return getEdgeTransitionSmoothness(outgoing.edge) + getNodeTransitionSmoothness(node)
+end
+
 local function connectionKey(edge, isSource)
 	return tostring(edge.id) .. "_" .. tostring(isSource)
 end
@@ -966,11 +974,11 @@ local function getEdgeClearance(nodeId, edge, isSourceQuery, nodes, edges, nodeL
 				r1.dir,
 				r1.edge.width,
 				sidewalk1,
-				getEdgeTransitionSmoothness(r1.edge),
+				getConnectionTransitionSmoothness(r1, node),
 				r2.dir,
 				r2.edge.width,
 				sidewalk2,
-				getEdgeTransitionSmoothness(r2.edge),
+				getConnectionTransitionSmoothness(r2, node),
 				settings.chamferAngleDeg
 			)
 			corners[i] = innerPoints
@@ -1177,11 +1185,11 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 					r1.dir,
 					r1.edge.width,
 					sidewalk1,
-					getEdgeTransitionSmoothness(r1.edge),
+					getConnectionTransitionSmoothness(r1, node),
 					r2.dir,
 					r2.edge.width,
 					sidewalk2,
-					getEdgeTransitionSmoothness(r2.edge),
+					getConnectionTransitionSmoothness(r2, node),
 					settings.chamferAngleDeg
 				)
 				corners[i] = {

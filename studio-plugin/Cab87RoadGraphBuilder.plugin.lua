@@ -4,12 +4,14 @@
 
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
 local StudioService = game:GetService("StudioService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local ROOT_NAME = "Cab87RoadEditor"
+local ROAD_GRAPH_NAME = "RoadGraph"
 local MARKERS_NAME = "Markers"
 local MARKER_TYPE_ATTR = "Cab87MarkerType"
 local CAB_COMPANY_NODE_NAME = "CabCompanyNode"
@@ -19,6 +21,7 @@ local PLAYER_SPAWN_NAME = "PlayerSpawnPoint"
 local ROAD_GRAPH_SURFACES_NAME = "RoadGraphSurfaces"
 local ROAD_GRAPH_COLLISION_NAME = "RoadGraphCollision"
 local BAKED_RUNTIME_NAME = "RoadGraphBakedRuntime"
+local BAKED_RUNTIME_BUILDING_NAME = "RoadGraphBakedRuntime_Building"
 local BAKED_SURFACES_NAME = "RoadGraphBakedSurfaces"
 local BAKED_COLLISION_NAME = "RoadGraphBakedCollision"
 local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
@@ -42,6 +45,9 @@ local IMPORT_SCALE_STEP = 0.01
 local BAKE_CHUNK_SIZE_STUDS = 768
 local BAKE_MAX_SURFACE_TRIANGLES = 6000
 local BAKE_MAX_COLLISION_INPUT_TRIANGLES = 900
+local AUTO_RELOAD_DELAY_SECONDS = 1.5
+local AUTO_RELOAD_RETRY_SECONDS = 1
+local AUTO_RELOAD_MAX_ATTEMPTS = 20
 
 local MARKER_DESCRIPTIONS = {
 	CabCompany = "Cab spawn marker",
@@ -526,6 +532,22 @@ local function refreshImportScales()
 	return true
 end
 
+local function applyImportScales(pointScale, widthScale)
+	importPointScale = sanitizeImportScale(pointScale)
+	importWidthScale = sanitizeImportScale(widthScale)
+	importPointScaleSlider.setValue(importPointScale)
+	importWidthScaleSlider.setValue(importWidthScale)
+	plugin:SetSetting(IMPORT_POINT_SCALE_SETTING, importPointScale)
+	plugin:SetSetting(IMPORT_WIDTH_SCALE_SETTING, importWidthScale)
+end
+
+local function applyGraphImportScales(graph)
+	if not graph then
+		return
+	end
+	applyImportScales(graph.importPointScale or importPointScale, graph.importWidthScale or importWidthScale)
+end
+
 local function scaleSummary()
 	return string.format("point scale=%sx, width scale=%sx", formatImportScale(importPointScale), formatImportScale(importWidthScale))
 end
@@ -561,6 +583,17 @@ local function createFolder(parent, name)
 	folder.Name = name
 	folder.Parent = parent
 	return folder
+end
+
+local function hasAncestor(instance, ancestor)
+	local current = instance
+	while current do
+		if current == ancestor then
+			return true
+		end
+		current = current.Parent
+	end
+	return false
 end
 
 local function getOrCreateAssetsFolder(root)
@@ -601,12 +634,57 @@ local function clearPreviewMeshes(root)
 	clearChild(root, ROAD_GRAPH_COLLISION_NAME)
 end
 
+local function hideStaleEditorGeometry(root, visibleSurfaceFolder)
+	if not root then
+		return 0
+	end
+
+	local markersFolder = root:FindFirstChild(MARKERS_NAME)
+	local hiddenParts = 0
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			if visibleSurfaceFolder and hasAncestor(descendant, visibleSurfaceFolder) then
+				descendant.Anchored = true
+				descendant.CanCollide = false
+				descendant.CanTouch = false
+				descendant.CanQuery = false
+			elseif markersFolder and hasAncestor(descendant, markersFolder) then
+				descendant.CanCollide = false
+				descendant.CanTouch = false
+				descendant.CanQuery = true
+			else
+				descendant.Anchored = true
+				descendant.CanCollide = false
+				descendant.CanTouch = false
+				descendant.CanQuery = false
+				descendant.Transparency = 1
+				descendant:SetAttribute("Cab87HiddenByRoadGraphBuilder", true)
+				hiddenParts += 1
+			end
+		elseif descendant:IsA("SurfaceGui") or descendant:IsA("BillboardGui") then
+			if not (markersFolder and hasAncestor(descendant, markersFolder)) then
+				descendant.Enabled = false
+			end
+		end
+	end
+	return hiddenParts
+end
+
 local function setBakeScaleAttributes(instance)
 	if not instance then
 		return
 	end
 	instance:SetAttribute("PointScale", importPointScale)
 	instance:SetAttribute("WidthScale", importWidthScale)
+end
+
+local function setGraphScaleAttributes(root)
+	local graphFolder = root and root:FindFirstChild(ROAD_GRAPH_NAME)
+	if not graphFolder or not graphFolder:IsA("Folder") then
+		return
+	end
+	graphFolder:SetAttribute("ImportPointScale", importPointScale)
+	graphFolder:SetAttribute("ImportWidthScale", importWidthScale)
 end
 
 local function countPolygonFillTriangles(meshData)
@@ -617,7 +695,18 @@ local function countPolygonFillTriangles(meshData)
 	return count
 end
 
+local function isPlayRunning()
+	local ok, running = pcall(function()
+		return RunService:IsRunning()
+	end)
+	return ok and running == true
+end
+
 local function bakeMeshAssets()
+	if isPlayRunning() then
+		setStatus("Bake skipped: stop Play before rebuilding editor preview meshes.")
+		return nil
+	end
 	if not refreshMapId() then
 		return nil
 	end
@@ -637,6 +726,7 @@ local function bakeMeshAssets()
 		setStatus("No valid RoadGraph found: import graph JSON first.")
 		return nil
 	end
+	setGraphScaleAttributes(root)
 
 	local scaledGraph = RoadGraphData.scaleGraph(graph, {
 		pointScale = importPointScale,
@@ -650,55 +740,28 @@ local function bakeMeshAssets()
 	local meshData = RoadGraphMesher.buildNetworkMesh(scaledGraph, scaledGraph.settings)
 	local errors = {}
 
-	clearChild(root, BAKED_RUNTIME_NAME)
-	clearChild(root, BAKED_SURFACES_NAME)
-	clearChild(root, BAKED_COLLISION_NAME)
-	clearChild(root, MINIMAP_ROAD_MESH_NAME)
-	clearChild(root, ASSETS_NAME)
+	clearChild(root, BAKED_RUNTIME_BUILDING_NAME)
 
 	local bakedRoot = Instance.new("Model")
-	bakedRoot.Name = BAKED_RUNTIME_NAME
+	bakedRoot.Name = BAKED_RUNTIME_BUILDING_NAME
 	bakedRoot:SetAttribute("MapId", mapId)
 	bakedRoot:SetAttribute("BakedRoadGraphRuntime", true)
 	bakedRoot:SetAttribute("BakeMode", "editorPreviewEditableMesh")
 	setBakeScaleAttributes(bakedRoot)
 	bakedRoot.Parent = root
 
-	local result = RoadMeshBuilder.createClassifiedChunkedMeshes(bakedRoot, meshData, {
+	local surfaceResult = RoadMeshBuilder.createClassifiedCompactSurfaceMeshes(bakedRoot, meshData, {
 		meshFolderName = BAKED_SURFACES_NAME,
-		collisionFolderName = BAKED_COLLISION_NAME,
 		generatedBy = BAKED_MESH_GENERATOR_NAME,
-		chunkSize = BAKE_CHUNK_SIZE_STUDS,
-		maxSurfaceTriangles = BAKE_MAX_SURFACE_TRIANGLES,
-		maxCollisionInputTriangles = BAKE_MAX_COLLISION_INPUT_TRIANGLES,
-		collisionThickness = 0.2,
-		collisionSurfaceOffset = 0,
 	})
-	for _, err in ipairs(result.errors or {}) do
-		table.insert(errors, tostring(err))
+	for _, err in ipairs(surfaceResult.errors or {}) do
+		table.insert(errors, "preview: " .. tostring(err))
 	end
-
-	if #result.visibleParts == 0 or #result.collisionParts == 0 then
-		bakedRoot:Destroy()
-		local reason = #errors > 0 and table.concat(errors, " | ") or "no optimized mesh parts were created"
-		setStatus("Bake failed: " .. reason)
-		return nil
-	end
-
-	hideDefaultBaseplate()
-	for _, part in ipairs(result.visibleParts) do
-		part:SetAttribute("MapId", mapId)
-		part:SetAttribute("BakedRoadGraphMesh", true)
-		part:SetAttribute("BakeMode", "editorPreviewEditableMesh")
-		if part:GetAttribute("SurfaceType") == "polygonFill" then
-			part:SetAttribute("BakedPolygonFillMesh", true)
-		end
-	end
-	for _, part in ipairs(result.collisionParts) do
-		part:SetAttribute("MapId", mapId)
-		part:SetAttribute("BakedRoadGraphMesh", true)
-		part:SetAttribute("BakeMode", "editorPreviewEditableMesh")
-		part:SetAttribute("DriveSurface", true)
+	if surfaceResult.meshFolder then
+		surfaceResult.meshFolder:SetAttribute("MapId", mapId)
+		surfaceResult.meshFolder:SetAttribute("GeneratedBy", BAKED_MESH_GENERATOR_NAME)
+		surfaceResult.meshFolder:SetAttribute("MeshMode", "editorPreviewCompactSurface")
+		surfaceResult.meshFolder:SetAttribute("SurfacePartCount", #surfaceResult.visibleParts)
 	end
 
 	local minimapResult = RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(bakedRoot, meshData, {
@@ -728,13 +791,45 @@ local function bakeMeshAssets()
 		end
 	end
 
+	local result = {
+		meshFolder = surfaceResult.meshFolder,
+		visibleParts = surfaceResult.visibleParts or {},
+		errors = errors,
+	}
+
+	if #result.visibleParts == 0 or not minimapResult or #(minimapResult.visibleParts or {}) == 0 then
+		bakedRoot:Destroy()
+		local reason = #errors > 0 and table.concat(errors, " | ") or "no optimized preview/minimap mesh parts were created"
+		setStatus("Bake failed: " .. reason .. ". Previous baked preview was kept.")
+		return nil
+	end
+
+	hideDefaultBaseplate()
+	for _, part in ipairs(result.visibleParts) do
+		part:SetAttribute("MapId", mapId)
+		part:SetAttribute("BakedRoadGraphMesh", true)
+		part:SetAttribute("BakeMode", "editorPreviewEditableMesh")
+		if part:GetAttribute("SurfaceType") == "polygonFill" then
+			part:SetAttribute("BakedPolygonFillMesh", true)
+		end
+	end
+
+	local hiddenEditorParts = hideStaleEditorGeometry(root, result.meshFolder)
+	clearChild(root, BAKED_RUNTIME_NAME)
+	clearChild(root, BAKED_SURFACES_NAME)
+	clearChild(root, BAKED_COLLISION_NAME)
+	clearChild(root, MINIMAP_ROAD_MESH_NAME)
+	clearChild(root, ASSETS_NAME)
+	bakedRoot.Name = BAKED_RUNTIME_NAME
+
 	local assets = getOrCreateAssetsFolder(root)
 	setBakeScaleAttributes(assets)
 	clearPreviewMeshes(root)
 	assets:SetAttribute("Stale", false)
 	assets:SetAttribute("BakeMode", "editorPreviewEditableMesh")
 	assets:SetAttribute("LastBakeUnix", os.time())
-	assets:SetAttribute("BakedPartCount", #result.visibleParts + #result.collisionParts)
+	assets:SetAttribute("BakedPartCount", #result.visibleParts + (minimapResult and #minimapResult.visibleParts or 0))
+	assets:SetAttribute("PreviewPartCount", #result.visibleParts)
 	assets:SetAttribute("MinimapPartCount", minimapResult and #minimapResult.visibleParts or 0)
 	assets:SetAttribute("RoadTriangles", #(meshData.roadTriangles or {}))
 	assets:SetAttribute("SidewalkTriangles", #(meshData.sidewalkTriangles or {}))
@@ -743,19 +838,21 @@ local function bakeMeshAssets()
 	assets:SetAttribute("ChunkSize", BAKE_CHUNK_SIZE_STUDS)
 	assets:SetAttribute("MaxSurfaceTriangles", BAKE_MAX_SURFACE_TRIANGLES)
 	assets:SetAttribute("MaxCollisionInputTriangles", BAKE_MAX_COLLISION_INPUT_TRIANGLES)
+	assets:SetAttribute("HiddenEditorPreviewPartCount", hiddenEditorParts)
 
 	setStatus(string.format(
-		"Built map %s at %s: %d optimized preview MeshParts, %d minimap parts. Play regenerates these from RoadGraph data.%s",
+		"Built map %s at %s: %d optimized preview MeshParts, %d minimap parts, hid %d stale editor parts. Play regenerates runtime collision from RoadGraph data.%s",
 		mapId,
 		scaleSummary(),
-		#result.visibleParts + #result.collisionParts,
+		#result.visibleParts,
 		minimapResult and #minimapResult.visibleParts or 0,
+		hiddenEditorParts,
 		#errors > 0 and ("\nWarnings: " .. table.concat(errors, " | ")) or ""
 	))
 	Selection:Set({ bakedRoot })
 
 	return {
-		bakedParts = #result.visibleParts + #result.collisionParts,
+		bakedParts = #result.visibleParts,
 		minimapParts = minimapResult and #minimapResult.visibleParts or 0,
 		pointScale = importPointScale,
 		widthScale = importWidthScale,
@@ -1021,3 +1118,55 @@ end)
 selectPlayerSpawnButton.MouseButton1Click:Connect(function()
 	selectMarker(PLAYER_SPAWN_NAME)
 end)
+
+local function autoReloadPreviewMeshes()
+	task.wait(AUTO_RELOAD_DELAY_SECONDS)
+	if isPlayRunning() then
+		return
+	end
+
+	for attempt = 1, AUTO_RELOAD_MAX_ATTEMPTS do
+		if isPlayRunning() then
+			return
+		end
+
+		local root = Workspace:FindFirstChild(ROOT_NAME)
+		local graphFolder = root and root:FindFirstChild(ROAD_GRAPH_NAME)
+		if not graphFolder then
+			return
+		end
+
+		local RoadGraphData, _RoadGraphMesher, _RoadMeshBuilder, moduleErr = getSharedModules()
+		if not moduleErr then
+			local graph = RoadGraphData.collectGraph(root)
+			if not graph then
+				return
+			end
+
+			applyGraphImportScales(graph)
+			setStatus("Reloading road graph preview mesh from saved graph...")
+			if isPlayRunning() then
+				return
+			end
+			local ok, resultOrErr = pcall(bakeMeshAssets)
+			if not ok then
+				setStatus("Auto preview reload failed: " .. tostring(resultOrErr))
+			elseif resultOrErr then
+				setStatus(string.format(
+					"Reloaded road graph preview mesh: %d optimized preview MeshParts at %s.",
+					resultOrErr.bakedParts or 0,
+					scaleSummary()
+				))
+			end
+			return
+		end
+
+		if attempt == AUTO_RELOAD_MAX_ATTEMPTS then
+			setStatus("Auto preview reload skipped: " .. tostring(moduleErr))
+			return
+		end
+		task.wait(AUTO_RELOAD_RETRY_SECONDS)
+	end
+end
+
+task.defer(autoReloadPreviewMeshes)

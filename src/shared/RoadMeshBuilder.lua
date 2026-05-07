@@ -1,4 +1,5 @@
 local AssetService = game:GetService("AssetService")
+local Stats = game:GetService("Stats")
 
 local RoadMeshBuilder = {}
 
@@ -30,6 +31,111 @@ local MIN_TRIANGLE_AREA = 0.0001
 local VERTEX_CACHE_SCALE = 1000
 local DEFAULT_MAX_SURFACE_TRIANGLES = 6000
 local DEFAULT_MAX_COLLISION_INPUT_TRIANGLES = 900
+local BUDGET_LOG_PREFIX = "[cab87 road mesh budget]"
+
+local MEMORY_TAGS = {
+	{ key = "graphicsMeshParts", tag = Enum.DeveloperMemoryTag.GraphicsMeshParts },
+	{ key = "physicsCollision", tag = Enum.DeveloperMemoryTag.PhysicsCollision },
+	{ key = "instances", tag = Enum.DeveloperMemoryTag.Instances },
+	{ key = "luaHeap", tag = Enum.DeveloperMemoryTag.LuaHeap },
+}
+
+local function countDictionaryKeys(dictionary)
+	local count = 0
+	for _ in pairs(dictionary or {}) do
+		count += 1
+	end
+	return count
+end
+
+local function memorySnapshot()
+	local snapshot = {}
+	local trackingOk, trackingEnabled = pcall(function()
+		return Stats.MemoryTrackingEnabled
+	end)
+	if trackingOk and trackingEnabled == false then
+		snapshot.memoryTrackingEnabled = false
+		return snapshot
+	end
+
+	local totalOk, total = pcall(function()
+		return Stats:GetTotalMemoryUsageMb()
+	end)
+	if totalOk then
+		snapshot.total = total
+	end
+
+	for _, record in ipairs(MEMORY_TAGS) do
+		local ok, value = pcall(function()
+			return Stats:GetMemoryUsageMbForTag(record.tag)
+		end)
+		if ok then
+			snapshot[record.key] = value
+		end
+	end
+	return snapshot
+end
+
+local function formatMemoryValue(value)
+	if type(value) ~= "number" then
+		return "n/a"
+	end
+	return string.format("%.2fMB", value)
+end
+
+local function formatMemoryDelta(after, before, key)
+	if type(after[key]) ~= "number" or type(before[key]) ~= "number" then
+		return "n/a"
+	end
+	local delta = after[key] - before[key]
+	return string.format("%+.2fMB", delta)
+end
+
+local function formatMemorySnapshot(snapshot)
+	if snapshot.memoryTrackingEnabled == false then
+		return "memoryTracking=false"
+	end
+	return string.format(
+		"total=%s graphicsMeshParts=%s physicsCollision=%s instances=%s luaHeap=%s",
+		formatMemoryValue(snapshot.total),
+		formatMemoryValue(snapshot.graphicsMeshParts),
+		formatMemoryValue(snapshot.physicsCollision),
+		formatMemoryValue(snapshot.instances),
+		formatMemoryValue(snapshot.luaHeap)
+	)
+end
+
+local function formatMemoryDeltaSet(after, before)
+	if after.memoryTrackingEnabled == false or before.memoryTrackingEnabled == false then
+		return "memoryTracking=false"
+	end
+	return string.format(
+		"total=%s graphicsMeshParts=%s physicsCollision=%s instances=%s luaHeap=%s",
+		formatMemoryDelta(after, before, "total"),
+		formatMemoryDelta(after, before, "graphicsMeshParts"),
+		formatMemoryDelta(after, before, "physicsCollision"),
+		formatMemoryDelta(after, before, "instances"),
+		formatMemoryDelta(after, before, "luaHeap")
+	)
+end
+
+local function shouldLogBudget(options)
+	return options and options.debugBudgetLogging == true
+end
+
+local function budgetLog(options, message, ...)
+	if not shouldLogBudget(options) then
+		return
+	end
+
+	local prefix = options.budgetLogPrefix or BUDGET_LOG_PREFIX
+	local ok, formatted = pcall(string.format, tostring(message), ...)
+	print(prefix .. " " .. (if ok then formatted else tostring(message)))
+end
+
+local function rawGeometryKb(vertexCount, faceCount)
+	return ((vertexCount * 3 * 4) + (faceCount * 3 * 4)) / 1024
+end
 
 local function colorFromValue(value, defaultColor)
 	if typeof(value) == "Color3" then
@@ -49,11 +155,22 @@ local function colorFromValue(value, defaultColor)
 	return defaultColor
 end
 
-local function newMeshState()
+local function newMeshState(options)
+	local before = if shouldLogBudget(options) then memorySnapshot() else nil
 	local ok, editableMeshOrErr = pcall(function()
 		return AssetService:CreateEditableMesh()
 	end)
 	if not ok or not editableMeshOrErr then
+		if before then
+			budgetLog(
+				options,
+				"editableMeshCreateFailed name=%s kind=%s inputTriangles=%s memory={%s} remainingEditableBudget=unavailable",
+				tostring(options.meshName or "?"),
+				tostring(options.meshKind or "?"),
+				tostring(options.inputTriangles or "?"),
+				formatMemorySnapshot(before)
+			)
+		end
 		return nil, "EditableMesh creation failed: " .. tostring(editableMeshOrErr)
 	end
 
@@ -241,9 +358,20 @@ end
 
 local function createMeshPartFromState(state, parent, name, options)
 	options = options or {}
+	local before = if shouldLogBudget(options) then memorySnapshot() else nil
 	if state.faces == 0 then
 		local detail = if #state.errors > 0 then ": " .. table.concat(state.errors, " | ") else ""
 		destroyEditableMesh(state.mesh)
+		if before then
+			budgetLog(
+				options,
+				"meshDiscarded name=%s kind=%s inputTriangles=%s editableFaces=0 memory={%s} remainingEditableBudget=unavailable",
+				tostring(name),
+				tostring(options.meshKind or "?"),
+				tostring(options.inputTriangles or "?"),
+				formatMemorySnapshot(before)
+			)
+		end
 		return nil, "No mesh faces were generated" .. detail
 	end
 
@@ -256,6 +384,10 @@ local function createMeshPartFromState(state, parent, name, options)
 	local meshPart, err = createMeshPartFromContent(meshContent, parent, name, options, state.faces)
 	if meshPart then
 		retainEditableMesh(meshPart, state.mesh)
+		local vertexCount = countDictionaryKeys(state.vertexIds)
+		meshPart:SetAttribute("EditableMeshVertexCount", vertexCount)
+		meshPart:SetAttribute("EditableMeshFaceCount", state.faces)
+		meshPart:SetAttribute("EditableMeshBudgetRemaining", "unavailable")
 		if state.skippedFaces > 0 then
 			meshPart:SetAttribute("SkippedTriangleCount", state.skippedFaces)
 			if #state.errors > 0 then
@@ -263,10 +395,44 @@ local function createMeshPartFromState(state, parent, name, options)
 			end
 		end
 		meshPart:SetAttribute("MeshContentMode", "liveEditableObject")
+		if before then
+			local after = memorySnapshot()
+			budgetLog(
+				options,
+				"meshPartCreated name=%s kind=%s surfaceType=%s inputTriangles=%s editableFaces=%d uniqueVertices=%d rawGeometry=%.1fKB skipped=%d memoryBefore={%s} memoryAfter={%s} memoryDelta={%s} remainingEditableBudget=unavailable",
+				tostring(name),
+				tostring(options.meshKind or "?"),
+				tostring(options.surfaceType or "?"),
+				tostring(options.inputTriangles or "?"),
+				state.faces,
+				vertexCount,
+				rawGeometryKb(vertexCount, state.faces),
+				state.skippedFaces,
+				formatMemorySnapshot(before),
+				formatMemorySnapshot(after),
+				formatMemoryDeltaSet(after, before)
+			)
+		end
 		return meshPart, nil
 	end
 
 	destroyEditableMesh(state.mesh)
+	if before then
+		local after = memorySnapshot()
+		budgetLog(
+			options,
+			"meshPartCreateFailed name=%s kind=%s surfaceType=%s inputTriangles=%s editableFaces=%d memoryBefore={%s} memoryAfter={%s} memoryDelta={%s} remainingEditableBudget=unavailable error=%s",
+			tostring(name),
+			tostring(options.meshKind or "?"),
+			tostring(options.surfaceType or "?"),
+			tostring(options.inputTriangles or "?"),
+			state.faces,
+			formatMemorySnapshot(before),
+			formatMemorySnapshot(after),
+			formatMemoryDeltaSet(after, before),
+			tostring(err)
+		)
+	end
 	return nil, err
 end
 
@@ -291,8 +457,8 @@ function RoadMeshBuilder.destroyState(state)
 	end
 end
 
-function RoadMeshBuilder.createSurfaceState(triangles)
-	local state, err = newMeshState()
+function RoadMeshBuilder.createSurfaceState(triangles, options)
+	local state, err = newMeshState(options)
 	if not state then
 		return nil, err
 	end
@@ -313,7 +479,7 @@ function RoadMeshBuilder.createCollisionState(triangles, options)
 	local topOffset = Vector3.new(0, surfaceOffset, 0)
 	local bottomOffset = Vector3.new(0, surfaceOffset - thickness, 0)
 
-	local state, err = newMeshState()
+	local state, err = newMeshState(options)
 	if not state then
 		return nil, err
 	end
@@ -342,24 +508,29 @@ function RoadMeshBuilder.createCollisionState(triangles, options)
 end
 
 function RoadMeshBuilder.createSurfaceMesh(parent, name, triangles, options)
-	local state, err = RoadMeshBuilder.createSurfaceState(triangles)
+	local surfaceOptions = table.clone(options or {})
+	surfaceOptions.meshName = name
+	surfaceOptions.meshKind = surfaceOptions.meshKind or "surface"
+	surfaceOptions.inputTriangles = #(triangles or {})
+	local state, err = RoadMeshBuilder.createSurfaceState(triangles, surfaceOptions)
 	if not state then
 		return nil, err
 	end
 
-	local surfaceOptions = table.clone(options or {})
 	surfaceOptions.collisionFidelity = surfaceOptions.collisionFidelity or Enum.CollisionFidelity.Box
 	return createMeshPartFromState(state, parent, name, surfaceOptions)
 end
 
 function RoadMeshBuilder.createCollisionMesh(parent, name, triangles, options)
-	options = options or {}
-	local state, err = RoadMeshBuilder.createCollisionState(triangles, options)
+	local collisionOptions = table.clone(options or {})
+	collisionOptions.meshName = name
+	collisionOptions.meshKind = collisionOptions.meshKind or "collision"
+	collisionOptions.inputTriangles = #(triangles or {})
+	local state, err = RoadMeshBuilder.createCollisionState(triangles, collisionOptions)
 	if not state then
 		return nil, err
 	end
 
-	local collisionOptions = table.clone(options)
 	collisionOptions.canCollide = true
 	collisionOptions.canQuery = true
 	collisionOptions.canTouch = false

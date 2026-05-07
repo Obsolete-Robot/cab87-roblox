@@ -262,6 +262,7 @@ function RoadGraphData.normalizePayload(payload, options)
 				local normalized = {
 					id = nodeId,
 					point = position,
+					transitionSmoothness = finiteNumber(node.transitionSmoothness),
 				}
 				table.insert(normalizedNodes, normalized)
 				nodeLookup[nodeId] = normalized
@@ -360,6 +361,7 @@ function RoadGraphData.scaleGraph(graph, options)
 			local scaledNode = {
 				id = nodeId,
 				point = scaleVectorFromPlane(node.point, planeY, pointScale),
+				transitionSmoothness = scaleNumber(node.transitionSmoothness, pointScale),
 			}
 			table.insert(nodes, scaledNode)
 			nodeLookup[nodeId] = scaledNode
@@ -460,6 +462,9 @@ function RoadGraphData.writeGraph(root, graph, name)
 		nodeValue.Name = sanitizeId(node.id, "n", index)
 		nodeValue.Value = node.point
 		nodeValue:SetAttribute("NodeId", sanitizeId(node.id, "n", index))
+		if finiteNumber(node.transitionSmoothness) then
+			nodeValue:SetAttribute("TransitionSmoothness", math.max(finiteNumber(node.transitionSmoothness), 0))
+		end
 		nodeValue.Parent = nodesFolder
 	end
 
@@ -560,6 +565,7 @@ function RoadGraphData.collectGraph(root, config)
 			local node = {
 				id = nodeId,
 				point = child.Value,
+				transitionSmoothness = finiteNumber(child:GetAttribute("TransitionSmoothness")),
 			}
 			table.insert(nodes, node)
 			nodeLookup[nodeId] = node
@@ -644,6 +650,7 @@ function RoadGraphData.toPayload(graph)
 		table.insert(nodes, {
 			id = node.id,
 			point = vectorToGraphPoint(node.point, graph.planeY),
+			transitionSmoothness = node.transitionSmoothness,
 		})
 	end
 

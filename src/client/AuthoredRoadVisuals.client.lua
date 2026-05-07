@@ -235,6 +235,8 @@ local function buildClientVisuals(world)
 				canCollide = false,
 				canQuery = false,
 				canTouch = false,
+				debugBudgetLogging = Config.roadGraphMeshBudgetDebugLogging == true,
+				budgetLogPrefix = "[cab87 road mesh budget client]",
 			})
 		end)
 		if token ~= buildToken then

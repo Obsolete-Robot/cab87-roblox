@@ -92,6 +92,11 @@ crosswalks or junction roads in Roblox but not in Road-Maker, first compare the 
 inputs used by polygon fill stitching: `roadPolygons.*Curve`, `hubs.outerPolygon`, and
 `crosswalks`.
 
+Junction smoothing must also stay aligned. Road-Maker computes each corner smoothness as
+`edge.transitionSmoothness + node.transitionSmoothness`; Roblox import/export must preserve
+node `transitionSmoothness` and `RoadGraphMesher.lua` must use the same sum when calculating
+junction corners and edge clearances.
+
 ## Hub Polygon Ordering And Winding
 
 This area is easy to break.
