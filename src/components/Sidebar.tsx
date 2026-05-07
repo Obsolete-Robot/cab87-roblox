@@ -33,6 +33,8 @@ interface SidebarProps {
   setSelectedNodes: React.Dispatch<React.SetStateAction<string[]>>;
   selectedEdges: string[];
   setSelectedEdges: React.Dispatch<React.SetStateAction<string[]>>;
+  debugOptions: any;
+  setDebugOptions: (v: any) => void;
 }
 
 export default function Sidebar({
@@ -63,8 +65,10 @@ export default function Sidebar({
   setSelectedNodes,
   selectedEdges,
   setSelectedEdges,
+  debugOptions,
+  setDebugOptions,
 }: SidebarProps) {
-  const [activeTab, setActiveTab] = useState<'local' | 'global'>('local');
+  const [activeTab, setActiveTab] = useState<'local' | 'global' | 'debug'>('local');
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const toggleSection = (section: string) => setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
   
@@ -170,6 +174,14 @@ export default function Sidebar({
           }`}
         >
           Global
+        </button>
+        <button 
+          onClick={() => setActiveTab('debug')}
+          className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+            activeTab === 'debug' ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-400 hover:text-slate-300'
+          }`}
+        >
+          Debug
         </button>
       </div>
 
@@ -676,8 +688,28 @@ export default function Sidebar({
             </div>
           )}
         </section>
-  
-        
+      </div>
+
+      <div className={activeTab === 'debug' ? "flex flex-col gap-4 flex-grow min-h-0" : "hidden"}>
+        <section>
+          <div className="space-y-4 bg-slate-800/20 p-3 rounded-lg border border-slate-800/50">
+            <h3 className="text-sm font-bold text-slate-300 mb-2">Mesh Visibility Options</h3>
+            {Object.keys(debugOptions).map(key => (
+              <div key={key} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id={`debug-${key}`}
+                  checked={debugOptions[key]}
+                  onChange={(e) => setDebugOptions((prev: any) => ({ ...prev, [key]: e.target.checked }))}
+                  className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                />
+                <label htmlFor={`debug-${key}`} className="text-sm text-slate-300 capitalize cursor-pointer">
+                  {key.replace(/([A-Z])/g, ' $1').trim()}
+                </label>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
 </aside>
   );

@@ -35,6 +35,7 @@ interface ThreeSceneProps {
   marqueeStart?: Point | null;
   marqueeEnd?: Point | null;
   snapGridSize?: number;
+  debugOptions: any;
 }
 
 export default function ThreeScene({ 
@@ -43,7 +44,7 @@ export default function ThreeScene({
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
     isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPoints, selectedPolygonFillId,
     softSelectionEnabled, softSelectionRadius,
-    view, setView, containerRef, marqueeStart, marqueeEnd, snapGridSize
+    view, setView, containerRef, marqueeStart, marqueeEnd, snapGridSize, debugOptions
 }: ThreeSceneProps) {
   const mesh = useMemo(() => buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth || 30, polygonFills), [nodes, edges, chamferAngle, meshResolution, laneWidth, polygonFills]);
 
@@ -97,6 +98,7 @@ export default function ThreeScene({
           marqueeStart={marqueeStart}
           marqueeEnd={marqueeEnd}
           snapGridSize={snapGridSize}
+          debugOptions={debugOptions}
         />
       </Canvas>
     </div>
