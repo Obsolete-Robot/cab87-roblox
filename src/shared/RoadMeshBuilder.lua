@@ -28,6 +28,7 @@ local DEFAULT_CHUNK_SIZE = 1024
 local DEFAULT_POLYGON_FILL_COLOR = Color3.fromRGB(16, 185, 129)
 local DEFAULT_POLYGON_FILL_MATERIAL = Enum.Material.SmoothPlastic
 local MIN_TRIANGLE_AREA = 0.0001
+local EPSILON = 1e-5
 local VERTEX_CACHE_SCALE = 1000
 local DEFAULT_MAX_SURFACE_TRIANGLES = 6000
 local DEFAULT_MAX_COLLISION_INPUT_TRIANGLES = 900
@@ -176,10 +177,14 @@ local function newMeshState(options)
 
 	return {
 		mesh = editableMeshOrErr,
+		options = options or {},
 		faces = 0,
 		skippedFaces = 0,
+		flippedFaces = 0,
+		normalErrors = 0,
 		errors = {},
 		vertexIds = {},
+		normalIds = {},
 	}
 end
 
@@ -240,22 +245,69 @@ local function getVertexId(state, position)
 	return vertexId
 end
 
+local function normalKey(normal)
+	local unit = normal.Unit
+	return tostring(quantizeCoordinate(unit.X))
+		.. ":"
+		.. tostring(quantizeCoordinate(unit.Y))
+		.. ":"
+		.. tostring(quantizeCoordinate(unit.Z))
+end
+
+local function getNormalId(state, normal)
+	local key = normalKey(normal)
+	local normalId = state.normalIds[key]
+	if normalId then
+		return normalId
+	end
+
+	normalId = state.mesh:AddNormal(normal.Unit)
+	state.normalIds[key] = normalId
+	return normalId
+end
+
+local function setFaceNormal(state, faceId, normal)
+	if state.options.useFaceNormals ~= true or not faceId then
+		return
+	end
+
+	if normal.Magnitude <= MIN_TRIANGLE_AREA then
+		return
+	end
+
+	local ok = pcall(function()
+		local normalId = getNormalId(state, normal)
+		state.mesh:SetFaceNormals(faceId, { normalId, normalId, normalId })
+	end)
+	if not ok then
+		state.normalErrors += 1
+	end
+end
+
 local function addTriangle(state, a, b, c)
 	if not (typeof(a) == "Vector3" and typeof(b) == "Vector3" and typeof(c) == "Vector3") then
 		recordMeshError(state, "triangle had non-Vector3 points")
 		return false
 	end
 
-	if (b - a):Cross(c - a).Magnitude <= MIN_TRIANGLE_AREA then
+	local normal = (b - a):Cross(c - a)
+	if normal.Magnitude <= MIN_TRIANGLE_AREA then
 		recordMeshError(state, "triangle was degenerate")
 		return false
+	end
+
+	if state.options.forceUpNormals == true and normal.Y < -EPSILON then
+		b, c = c, b
+		normal = (b - a):Cross(c - a)
+		state.flippedFaces += 1
 	end
 
 	local ok, err = pcall(function()
 		local va = getVertexId(state, a)
 		local vb = getVertexId(state, b)
 		local vc = getVertexId(state, c)
-		state.mesh:AddTriangle(va, vb, vc)
+		local faceId = state.mesh:AddTriangle(va, vb, vc)
+		setFaceNormal(state, faceId, normal)
 	end)
 	if not ok then
 		recordMeshError(state, err)
@@ -385,7 +437,11 @@ local function createMeshPartFromState(state, parent, name, options)
 	if meshPart then
 		retainEditableMesh(meshPart, state.mesh)
 		local vertexCount = countDictionaryKeys(state.vertexIds)
+		local normalCount = countDictionaryKeys(state.normalIds)
 		meshPart:SetAttribute("EditableMeshVertexCount", vertexCount)
+		if normalCount > 0 then
+			meshPart:SetAttribute("EditableMeshNormalCount", normalCount)
+		end
 		meshPart:SetAttribute("EditableMeshFaceCount", state.faces)
 		meshPart:SetAttribute("EditableMeshBudgetRemaining", "unavailable")
 		if state.skippedFaces > 0 then
@@ -394,20 +450,29 @@ local function createMeshPartFromState(state, parent, name, options)
 				meshPart:SetAttribute("SkippedTriangleReason", table.concat(state.errors, " | "))
 			end
 		end
+		if state.flippedFaces > 0 then
+			meshPart:SetAttribute("FlippedTriangleCount", state.flippedFaces)
+		end
+		if state.normalErrors > 0 then
+			meshPart:SetAttribute("FaceNormalErrorCount", state.normalErrors)
+		end
 		meshPart:SetAttribute("MeshContentMode", "liveEditableObject")
 		if before then
 			local after = memorySnapshot()
 			budgetLog(
 				options,
-				"meshPartCreated name=%s kind=%s surfaceType=%s inputTriangles=%s editableFaces=%d uniqueVertices=%d rawGeometry=%.1fKB skipped=%d memoryBefore={%s} memoryAfter={%s} memoryDelta={%s} remainingEditableBudget=unavailable",
+				"meshPartCreated name=%s kind=%s surfaceType=%s inputTriangles=%s editableFaces=%d uniqueVertices=%d uniqueNormals=%d rawGeometry=%.1fKB skipped=%d flipped=%d normalErrors=%d memoryBefore={%s} memoryAfter={%s} memoryDelta={%s} remainingEditableBudget=unavailable",
 				tostring(name),
 				tostring(options.meshKind or "?"),
 				tostring(options.surfaceType or "?"),
 				tostring(options.inputTriangles or "?"),
 				state.faces,
 				vertexCount,
+				normalCount,
 				rawGeometryKb(vertexCount, state.faces),
 				state.skippedFaces,
+				state.flippedFaces,
+				state.normalErrors,
 				formatMemorySnapshot(before),
 				formatMemorySnapshot(after),
 				formatMemoryDeltaSet(after, before)
@@ -458,6 +523,14 @@ function RoadMeshBuilder.destroyState(state)
 end
 
 function RoadMeshBuilder.createSurfaceState(triangles, options)
+	options = table.clone(options or {})
+	if options.forceUpNormals == nil then
+		options.forceUpNormals = true
+	end
+	if options.useFaceNormals == nil then
+		options.useFaceNormals = true
+	end
+
 	local state, err = newMeshState(options)
 	if not state then
 		return nil, err
@@ -473,7 +546,7 @@ function RoadMeshBuilder.createSurfaceState(triangles, options)
 end
 
 function RoadMeshBuilder.createCollisionState(triangles, options)
-	options = options or {}
+	options = table.clone(options or {})
 	local thickness = math.max(tonumber(options.thickness) or 0.2, 0.05)
 	local surfaceOffset = tonumber(options.surfaceOffset) or 0
 	local topOffset = Vector3.new(0, surfaceOffset, 0)
