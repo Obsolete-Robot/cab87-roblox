@@ -52,6 +52,11 @@ export function calculateBothCornerPoints(
     const isSharp = interiorAngleDeg < chamferAngleDeg || interiorAngleDeg > (360 - chamferAngleDeg);
     const isNearlyStraight = interiorAngleDeg > 150 && interiorAngleDeg < 210;
 
+    let finalT = t;
+    let finalU = u;
+    let finalOT = ot;
+    let finalOU = ou;
+
     if (isSharp || isNearlyStraight) {
         const maxDistInner = Math.max(W1, W2) * 1.5;
         const maxDistOuter = Math.max(OW1, OW2) * 1.5;
@@ -69,40 +74,58 @@ export function calculateBothCornerPoints(
         const capOT = isNearlyStraight ? Math.max(-straightCapOuter, Math.min(ot, straightCapOuter)) : (ot < 0 ? Math.max(ot, -maxDistOuter) : Math.min(ot, spikeCapOT));
         const capOU = isNearlyStraight ? Math.max(-straightCapOuter, Math.min(ou, straightCapOuter)) : (ou < 0 ? Math.max(ou, -maxDistOuter) : Math.min(ou, spikeCapOT));
 
-        const finalT = capT + smoothness1;
-        const finalU = capU + smoothness2;
-        const finalOT = capOT + smoothness1;
-        const finalOU = capOU + smoothness2;
+        finalT = capT + smoothness1;
+        finalU = capU + smoothness2;
+        finalOT = capOT + smoothness1;
+        finalOU = capOU + smoothness2;
+    } else {
+        finalT = t + smoothness1;
+        finalU = u + smoothness2;
+        finalOT = ot + smoothness1;
+        finalOU = ou + smoothness2;
+    }
 
-        if (finalT !== t || finalU !== u || finalOT !== ot || finalOU !== ou || smoothness1 > 0 || smoothness2 > 0) {
-          return [
-            [
-              { x: A.x + finalT * dir1.x, y: A.y + finalT * dir1.y, z: center.z },
-              { x: B.x + finalU * dir2.x, y: B.y + finalU * dir2.y, z: center.z }
-            ],
-            [
-              { x: OA.x + finalOT * dir1.x, y: OA.y + finalOT * dir1.y, z: center.z },
-              { x: OB.x + finalOU * dir2.x, y: OB.y + finalOU * dir2.y, z: center.z }
-            ]
-          ];
+    const A_inner = { x: A.x + finalT * dir1.x, y: A.y + finalT * dir1.y, z: center.z };
+    const B_inner = { x: B.x + finalU * dir2.x, y: B.y + finalU * dir2.y, z: center.z };
+
+    // Keep chamfered sidewalk width constant by making the outer chamfer line parallel to the inner one.
+    let OA_outer = { x: OA.x + finalOT * dir1.x, y: OA.y + finalOT * dir1.y, z: center.z };
+    let OB_outer = { x: OB.x + finalOU * dir2.x, y: OB.y + finalOU * dir2.y, z: center.z };
+
+    const V = { x: B_inner.x - A_inner.x, y: B_inner.y - A_inner.y };
+    const L = Math.hypot(V.x, V.y);
+
+    if (L > 1e-4 && (finalT !== t || finalU !== u)) {
+        let N = { x: V.y / L, y: -V.x / L };
+        const M = { x: (A_inner.x + B_inner.x) / 2, y: (A_inner.y + B_inner.y) / 2 };
+        const MC = { x: M.x - center.x, y: M.y - center.y };
+        if (N.x * MC.x + N.y * MC.y < 0) {
+            N.x = -N.x;
+            N.y = -N.y;
         }
-      }
 
-      const finalT = t + smoothness1;
-      const finalU = u + smoothness2;
-      const finalOT = ot + smoothness1;
-      const finalOU = ou + smoothness2;
+        const sw = Math.max(sw1, sw2);
+        const P = { x: M.x + N.x * sw, y: M.y + N.y * sw };
 
-      if (smoothness1 > 0 || smoothness2 > 0) {
+        const det1 = V.x * dir1.y - V.y * dir1.x;
+        if (Math.abs(det1) > 1e-5) {
+            const a = ((P.y - OA.y) * V.x - (P.x - OA.x) * V.y) / det1;
+            OA_outer = { x: OA.x + a * dir1.x, y: OA.y + a * dir1.y, z: center.z };
+            finalOT = a;
+        }
+
+        const det2 = V.x * dir2.y - V.y * dir2.x;
+        if (Math.abs(det2) > 1e-5) {
+            const c = ((P.y - OB.y) * V.x - (P.x - OB.x) * V.y) / det2;
+            OB_outer = { x: OB.x + c * dir2.x, y: OB.y + c * dir2.y, z: center.z };
+            finalOU = c;
+        }
+    }
+
+      if (finalT !== t || finalU !== u || finalOT !== ot || finalOU !== ou) {
         return [
-          [
-            { x: A.x + finalT * dir1.x, y: A.y + finalT * dir1.y, z: center.z },
-            { x: B.x + finalU * dir2.x, y: B.y + finalU * dir2.y, z: center.z }
-          ],
-          [
-            { x: OA.x + finalOT * dir1.x, y: OA.y + finalOT * dir1.y, z: center.z },
-            { x: OB.x + finalOU * dir2.x, y: OB.y + finalOU * dir2.y, z: center.z }
-          ]
+          [A_inner, B_inner],
+          [OA_outer, OB_outer]
         ];
       }
 

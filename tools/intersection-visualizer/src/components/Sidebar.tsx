@@ -366,6 +366,19 @@ export default function Sidebar({
                           className="w-full accent-blue-500 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
+                      <div className="mt-2 pointer-events-auto flex items-center justify-between">
+                        <span className="text-xs text-slate-400">Ignore Road Rendering</span>
+                        <input
+                          type="checkbox"
+                          checked={n.ignoreMeshing ?? false}
+                          onChange={(evt) =>
+                            setNodes((prev) =>
+                              prev.map((pn) => (pn.id === n.id ? { ...pn, ignoreMeshing: evt.target.checked } : pn))
+                            )
+                          }
+                          className="accent-blue-500 cursor-pointer"
+                        />
+                      </div>
                     </div>
                   ))}
 

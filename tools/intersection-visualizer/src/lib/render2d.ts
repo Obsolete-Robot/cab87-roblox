@@ -212,6 +212,7 @@ export const drawNetwork2D = (
     }
 
     mesh.roadPolygons.forEach(rp => {
+      if (rp.ignoreMeshing) return;
       if (rp.outerLeftCurve && rp.outerRightCurve && rp.outerLeftCurve.length === rp.outerRightCurve.length && rp.outerLeftCurve.length > 0) {
           for (let i = 0; i < rp.outerLeftCurve.length - 1; i++) {
               const p0 = rp.outerLeftCurve[i];
@@ -255,7 +256,9 @@ export const drawNetwork2D = (
       }
     });
 
-    mesh.sidewalkPolygons.forEach(poly => {
+    mesh.sidewalkPolygons.forEach(sidewalk => {
+      const poly = sidewalk.polygon;
+      if (sidewalk.ignoreMeshing) return;
       if (poly.length === 0) return;
       renderables.push({
           z: getAvgZ(poly),
@@ -290,6 +293,7 @@ export const drawNetwork2D = (
     });
 
     mesh.roadPolygons.forEach(rp => {
+      if (rp.ignoreMeshing) return;
       if (rp.leftCurve && rp.rightCurve && rp.leftCurve.length === rp.rightCurve.length && rp.leftCurve.length > 0) {
           for (let i = 0; i < rp.leftCurve.length - 1; i++) {
               const p0 = rp.leftCurve[i];
@@ -368,7 +372,9 @@ export const drawNetwork2D = (
        });
     });
 
-    mesh.dashedLines.forEach(cl => {
+    mesh.dashedLines.forEach(dashedLine => {
+        const cl = dashedLine.points;
+        if (dashedLine.ignoreMeshing) return;
         if (cl.length > 0) {
             let currentDist = 0;
             for (let i = 0; i < cl.length - 1; i++) {
@@ -399,7 +405,9 @@ export const drawNetwork2D = (
         }
     });
 
-    mesh.solidYellowLines.forEach(cl => {
+    mesh.solidYellowLines.forEach(solidLine => {
+        const cl = solidLine.points;
+        if (solidLine.ignoreMeshing) return;
         if (cl.length > 0) {
             for (let j = 0; j < cl.length - 1; j++) {
                 const p1 = cl[j];
@@ -435,6 +443,7 @@ export const drawNetwork2D = (
     });
 
     mesh.laneArrows.forEach(arrow => {
+        if (arrow.ignoreMeshing) return;
         renderables.push({
             z: arrow.position.z ?? 4,
             priority: 5,

@@ -417,7 +417,7 @@ local function buildGridMesh(boundaryPoints)
 	return result
 end
 
-local function buildPolygonFillTriangles(mesh, graph)
+local function buildPolygonFillTriangles(mesh, graph, edgeSplines)
 	local polygonFills = graph.polygonFills or {}
 	if #polygonFills == 0 then
 		return
@@ -426,7 +426,7 @@ local function buildPolygonFillTriangles(mesh, graph)
 	local nodes = graph.nodes or {}
 	local edges = graph.edges or {}
 	local nodeLookup = graph.nodeLookup or nodesById(nodes)
-	local joinThreshold = 150
+	local joinThreshold = 20
 
 	for _, fill in ipairs(polygonFills) do
 		if #(fill.points or {}) < 3 then
@@ -470,6 +470,9 @@ local function buildPolygonFillTriangles(mesh, graph)
 				local useRightCurve = if isClockwise then isForward else not isForward
 				local chosenCurve = if useRightCurve then roadPolygon.outerRightCurve else roadPolygon.outerLeftCurve
 				appendPoints(curve, chosenCurve, not isForward)
+			elseif edge and edgeSplines and edgeSplines[edge.id] and #edgeSplines[edge.id] > 0 then
+				local isForward = edge.source == n1Id
+				appendPoints(curve, edgeSplines[edge.id], not isForward)
 			else
 				table.insert(curve, n1.point)
 				table.insert(curve, n2.point)
@@ -645,6 +648,40 @@ function nodesById(nodes)
 	return lookup
 end
 
+local function nodeIgnoresMeshing(node)
+	return node and node.ignoreMeshing == true
+end
+
+local function edgeIgnoresMeshing(edge, nodeLookup)
+	if not edge then
+		return true
+	end
+
+	local sourceNode = nodeLookup[edge.source]
+	local targetNode = edge.target and nodeLookup[edge.target] or nil
+	return nodeIgnoresMeshing(sourceNode) or nodeIgnoresMeshing(targetNode)
+end
+
+local function filterRoadNodes(nodes)
+	local roadNodes = {}
+	for _, node in ipairs(nodes or {}) do
+		if not nodeIgnoresMeshing(node) then
+			table.insert(roadNodes, node)
+		end
+	end
+	return roadNodes
+end
+
+local function filterRoadEdges(edges, nodeLookup)
+	local roadEdges = {}
+	for _, edge in ipairs(edges or {}) do
+		if not edgeIgnoresMeshing(edge, nodeLookup) then
+			table.insert(roadEdges, edge)
+		end
+	end
+	return roadEdges
+end
+
 local function getEdgeControlPoints(edge, nodeLookup)
 	local sourceNode = nodeLookup[edge.source]
 	if not sourceNode then
@@ -774,6 +811,11 @@ local function calculateBothCornerPoints(center, dir1, width1, sw1, smoothness1,
 		local chamferAngle = chamferAngleDeg or 70
 		local isSharp = interiorAngleDeg < chamferAngle or interiorAngleDeg > (360 - chamferAngle)
 		local isNearlyStraight = interiorAngleDeg > 150 and interiorAngleDeg < 210
+		local finalT = t
+		local finalU = u
+		local finalOuterT = outerT
+		local finalOuterU = outerU
+
 		if isSharp or isNearlyStraight then
 			local maxDistInner = math.max(w1, w2) * 1.5
 			local maxDistOuter = math.max(outerW1, outerW2) * 1.5
@@ -798,40 +840,56 @@ local function calculateBothCornerPoints(center, dir1, width1, sw1, smoothness1,
 			local capOuterT = capDistance(outerT, straightCapOuter, maxDistOuter, spikeCapOuterT)
 			local capOuterU = capDistance(outerU, straightCapOuter, maxDistOuter, spikeCapOuterT)
 
-			local finalT = capT + smoothness1
-			local finalU = capU + smoothness2
-			local finalOuterT = capOuterT + smoothness1
-			local finalOuterU = capOuterU + smoothness2
+			finalT = capT + smoothness1
+			finalU = capU + smoothness2
+			finalOuterT = capOuterT + smoothness1
+			finalOuterU = capOuterU + smoothness2
+		else
+			finalT = t + smoothness1
+			finalU = u + smoothness2
+			finalOuterT = outerT + smoothness1
+			finalOuterU = outerU + smoothness2
+		end
 
-			if
-				finalT ~= t
-				or finalU ~= u
-				or finalOuterT ~= outerT
-				or finalOuterU ~= outerU
-				or smoothness1 > 0
-				or smoothness2 > 0
-			then
-				return {
-					pointAt(a, dir1, finalT),
-					pointAt(b, dir2, finalU),
-				}, {
-					pointAt(outerA, dir1, finalOuterT),
-					pointAt(outerB, dir2, finalOuterU),
-				}
+		local innerA = pointAt(a, dir1, finalT)
+		local innerB = pointAt(b, dir2, finalU)
+		local outerAChamfer = pointAt(outerA, dir1, finalOuterT)
+		local outerBChamfer = pointAt(outerB, dir2, finalOuterU)
+		local chamferVector = innerB - innerA
+		local chamferLength = horizontalDistance(innerB, innerA)
+
+		if chamferLength > 1e-4 and (finalT ~= t or finalU ~= u) then
+			local outward = Vector3.new(chamferVector.Z / chamferLength, 0, -chamferVector.X / chamferLength)
+			local midpoint = (innerA + innerB) * 0.5
+			if outward:Dot(midpoint - center) < 0 then
+				outward = -outward
+			end
+
+			local outerLinePoint = midpoint + outward * math.max(sw1, sw2)
+			local det1 = chamferVector.X * dir1.Z - chamferVector.Z * dir1.X
+			if math.abs(det1) > 1e-5 then
+				local outerNumerator = ((outerLinePoint.Z - outerA.Z) * chamferVector.X) - ((outerLinePoint.X - outerA.X) * chamferVector.Z)
+				local outerTOnRay = outerNumerator / det1
+				outerAChamfer = pointAt(outerA, dir1, outerTOnRay)
+				finalOuterT = outerTOnRay
+			end
+
+			local det2 = chamferVector.X * dir2.Z - chamferVector.Z * dir2.X
+			if math.abs(det2) > 1e-5 then
+				local outerNumerator = ((outerLinePoint.Z - outerB.Z) * chamferVector.X) - ((outerLinePoint.X - outerB.X) * chamferVector.Z)
+				local outerUOnRay = outerNumerator / det2
+				outerBChamfer = pointAt(outerB, dir2, outerUOnRay)
+				finalOuterU = outerUOnRay
 			end
 		end
 
-		local finalT = t + smoothness1
-		local finalU = u + smoothness2
-		local finalOuterT = outerT + smoothness1
-		local finalOuterU = outerU + smoothness2
-		if smoothness1 > 0 or smoothness2 > 0 then
+		if finalT ~= t or finalU ~= u or finalOuterT ~= outerT or finalOuterU ~= outerU then
 			return {
-				pointAt(a, dir1, finalT),
-				pointAt(b, dir2, finalU),
+				innerA,
+				innerB,
 			}, {
-				pointAt(outerA, dir1, finalOuterT),
-				pointAt(outerB, dir2, finalOuterU),
+				outerAChamfer,
+				outerBChamfer,
 			}
 		end
 
@@ -1141,13 +1199,15 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 	for _, edge in ipairs(edges) do
 		edgeSplines[edge.id] = sampleEdgeSpline(edge, nodes, edges, nodeLookup, settings)
 	end
+	local roadNodes = filterRoadNodes(nodes)
+	local roadEdges = filterRoadEdges(edges, nodeLookup)
 
 	local nodeClearances = {}
 	local nodeCorners = {}
 	local nodeOuterCorners = {}
 
-	for _, node in ipairs(nodes) do
-		local outgoing = getOutgoing(node, edges, nodeLookup)
+	for _, node in ipairs(roadNodes) do
+		local outgoing = getOutgoing(node, roadEdges, nodeLookup)
 		local count = #outgoing
 		if count == 0 then
 			continue
@@ -1308,7 +1368,7 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		nodeOuterCorners[node.id] = squaredOuterBases
 	end
 
-	for _, edge in ipairs(edges) do
+	for _, edge in ipairs(roadEdges) do
 		local sourceNode = nodeLookup[edge.source]
 		local targetNode = edge.target and nodeLookup[edge.target] or nil
 		if not sourceNode then
@@ -1389,14 +1449,14 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		if baseLeft and baseRight and outerBaseLeft and outerBaseRight then
 			local crosswalkWidth = settings.crosswalkWidth
 
-			if isTrueJunction(sourceNode.id, edges, nodeLookup) then
+			if isTrueJunction(sourceNode.id, roadEdges, nodeLookup) then
 				local startDir = getDir(spline[1], spline[math.min(2, #spline)])
 				local newLeft = baseLeft + startDir * crosswalkWidth
 				local newRight = baseRight + startDir * crosswalkWidth
 				local newOuterLeft = outerBaseLeft + startDir * crosswalkWidth
 				local newOuterRight = outerBaseRight + startDir * crosswalkWidth
 				local polygon = { baseLeft, baseRight, newRight, newLeft }
-				if hasCrosswalk(edge.id, true, edges, nodeLookup) then
+				if hasCrosswalk(edge.id, true, roadEdges, nodeLookup) then
 					table.insert(mesh.crosswalks, { edgeId = edge.id, nodeId = sourceNode.id, polygon = polygon })
 					addQuadTriangles(mesh.crosswalkTriangles, baseLeft, baseRight, newRight, newLeft)
 				end
@@ -1423,14 +1483,14 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 			end
 
 			if targetBaseLeft and targetBaseRight and outerTargetBaseLeft and outerTargetBaseRight then
-				if isTrueJunction(targetNode.id, edges, nodeLookup) then
+				if isTrueJunction(targetNode.id, roadEdges, nodeLookup) then
 					local endDir = getDir(spline[#spline], spline[math.max(1, #spline - 1)])
 					local newLeft = targetBaseLeft + endDir * crosswalkWidth
 					local newRight = targetBaseRight + endDir * crosswalkWidth
 					local newOuterLeft = outerTargetBaseLeft + endDir * crosswalkWidth
 					local newOuterRight = outerTargetBaseRight + endDir * crosswalkWidth
 					local crosswalkPolygon = { targetBaseLeft, targetBaseRight, newRight, newLeft }
-					if hasCrosswalk(edge.id, false, edges, nodeLookup) then
+					if hasCrosswalk(edge.id, false, roadEdges, nodeLookup) then
 						table.insert(mesh.crosswalks, { edgeId = edge.id, nodeId = targetNode.id, polygon = crosswalkPolygon })
 						addQuadTriangles(mesh.crosswalkTriangles, targetBaseRight, targetBaseLeft, newLeft, newRight)
 					end
@@ -1529,7 +1589,7 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		end
 	end
 
-	buildPolygonFillTriangles(mesh, graph)
+	buildPolygonFillTriangles(mesh, graph, edgeSplines)
 
 	addTrianglesToBounds(mesh.bounds, mesh.roadTriangles)
 	addTrianglesToBounds(mesh.bounds, mesh.sidewalkTriangles)

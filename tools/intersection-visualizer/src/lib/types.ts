@@ -18,6 +18,7 @@ export type Node = {
   id: string;
   point: Point;
   transitionSmoothness?: number;
+  ignoreMeshing?: boolean;
 };
 
 export type PolygonFill = {
@@ -48,14 +49,14 @@ export type MeshData = {
   hubTriangles: Triangle[];
   sidewalkTriangles: Triangle[];
   crosswalkTriangles: Triangle[];
-  hubs: { id: string; polygon: Point[]; corners: { points: Point[]; sidewalkWidth: number }[]; outerPolygon: Point[]; outerCorners: Point[][] }[];
-  roadPolygons: { id: string; polygon: Point[]; leftCurve: Point[]; rightCurve: Point[]; outerPolygon: Point[]; outerLeftCurve: Point[]; outerRightCurve: Point[]; sidewalkWidth: number }[];
+  hubs: { id: string; polygon: Point[]; corners: { points: Point[]; sidewalkWidth: number }[]; outerPolygon: Point[]; outerCorners: Point[][]; ignoreMeshing?: boolean }[];
+  roadPolygons: { id: string; polygon: Point[]; leftCurve: Point[]; rightCurve: Point[]; outerPolygon: Point[]; outerLeftCurve: Point[]; outerRightCurve: Point[]; sidewalkWidth: number; ignoreMeshing?: boolean }[];
   crosswalks: { edgeId: string; nodeId: string; polygon: Point[] }[];
-  sidewalkPolygons: Point[][];
-  dashedLines: Point[][];
-  solidYellowLines: Point[][];
+  sidewalkPolygons: { polygon: Point[]; ignoreMeshing?: boolean }[];
+  dashedLines: { points: Point[]; ignoreMeshing?: boolean }[];
+  solidYellowLines: { points: Point[]; ignoreMeshing?: boolean }[];
   dashedLineTriangles: Triangle[];
   solidLineTriangles: Triangle[];
-  laneArrows: { position: Point; dir: Point }[];
+  laneArrows: { position: Point; dir: Point; ignoreMeshing?: boolean }[];
   polygonTriangles: { triangles: Triangle[], color: string }[];
 };

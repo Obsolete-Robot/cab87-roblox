@@ -263,6 +263,7 @@ function RoadGraphData.normalizePayload(payload, options)
 					id = nodeId,
 					point = position,
 					transitionSmoothness = finiteNumber(node.transitionSmoothness),
+					ignoreMeshing = node.ignoreMeshing == true,
 				}
 				table.insert(normalizedNodes, normalized)
 				nodeLookup[nodeId] = normalized
@@ -362,6 +363,7 @@ function RoadGraphData.scaleGraph(graph, options)
 				id = nodeId,
 				point = scaleVectorFromPlane(node.point, planeY, pointScale),
 				transitionSmoothness = scaleNumber(node.transitionSmoothness, pointScale),
+				ignoreMeshing = node.ignoreMeshing == true,
 			}
 			table.insert(nodes, scaledNode)
 			nodeLookup[nodeId] = scaledNode
@@ -465,6 +467,9 @@ function RoadGraphData.writeGraph(root, graph, name)
 		if finiteNumber(node.transitionSmoothness) then
 			nodeValue:SetAttribute("TransitionSmoothness", math.max(finiteNumber(node.transitionSmoothness), 0))
 		end
+		if node.ignoreMeshing == true then
+			nodeValue:SetAttribute("IgnoreMeshing", true)
+		end
 		nodeValue.Parent = nodesFolder
 	end
 
@@ -566,6 +571,7 @@ function RoadGraphData.collectGraph(root, config)
 				id = nodeId,
 				point = child.Value,
 				transitionSmoothness = finiteNumber(child:GetAttribute("TransitionSmoothness")),
+				ignoreMeshing = child:GetAttribute("IgnoreMeshing") == true,
 			}
 			table.insert(nodes, node)
 			nodeLookup[nodeId] = node
@@ -651,6 +657,7 @@ function RoadGraphData.toPayload(graph)
 			id = node.id,
 			point = vectorToGraphPoint(node.point, graph.planeY),
 			transitionSmoothness = node.transitionSmoothness,
+			ignoreMeshing = if node.ignoreMeshing == true then true else nil,
 		})
 	end
 
