@@ -187,6 +187,45 @@ local function pointInPolygonXZ(point, polygon)
 	return isInside
 end
 
+local function segmentIntersectXZ(p0, p1, p2, p3)
+	local s1X = p1.X - p0.X
+	local s1Z = p1.Z - p0.Z
+	local s2X = p3.X - p2.X
+	local s2Z = p3.Z - p2.Z
+
+	local denom = -s2X * s1Z + s1X * s2Z
+	if math.abs(denom) < 1e-10 then
+		return nil
+	end
+
+	local s = (-s1Z * (p0.X - p2.X) + s1X * (p0.Z - p2.Z)) / denom
+	local t = (s2X * (p0.Z - p2.Z) - s2Z * (p0.X - p2.X)) / denom
+
+	if s >= 0 and s <= 1 and t >= 0 and t <= 1 then
+		return Vector3.new(p0.X + t * s1X, p0.Y + t * (p1.Y - p0.Y), p0.Z + t * s1Z)
+	end
+
+	return nil
+end
+
+local function intersectSegmentPolygonXZ(p1, p2, polygon)
+	local closest = nil
+	local minDistance = math.huge
+	for i = 1, #polygon do
+		local poly1 = polygon[i]
+		local poly2 = polygon[(i % #polygon) + 1]
+		local intersection = segmentIntersectXZ(p1, p2, poly1, poly2)
+		if intersection then
+			local distance = horizontalDistance(intersection, p1)
+			if distance < minDistance then
+				minDistance = distance
+				closest = intersection
+			end
+		end
+	end
+	return closest
+end
+
 local function circumcircleContains(point, a, b, c)
 	local ax = a.X
 	local az = a.Z
@@ -465,17 +504,87 @@ local function buildPolygonFillTriangles(mesh, graph, edgeSplines)
 			local edge = findEdgeBetween(edges, n1Id, n2Id)
 			local roadPolygon = edge and findRoadPolygon(mesh.roadPolygons, edge.id) or nil
 			local curve = {}
-			if roadPolygon then
+			if roadPolygon and not roadPolygon.ignoreMeshing then
 				local isForward = edge.source == n1Id
 				local useRightCurve = if isClockwise then isForward else not isForward
 				local chosenCurve = if useRightCurve then roadPolygon.outerRightCurve else roadPolygon.outerLeftCurve
 				appendPoints(curve, chosenCurve, not isForward)
+			elseif roadPolygon then
+				local isForward = edge.source == n1Id
+				local pLeftStart = roadPolygon.outerLeftCurve[1]
+				local pRightStart = roadPolygon.outerRightCurve[1]
+				local pLeftEnd = roadPolygon.outerLeftCurve[#roadPolygon.outerLeftCurve]
+				local pRightEnd = roadPolygon.outerRightCurve[#roadPolygon.outerRightCurve]
+
+				if pLeftStart and pRightStart and pLeftEnd and pRightEnd then
+					local midStartPoint = (pLeftStart + pRightStart) * 0.5
+					local midEndPoint = (pLeftEnd + pRightEnd) * 0.5
+					local midStart = if isForward then midStartPoint else midEndPoint
+					local midEnd = if isForward then midEndPoint else midStartPoint
+
+					table.insert(curve, midStart)
+
+					local spline = edgeSplines and edgeSplines[edge.id] or nil
+					if spline and #spline > 2 then
+						if isForward then
+							for splineIndex = 2, #spline - 1 do
+								table.insert(curve, spline[splineIndex])
+							end
+						else
+							for splineIndex = #spline - 1, 2, -1 do
+								table.insert(curve, spline[splineIndex])
+							end
+						end
+					end
+
+					table.insert(curve, midEnd)
+				end
 			elseif edge and edgeSplines and edgeSplines[edge.id] and #edgeSplines[edge.id] > 0 then
 				local isForward = edge.source == n1Id
 				appendPoints(curve, edgeSplines[edge.id], not isForward)
 			else
 				table.insert(curve, n1.point)
 				table.insert(curve, n2.point)
+			end
+
+			if not roadPolygon then
+				local targetHub = findHub(mesh.hubs, n2Id)
+				if targetHub and #(targetHub.outerPolygon or {}) > 0 and #curve > 1 then
+					local endIndex = #curve
+					while endIndex > 1 and pointInPolygonXZ(curve[endIndex], targetHub.outerPolygon) do
+						endIndex -= 1
+					end
+					if endIndex < #curve then
+						local exactIntersection =
+							intersectSegmentPolygonXZ(curve[endIndex], curve[endIndex + 1], targetHub.outerPolygon)
+						while #curve > endIndex do
+							table.remove(curve)
+						end
+						if exactIntersection then
+							table.insert(curve, exactIntersection)
+						end
+					end
+				end
+
+				local sourceHub = findHub(mesh.hubs, n1Id)
+				if sourceHub and #(sourceHub.outerPolygon or {}) > 0 and #curve > 1 then
+					local startIndex = 1
+					while startIndex < #curve and pointInPolygonXZ(curve[startIndex], sourceHub.outerPolygon) do
+						startIndex += 1
+					end
+					if startIndex > 1 then
+						local exactIntersection =
+							intersectSegmentPolygonXZ(curve[startIndex], curve[startIndex - 1], sourceHub.outerPolygon)
+						local clippedCurve = {}
+						if exactIntersection then
+							table.insert(clippedCurve, exactIntersection)
+						end
+						for curveIndex = startIndex, #curve do
+							table.insert(clippedCurve, curve[curveIndex])
+						end
+						curve = clippedCurve
+					end
+				end
 			end
 			table.insert(segments, curve)
 		end
@@ -1374,6 +1483,7 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 		if not sourceNode then
 			continue
 		end
+		local skipRoadMeshing = edgeIgnoresMeshing(edge, nodeLookup)
 
 		local spline = edgeSplines[edge.id] or {}
 		if #spline < 2 then
@@ -1546,6 +1656,7 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 				outerLeftCurve = { outerBaseLeft, table.unpack(outerLeftPoints) },
 				outerRightCurve = { outerBaseRight, table.unpack(outerRightPoints) },
 				sidewalkWidth = getEdgeSidewalk(edge, settings),
+				ignoreMeshing = skipRoadMeshing,
 			})
 
 			if targetBaseLeft and targetBaseRight and outerTargetBaseLeft and outerTargetBaseRight then
