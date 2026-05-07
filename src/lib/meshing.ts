@@ -554,7 +554,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
            outerPolygon: outerPoly,
            outerLeftCurve: [obL, ...outerLeftPoints, ...(otbL ? [otbL] : [])],
            outerRightCurve: [obR, ...outerRightPoints, ...(otbR ? [otbR] : [])],
-           sidewalkWidth: edge.sidewalk ?? DEFAULTS.sidewalkWidth
+           sidewalkWidth: edge.sidewalk ?? DEFAULTS.sidewalkWidth,
+           ignoreMeshing: skipRoadMeshing
        });
 
        let currL = bL;
@@ -638,7 +639,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         const roadPoly = edge ? mesh.roadPolygons.find(rp => rp.id === edge.id) : null;
 
         let curve: Point[] = [];
-        if (roadPoly) {
+        if (roadPoly && !roadPoly.ignoreMeshing) {
             const isForward = edge!.source === n1_id;
             let useRightCurve = false;
             
@@ -663,6 +664,34 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                     curve.push(chosenCurve[j]);
                 }
             }
+        } else if (roadPoly) {
+            // Ignored road mesh, but we have the computed geometries for its junction connections.
+            // We want the grass fill to extend over the fake road exactly up to the junction sidewalks.
+            const isForward = edge!.source === n1_id;
+            
+            const pL1 = roadPoly.outerLeftCurve[0];
+            const pR1 = roadPoly.outerRightCurve[0];
+            const pL2 = roadPoly.outerLeftCurve[roadPoly.outerLeftCurve.length - 1];
+            const pR2 = roadPoly.outerRightCurve[roadPoly.outerRightCurve.length - 1];
+            
+            const mid1 = { x: (pL1.x + pR1.x) / 2, y: (pL1.y + pR1.y) / 2, z: ((pL1.z ?? 0) + (pR1.z ?? 0)) / 2 };
+            const mid2 = { x: (pL2.x + pR2.x) / 2, y: (pL2.y + pR2.y) / 2, z: ((pL2.z ?? 0) + (pR2.z ?? 0)) / 2 };
+            
+            const midStart = isForward ? mid1 : mid2;
+            const midEnd = isForward ? mid2 : mid1;
+            
+            curve.push(midStart);
+            
+            const spline = edgeSplines.get(edge!.id);
+            if (spline && spline.length > 2) {
+                if (isForward) {
+                    for (let j = 1; j < spline.length - 1; j++) curve.push(spline[j]);
+                } else {
+                    for (let j = spline.length - 2; j >= 1; j--) curve.push(spline[j]);
+                }
+            }
+            
+            curve.push(midEnd);
         } else {
             // No road mesh, use underlying edge spline or straight line
             if (edge) {
@@ -681,6 +710,27 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
             } else {
                 curve.push(n1.point);
                 curve.push(n2.point);
+            }
+            
+            // Clip curve against hub boundaries so it doesn't draw through the junction area
+            const hub2 = mesh.hubs.find(h => h.id === n2_id);
+            if (hub2 && hub2.outerPolygon.length > 0) {
+                let endIdx = curve.length - 1;
+                while (endIdx > 0 && pointInPolygon(curve[endIdx], hub2.outerPolygon)) {
+                    endIdx--;
+                }
+                curve.length = endIdx + 1;
+            }
+            
+            const hub1 = mesh.hubs.find(h => h.id === n1_id);
+            if (hub1 && hub1.outerPolygon.length > 0) {
+                let startIdx = 0;
+                while (startIdx < curve.length - 1 && pointInPolygon(curve[startIdx], hub1.outerPolygon)) {
+                    startIdx++;
+                }
+                if (startIdx > 0) {
+                    curve = curve.slice(startIdx);
+                }
             }
         }
         segments.push(curve);
