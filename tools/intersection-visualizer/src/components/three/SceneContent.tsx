@@ -13,7 +13,7 @@ export function SceneContent({
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
   isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints,
   softSelectionEnabled, softSelectionRadius,
-  setView, containerRef, marqueeStart, marqueeEnd, snapGridSize = 10
+  setView, containerRef, marqueeStart, marqueeEnd, snapGridSize = 10, debugOptions
 }: any) {
   const controlsRef = useRef<any>(null);
 
@@ -167,8 +167,10 @@ export function SceneContent({
         )}
       </group>
 
-      <ActualMesh mesh={mesh} showMesh={showMesh} />
-      <LaneArrows arrows={mesh.laneArrows} showMesh={showMesh} />
+      <ActualMesh mesh={mesh} showMesh={showMesh} debugOptions={debugOptions} />
+      {debugOptions?.lines !== false && (
+        <LaneArrows arrows={mesh.laneArrows} showMesh={showMesh} />
+      )}
 
       {softSelectionEnabled && isDragging && draggingPoint && (
         <mesh

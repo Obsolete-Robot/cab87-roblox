@@ -74,6 +74,15 @@ export default function App() {
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [snapGridSize, setSnapGridSize] = useState(10);
 
+  const [debugOptions, setDebugOptions] = useState({
+    roads: true,
+    junctions: true,
+    sidewalks: true,
+    crossroads: true,
+    lines: true,
+    polyFills: true,
+  });
+
   const handleMatchSelectedZToLast = () => {
     let targetZ: number | null = null;
 
@@ -149,71 +158,72 @@ export default function App() {
   };
 
   useEffect(() => {
-    try {
-      const faces = findClosedAreas(nodes, edges);
+    setPolygonFills(prevPolygonFills => {
+      try {
+        const faces = findClosedAreas(nodes, edges);
 
-      const newPolygonFills: typeof polygonFills = [];
-      const usedOldIds = new Set<string>();
+        const newPolygonFills: typeof prevPolygonFills = [];
+        const usedOldIds = new Set<string>();
 
-      faces.forEach(faceNodes => {
-        const faceKey = getFaceKey(faceNodes);
-        if (deletedFaces.includes(faceKey)) return;
+        faces.forEach(faceNodes => {
+          const faceKey = getFaceKey(faceNodes);
+          if (deletedFaces.includes(faceKey)) return;
 
-        let bestMatch = null;
-        let bestScore = -1;
+          let bestMatch = null;
+          let bestScore = -1;
 
-        polygonFills.forEach(pf => {
-           if (usedOldIds.has(pf.id)) return;
-           const sharedCount = pf.points.filter(nid => faceNodes.includes(nid)).length;
-           if (sharedCount > bestScore) {
-               bestScore = sharedCount;
-               bestMatch = pf;
-           }
+          prevPolygonFills.forEach(pf => {
+             if (usedOldIds.has(pf.id)) return;
+             const sharedCount = pf.points.filter((nid: string) => faceNodes.includes(nid)).length;
+             if (sharedCount > bestScore) {
+                 bestScore = sharedCount;
+                 bestMatch = pf;
+             }
+          });
+
+          // Minimum 2 shared nodes to inherit properties (color, id)
+          if (bestMatch && bestScore >= 2) {
+              usedOldIds.add((bestMatch as any).id);
+              newPolygonFills.push({ id: (bestMatch as any).id, points: faceNodes, color: (bestMatch as any).color });
+          } else {
+              const id = Math.random().toString(36).substring(2, 9);
+              const color = '#10b981'; // default fill color (emerald)
+              newPolygonFills.push({ id, points: faceNodes, color });
+          }
         });
 
-        // Minimum 2 shared nodes to inherit properties (color, id)
-        if (bestMatch && bestScore >= 2) {
-            usedOldIds.add(bestMatch.id);
-            newPolygonFills.push({ id: bestMatch.id, points: faceNodes, color: bestMatch.color });
+        // Determine if there is actually a change to prevent infinite loops
+        let changed = false;
+        if (newPolygonFills.length !== prevPolygonFills.length) {
+          changed = true;
         } else {
-            const id = Math.random().toString(36).substring(2, 9);
-            const color = '#10b981'; // default fill color (emerald)
-            newPolygonFills.push({ id, points: faceNodes, color });
-        }
-      });
-
-      // Determine if there is actually a change to prevent infinite loops
-      let changed = false;
-      if (newPolygonFills.length !== polygonFills.length) {
-        changed = true;
-      } else {
-        for (let i = 0; i < newPolygonFills.length; i++) {
-          const nf = newPolygonFills[i];
-          const of = polygonFills.find(p => p.id === nf.id);
-          if (!of) {
-            changed = true;
-            break;
-          }
-          if (nf.points.length !== of.points.length) {
-            changed = true;
-            break;
-          }
-          for (let j = 0; j < nf.points.length; j++) {
-            if (nf.points[j] !== of.points[j]) {
+          for (let i = 0; i < newPolygonFills.length; i++) {
+            const nf = newPolygonFills[i];
+            const of = prevPolygonFills.find(p => p.id === nf.id);
+            if (!of) {
               changed = true;
               break;
             }
+            if (nf.points.length !== of.points.length) {
+              changed = true;
+              break;
+            }
+            for (let j = 0; j < nf.points.length; j++) {
+              if (nf.points[j] !== of.points[j]) {
+                changed = true;
+                break;
+              }
+            }
           }
         }
-      }
 
-      if (changed) {
-        setPolygonFills(newPolygonFills);
+        return changed ? newPolygonFills : prevPolygonFills;
+      } catch (err) {
+        console.error(err);
+        return prevPolygonFills;
       }
-    } catch (err) {
-      console.error(err);
-    }
-  }, [nodes, edges, polygonFills, deletedFaces]);
+    });
+  }, [nodes, edges, deletedFaces]);
 
   const handleExport = () => {
     const data = JSON.stringify({
@@ -1881,6 +1891,7 @@ export default function App() {
               marqueeStart={marqueeStart}
               marqueeEnd={marqueeEnd}
               snapGridSize={snapGridSize}
+              debugOptions={debugOptions}
             />
           ) : (
             <>
@@ -1955,6 +1966,8 @@ export default function App() {
           setSelectedNodes={setSelectedNodes}
           selectedEdges={selectedEdges}
           setSelectedEdges={setSelectedEdges}
+          debugOptions={debugOptions}
+          setDebugOptions={setDebugOptions}
         />
       </div>
     </div>
