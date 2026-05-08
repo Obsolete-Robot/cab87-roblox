@@ -1,30 +1,11 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { Point } from '../../lib/types';
+import { createTriangleGeometry } from '../../lib/meshExport';
 
 export function ActualMesh({ mesh, showMesh, debugOptions }: { mesh: any, showMesh: boolean, debugOptions?: any }) {
   const createGeo = (triangles: Point[][]) => {
-    const points: THREE.Vector3[] = [];
-    const uvs: number[] = [];
-    triangles.forEach(tri => {
-      if (tri.length === 3) {
-        // Render the actual flat mesh triangles
-        const p0 = new THREE.Vector3(tri[0].x, tri[0].z ?? 4, tri[0].y);
-        const p1 = new THREE.Vector3(tri[1].x, tri[1].z ?? 4, tri[1].y);
-        const p2 = new THREE.Vector3(tri[2].x, tri[2].z ?? 4, tri[2].y);
-        points.push(p0, p1, p2);
-
-        uvs.push(tri[0].u ?? 0, tri[0].v ?? 0);
-        uvs.push(tri[1].u ?? 0, tri[1].v ?? 0);
-        uvs.push(tri[2].u ?? 0, tri[2].v ?? 0);
-      }
-    });
-    const geo = new THREE.BufferGeometry().setFromPoints(points);
-    if (uvs.length > 0) {
-      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    }
-    geo.computeVertexNormals();
-    return geo;
+    return createTriangleGeometry(triangles);
   };
 
   const dashedMap = useMemo(() => {

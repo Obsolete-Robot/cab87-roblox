@@ -3,6 +3,7 @@
 --   %LOCALAPPDATA%\Roblox\Plugins\Cab87RoadGraphBuilder.plugin.lua
 
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
@@ -32,6 +33,8 @@ local MINIMAP_MESH_VERSION = 3
 local MINIMAP_MESH_CHUNK_STUDS = 1024
 local MINIMAP_MESH_MAX_PARTS = 256
 local IMPORT_FILE_FILTER = { "json" }
+local MESH_MANIFEST_SCHEMA = "cab87-road-mesh-manifest"
+local MESH_MANIFEST_VERSION = 1
 local IMPORT_PLANE_Y_SETTING = "cab87_road_graph_import_plane_y"
 local IMPORT_POINT_SCALE_SETTING = "cab87_road_graph_import_point_scale"
 local IMPORT_WIDTH_SCALE_SETTING = "cab87_road_graph_import_width_scale"
@@ -364,6 +367,7 @@ local importWidthScaleSlider = makeSliderRow("Width Scale", importWidthScale)
 local mapIdInput = makeInputRow("Map ID", mapId)
 local importButton = makeButton("Import Graph JSON")
 local bakeAssetsButton = makeButton("Bake Runtime Geometry")
+local adoptImportedMeshButton = makeButton("Adopt Imported GLB Mesh")
 local forkMapButton = makeButton("Fork As New Map")
 local clearAllButton = makeButton("Clear All Road Data")
 local setCabSpawnButton = makeButton("Set Cab Spawn From Camera")
@@ -393,6 +397,33 @@ local function stripUtf8Bom(text)
 	return text
 end
 
+local function requireFreshModule(moduleScript)
+	local clone = moduleScript:Clone()
+	clone.Name = moduleScript.Name .. "_PluginFreshRequire"
+	clone.Parent = moduleScript.Parent
+	local ok, result = pcall(require, clone)
+	clone:Destroy()
+	return ok, result
+end
+
+local function getGraphDataModule()
+	local shared = ReplicatedStorage:FindFirstChild("Shared")
+	if not shared then
+		return nil, "ReplicatedStorage.Shared was not found. Start Rojo sync before using this plugin."
+	end
+
+	local graphDataModule = shared:FindFirstChild("RoadGraphData")
+	if not graphDataModule then
+		return nil, "Shared RoadGraphData module is missing. Start Rojo sync or rebuild the place from source."
+	end
+
+	local okGraphData, graphDataOrErr = requireFreshModule(graphDataModule)
+	if not okGraphData then
+		return nil, "RoadGraphData failed to load: " .. tostring(graphDataOrErr)
+	end
+	return graphDataOrErr, nil
+end
+
 local function getSharedModules()
 	local shared = ReplicatedStorage:FindFirstChild("Shared")
 	if not shared then
@@ -406,24 +437,15 @@ local function getSharedModules()
 		return nil, nil, nil, "Shared road graph modules are missing. Start Rojo sync or rebuild the place from source."
 	end
 
-	local function requireFresh(moduleScript)
-		local clone = moduleScript:Clone()
-		clone.Name = moduleScript.Name .. "_PluginFreshRequire"
-		clone.Parent = moduleScript.Parent
-		local ok, result = pcall(require, clone)
-		clone:Destroy()
-		return ok, result
-	end
-
-	local okGraphData, graphDataOrErr = requireFresh(graphDataModule)
+	local okGraphData, graphDataOrErr = requireFreshModule(graphDataModule)
 	if not okGraphData then
 		return nil, nil, nil, "RoadGraphData failed to load: " .. tostring(graphDataOrErr)
 	end
-	local okMesher, mesherOrErr = requireFresh(mesherModule)
+	local okMesher, mesherOrErr = requireFreshModule(mesherModule)
 	if not okMesher then
 		return nil, nil, nil, "RoadGraphMesher failed to load: " .. tostring(mesherOrErr)
 	end
-	local okMeshBuilder, meshBuilderOrErr = requireFresh(meshBuilderModule)
+	local okMeshBuilder, meshBuilderOrErr = requireFreshModule(meshBuilderModule)
 	if not okMeshBuilder then
 		return nil, nil, nil, "RoadMeshBuilder failed to load: " .. tostring(meshBuilderOrErr)
 	end
@@ -695,7 +717,448 @@ local function countPolygonFillTriangles(meshData)
 	return count
 end
 
-local function isPlayRunning()
+local function colorFromHex(value, fallback)
+	if type(value) ~= "string" then
+		return fallback
+	end
+
+	local hex = string.gsub(value, "#", "")
+	if #hex ~= 6 then
+		return fallback
+	end
+
+	local r = tonumber(string.sub(hex, 1, 2), 16)
+	local g = tonumber(string.sub(hex, 3, 4), 16)
+	local b = tonumber(string.sub(hex, 5, 6), 16)
+	if not (r and g and b) then
+		return fallback
+	end
+
+	return Color3.fromRGB(r, g, b)
+end
+
+local function enumByName(enumType, value, fallback)
+	if type(value) ~= "string" or value == "" then
+		return fallback
+	end
+
+	local ok, item = pcall(function()
+		return enumType[value]
+	end)
+	if ok and item then
+		return item
+	end
+	return fallback
+end
+
+local function normalizeMeshName(value)
+	local text = string.lower(tostring(value or ""))
+	return string.gsub(text, "[^%w]", "")
+end
+
+local function collectMeshParts(instance, target)
+	if not instance then
+		return
+	end
+	if instance:IsA("MeshPart") then
+		table.insert(target, instance)
+	end
+	for _, descendant in ipairs(instance:GetDescendants()) do
+		if descendant:IsA("MeshPart") then
+			table.insert(target, descendant)
+		end
+	end
+end
+
+local function selectedImportedMeshParts()
+	local selected = Selection:Get()
+	local parts = {}
+	local seen = {}
+
+	for _, instance in ipairs(selected) do
+		local collected = {}
+		collectMeshParts(instance, collected)
+		for _, part in ipairs(collected) do
+			if not seen[part] then
+				seen[part] = true
+				table.insert(parts, part)
+			end
+		end
+	end
+
+	return parts
+end
+
+local function indexMeshPartsByName(parts)
+	local exact = {}
+	local normalized = {}
+
+	for _, part in ipairs(parts or {}) do
+		exact[part.Name] = exact[part.Name] or {}
+		table.insert(exact[part.Name], part)
+
+		local normalizedName = normalizeMeshName(part.Name)
+		normalized[normalizedName] = normalized[normalizedName] or {}
+		table.insert(normalized[normalizedName], part)
+	end
+
+	return exact, normalized
+end
+
+local function takeFirstUnused(candidates, usedParts)
+	for _, part in ipairs(candidates or {}) do
+		if not usedParts[part] then
+			usedParts[part] = true
+			return part
+		end
+	end
+	return nil
+end
+
+local function findManifestPart(chunk, exactParts, normalizedParts, allParts, usedParts)
+	local targetName = tostring(chunk.name or "")
+	local part = takeFirstUnused(exactParts[targetName], usedParts)
+	if part then
+		return part
+	end
+
+	local normalizedTarget = normalizeMeshName(targetName)
+	part = takeFirstUnused(normalizedParts[normalizedTarget], usedParts)
+	if part then
+		return part
+	end
+
+	for _, candidate in ipairs(allParts or {}) do
+		if not usedParts[candidate] then
+			local candidateName = normalizeMeshName(candidate.Name)
+			if string.sub(candidateName, 1, #normalizedTarget) == normalizedTarget then
+				usedParts[candidate] = true
+				return candidate
+			end
+		end
+	end
+
+	return nil
+end
+
+local function decodeMeshManifest(contents)
+	local ok, manifestOrErr = pcall(function()
+		return HttpService:JSONDecode(contents)
+	end)
+	if not ok or type(manifestOrErr) ~= "table" then
+		return nil, "manifest JSON decode failed: " .. tostring(manifestOrErr)
+	end
+
+	local manifest = manifestOrErr
+	if manifest.schema ~= MESH_MANIFEST_SCHEMA then
+		return nil, "unsupported manifest schema: " .. tostring(manifest.schema)
+	end
+	if tonumber(manifest.version) ~= MESH_MANIFEST_VERSION then
+		return nil, "unsupported manifest version: " .. tostring(manifest.version)
+	end
+	if type(manifest.chunks) ~= "table" or #manifest.chunks == 0 then
+		return nil, "manifest had no chunks"
+	end
+	return manifest, nil
+end
+
+local function manifestSetting(manifest, key)
+	local settings = manifest and manifest.settings
+	if type(settings) ~= "table" then
+		return nil
+	end
+	return settings[key]
+end
+
+local function firstListValues(values, maxCount)
+	local result = {}
+	for index = 1, math.min(#values, maxCount) do
+		table.insert(result, tostring(values[index]))
+	end
+	return result
+end
+
+local function promptMeshManifest()
+	local okFile, fileOrErr = pcall(function()
+		return StudioService:PromptImportFileAsync(IMPORT_FILE_FILTER)
+	end)
+	if not okFile then
+		return nil, "manifest import failed to open file picker: " .. tostring(fileOrErr)
+	end
+	if not fileOrErr then
+		return nil, "manifest import canceled"
+	end
+
+	local contents, readErr = readImportedFileContents(fileOrErr)
+	if not contents then
+		return nil, tostring(readErr)
+	end
+	return decodeMeshManifest(contents)
+end
+
+local function applyManifestPartOptions(part, chunk, mapIdValue)
+	local kind = tostring(chunk.kind or "surface")
+	local isCollision = kind == "collision"
+
+	part.Name = tostring(chunk.name or part.Name)
+	part.Anchored = true
+	part.CanCollide = chunk.canCollide == true
+	part.CanQuery = chunk.canQuery == true
+	part.CanTouch = chunk.canTouch == true
+	part.CastShadow = chunk.castShadow == true
+	part.Transparency = tonumber(chunk.transparency) or (if isCollision then 1 else 0)
+	part.Color = colorFromHex(chunk.color, if isCollision then Color3.fromRGB(56, 189, 248) else Color3.fromRGB(28, 28, 32))
+	part.Material = enumByName(Enum.Material, chunk.material, Enum.Material.Asphalt)
+	pcall(function()
+		part.DoubleSided = true
+	end)
+	pcall(function()
+		part.CollisionFidelity = enumByName(
+			Enum.CollisionFidelity,
+			chunk.collisionFidelity,
+			if isCollision then Enum.CollisionFidelity.PreciseConvexDecomposition else Enum.CollisionFidelity.Box
+		)
+	end)
+
+	part:SetAttribute("MapId", mapIdValue)
+	part:SetAttribute("BakedRoadGraphMesh", true)
+	part:SetAttribute("BakeMode", "importedGlbManifest")
+	part:SetAttribute("MeshMode", "importedGlbManifest")
+	part:SetAttribute("MeshContentMode", "importedAsset")
+	part:SetAttribute("GeneratedBy", BAKED_MESH_GENERATOR_NAME)
+	part:SetAttribute("ManifestChunkName", tostring(chunk.name or part.Name))
+	part:SetAttribute("ManifestLayer", tostring(chunk.layer or ""))
+	part:SetAttribute("SurfaceType", tostring(chunk.surfaceType or ""))
+	part:SetAttribute("TriangleCount", tonumber(chunk.triangleCount) or nil)
+	part:SetAttribute("InputTriangleCount", tonumber(chunk.inputTriangleCount) or nil)
+	part:SetAttribute("MeshChunkKey", tostring(chunk.chunkKey or ""))
+	part:SetAttribute("MeshBatchIndex", tonumber(chunk.batchIndex) or nil)
+
+	if isCollision or chunk.driveSurface == true then
+		part:SetAttribute("DriveSurface", true)
+	end
+	if tostring(chunk.surfaceType or "") == "polygonFill" then
+		part:SetAttribute("BakedPolygonFillMesh", true)
+	end
+end
+
+local function applyImportedMeshTransform(part)
+	if part:GetAttribute("ImportTransformApplied") == true then
+		return
+	end
+
+	local pointScale = importPointScale
+	local planeY = importPlaneY
+	local position = part.Position
+	local rotation = part.CFrame - position
+	part.Size *= pointScale
+	part.CFrame = CFrame.new(
+		position.X * pointScale,
+		planeY + position.Y * pointScale,
+		position.Z * pointScale
+	) * rotation
+	part:SetAttribute("ImportTransformApplied", true)
+	part:SetAttribute("ImportPlaneY", planeY)
+	part:SetAttribute("ImportPointScale", pointScale)
+end
+
+local function cloneMinimapPart(sourcePart, parent, mapIdValue)
+	local clone = sourcePart:Clone()
+	clone.Name = sourcePart.Name
+	clone.Anchored = true
+	clone.CanCollide = false
+	clone.CanTouch = false
+	clone.CanQuery = false
+	clone.CastShadow = false
+	clone.Transparency = 1
+	clone:SetAttribute("MapId", mapIdValue)
+	clone:SetAttribute("BakedRoadGraphMesh", true)
+	clone:SetAttribute("BakedMinimapRoadMesh", true)
+	clone:SetAttribute("MinimapRoadMesh", true)
+	clone:SetAttribute("GeneratedBy", MINIMAP_MESH_GENERATOR_NAME)
+	clone.Parent = parent
+	return clone
+end
+
+local isPlayRunning
+
+local function adoptImportedMeshFromManifest()
+	if isPlayRunning() then
+		setStatus("Adopt skipped: stop Play before adopting imported road meshes.")
+		return nil
+	end
+	if not refreshMapId() then
+		return nil
+	end
+	if not refreshImportPlane() then
+		return nil
+	end
+	refreshImportScales()
+
+	local selectedParts = selectedImportedMeshParts()
+	if #selectedParts == 0 then
+		setStatus("Select the imported GLB model or its MeshParts before adopting.")
+		return nil
+	end
+
+	setStatus("Choose the Roblox mesh manifest exported with the GLB...")
+	local manifest, manifestErr = promptMeshManifest()
+	if not manifest then
+		setStatus("Adopt failed: " .. tostring(manifestErr))
+		return nil
+	end
+
+	local exactParts, normalizedParts = indexMeshPartsByName(selectedParts)
+	local usedParts = {}
+	local matches = {}
+	local missing = {}
+
+	for _, chunk in ipairs(manifest.chunks or {}) do
+		local part = findManifestPart(chunk, exactParts, normalizedParts, selectedParts, usedParts)
+		if part then
+			table.insert(matches, { chunk = chunk, part = part })
+		else
+			table.insert(missing, tostring(chunk.name or "?"))
+		end
+	end
+
+	if #missing > 0 then
+		setStatus(string.format(
+			"Adopt failed: selected import is missing %d manifest chunks. First missing: %s",
+			#missing,
+			table.concat(firstListValues(missing, 5), ", ")
+		))
+		return nil
+	end
+
+	ChangeHistoryService:SetWaypoint("cab87 road graph before imported mesh adopt")
+	local root = getOrCreateRoot()
+	clearChild(root, BAKED_RUNTIME_BUILDING_NAME)
+
+	local bakedRoot = Instance.new("Model")
+	bakedRoot.Name = BAKED_RUNTIME_BUILDING_NAME
+	bakedRoot:SetAttribute("MapId", mapId)
+	bakedRoot:SetAttribute("BakedRoadGraphRuntime", true)
+	bakedRoot:SetAttribute("BakeMode", "importedGlbManifest")
+	bakedRoot:SetAttribute("MeshManifestSchema", manifest.schema)
+	bakedRoot:SetAttribute("MeshManifestVersion", manifest.version)
+	setBakeScaleAttributes(bakedRoot)
+	bakedRoot.Parent = root
+
+	local surfacesFolder = createFolder(bakedRoot, BAKED_SURFACES_NAME)
+	surfacesFolder:SetAttribute("MapId", mapId)
+	surfacesFolder:SetAttribute("GeneratedBy", BAKED_MESH_GENERATOR_NAME)
+	surfacesFolder:SetAttribute("MeshMode", "importedGlbManifest")
+
+	local collisionFolder = createFolder(bakedRoot, BAKED_COLLISION_NAME)
+	collisionFolder:SetAttribute("MapId", mapId)
+	collisionFolder:SetAttribute("GeneratedBy", BAKED_MESH_GENERATOR_NAME)
+	collisionFolder:SetAttribute("MeshMode", "importedGlbManifest")
+
+	local minimapFolder = createFolder(bakedRoot, MINIMAP_ROAD_MESH_NAME)
+	minimapFolder:SetAttribute("MapId", mapId)
+	minimapFolder:SetAttribute("BakedMinimapRoadMesh", true)
+	minimapFolder:SetAttribute("GeneratedBy", MINIMAP_MESH_GENERATOR_NAME)
+	minimapFolder:SetAttribute("Version", MINIMAP_MESH_VERSION)
+	minimapFolder:SetAttribute("MeshMode", "importedGlbManifest")
+	minimapFolder:SetAttribute("ChunkSize", tonumber(manifestSetting(manifest, "chunkSize")) or nil)
+
+	local surfaceParts = 0
+	local collisionParts = 0
+	local minimapParts = 0
+	local totalTriangles = 0
+	local roadTriangles = 0
+	local sidewalkTriangles = 0
+	local crosswalkTriangles = 0
+	local polygonFillTriangles = 0
+
+	for _, match in ipairs(matches) do
+		local chunk = match.chunk
+		local part = match.part
+		local isCollision = tostring(chunk.kind or "surface") == "collision"
+		applyImportedMeshTransform(part)
+		applyManifestPartOptions(part, chunk, mapId)
+		part.Parent = if isCollision then collisionFolder else surfacesFolder
+
+		local triangleCount = tonumber(chunk.triangleCount) or 0
+		totalTriangles += triangleCount
+		if isCollision then
+			collisionParts += 1
+		else
+			surfaceParts += 1
+			local surfaceType = tostring(chunk.surfaceType or "")
+			if surfaceType == "road" then
+				roadTriangles += triangleCount
+			elseif surfaceType == "sidewalk" then
+				sidewalkTriangles += triangleCount
+			elseif surfaceType == "crosswalk" then
+				crosswalkTriangles += triangleCount
+			elseif surfaceType == "polygonFill" then
+				polygonFillTriangles += triangleCount
+			end
+			if surfaceType == "road" or surfaceType == "crosswalk" then
+				cloneMinimapPart(part, minimapFolder, mapId)
+				minimapParts += 1
+			end
+		end
+	end
+
+	if collisionParts == 0 then
+		bakedRoot:Destroy()
+		setStatus("Adopt failed: manifest did not provide collision chunks.")
+		return nil
+	end
+
+	hideDefaultBaseplate()
+	clearChild(root, BAKED_RUNTIME_NAME)
+	clearChild(root, BAKED_SURFACES_NAME)
+	clearChild(root, BAKED_COLLISION_NAME)
+	clearChild(root, MINIMAP_ROAD_MESH_NAME)
+	clearChild(root, ASSETS_NAME)
+	clearPreviewMeshes(root)
+	bakedRoot.Name = BAKED_RUNTIME_NAME
+
+	local assets = getOrCreateAssetsFolder(root)
+	setBakeScaleAttributes(assets)
+	assets:SetAttribute("Stale", false)
+	assets:SetAttribute("BakeMode", "importedGlbManifest")
+	assets:SetAttribute("LastBakeUnix", os.time())
+	assets:SetAttribute("BakedPartCount", surfaceParts + collisionParts + minimapParts)
+	assets:SetAttribute("PreviewPartCount", surfaceParts)
+	assets:SetAttribute("CollisionPartCount", collisionParts)
+	assets:SetAttribute("MinimapPartCount", minimapParts)
+	assets:SetAttribute("RoadTriangles", roadTriangles)
+	assets:SetAttribute("SidewalkTriangles", sidewalkTriangles)
+	assets:SetAttribute("CrosswalkTriangles", crosswalkTriangles)
+	assets:SetAttribute("PolygonFillTriangles", polygonFillTriangles)
+	assets:SetAttribute("ManifestChunkCount", #(manifest.chunks or {}))
+	assets:SetAttribute("ManifestTriangleCount", totalTriangles)
+	assets:SetAttribute("ChunkSize", tonumber(manifestSetting(manifest, "chunkSize")) or nil)
+	assets:SetAttribute("MaxSurfaceTriangles", tonumber(manifestSetting(manifest, "maxSurfaceTriangles")) or nil)
+	assets:SetAttribute("MaxCollisionInputTriangles", tonumber(manifestSetting(manifest, "maxCollisionInputTriangles")) or nil)
+
+	surfacesFolder:SetAttribute("SurfacePartCount", surfaceParts)
+	collisionFolder:SetAttribute("CollisionPartCount", collisionParts)
+	minimapFolder:SetAttribute("SurfacePartCount", minimapParts)
+
+	Selection:Set({ bakedRoot })
+	ChangeHistoryService:SetWaypoint("cab87 road graph after imported mesh adopt")
+	setStatus(string.format(
+		"Adopted imported GLB mesh for map %s: %d surface parts, %d collision parts, %d minimap parts.",
+		mapId,
+		surfaceParts,
+		collisionParts,
+		minimapParts
+	))
+
+	return {
+		surfaceParts = surfaceParts,
+		collisionParts = collisionParts,
+		minimapParts = minimapParts,
+	}
+end
+
+function isPlayRunning()
 	local ok, running = pcall(function()
 		return RunService:IsRunning()
 	end)
@@ -896,7 +1359,7 @@ local function importGraphJson()
 	keepGraphAboveDefaultBaseplate()
 	setStatus("Importing road graph JSON...")
 
-	local RoadGraphData, _RoadGraphMesher, _RoadMeshBuilder, moduleErr = getSharedModules()
+	local RoadGraphData, moduleErr = getGraphDataModule()
 	if moduleErr then
 		setStatus(moduleErr)
 		return
@@ -933,24 +1396,10 @@ local function importGraphJson()
 	ChangeHistoryService:SetWaypoint("cab87 road graph before import")
 	local root = getOrCreateRoot()
 	RoadGraphData.writeGraph(root, graph)
-	setStatus(string.format(
-		"Imported graph data: %d nodes, %d edges. Building optimized preview MeshParts...",
-		#graph.nodes,
-		#graph.edges
-	))
 	markBakedAssetsStale(root, "graph imported")
-	local okBake, bakeResultOrErr = pcall(bakeMeshAssets)
 	ChangeHistoryService:SetWaypoint("cab87 road graph after import")
-	if not okBake then
-		setStatus("Imported graph, but runtime bake failed: " .. tostring(bakeResultOrErr))
-		return
-	end
-	if not bakeResultOrErr then
-		return
-	end
-
 	setStatus(string.format(
-		"Imported and baked graph: %d nodes, %d edges at Y=%s, %s.",
+		"Imported graph data: %d nodes, %d edges at Y=%s, %s. Import the exported GLB, select it, then click Adopt Imported GLB Mesh.",
 		#graph.nodes,
 		#graph.edges,
 		tostring(importPlaneY),
@@ -1069,6 +1518,12 @@ bakeAssetsButton.MouseButton1Click:Connect(function()
 		setStatus("Bake failed: " .. tostring(err))
 	end
 end)
+adoptImportedMeshButton.MouseButton1Click:Connect(function()
+	local ok, err = pcall(adoptImportedMeshFromManifest)
+	if not ok then
+		setStatus("Adopt failed: " .. tostring(err))
+	end
+end)
 forkMapButton.MouseButton1Click:Connect(function()
 	ChangeHistoryService:SetWaypoint("cab87 road graph before fork")
 	forkAsNewMap()
@@ -1133,6 +1588,11 @@ local function autoReloadPreviewMeshes()
 		local root = Workspace:FindFirstChild(ROOT_NAME)
 		local graphFolder = root and root:FindFirstChild(ROAD_GRAPH_NAME)
 		if not graphFolder then
+			return
+		end
+		local assets = root:FindFirstChild(ASSETS_NAME)
+		if assets and assets:GetAttribute("BakeMode") == "importedGlbManifest" and assets:GetAttribute("Stale") ~= true then
+			setStatus("Loaded imported GLB road mesh bake. Runtime will use the adopted MeshParts.")
 			return
 		end
 

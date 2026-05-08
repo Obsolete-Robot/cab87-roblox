@@ -7,6 +7,8 @@ import ThreeScene from './ThreeScene';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import { drawNetwork2D } from './lib/render2d';
+import { buildNetworkMesh } from './lib/meshing';
+import { exportRoadMeshGlb, exportRoadMeshObj, exportRoadMeshRobloxPackage } from './lib/meshExport';
 import {
   COLORS, ROAD_NETWORK_SCHEMA, ROAD_NETWORK_VERSION,
   sanitizeMeshResolution, DEFAULTS
@@ -247,6 +249,37 @@ export default function App() {
     a.download = 'network.json';
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const buildCurrentMesh = () => buildNetworkMesh(
+    nodes,
+    edges,
+    chamferAngle,
+    meshResolution,
+    laneWidth,
+    polygonFills
+  );
+
+  const handleExportObj = () => {
+    exportRoadMeshObj(buildCurrentMesh());
+  };
+
+  const handleExportGlb = async () => {
+    try {
+      await exportRoadMeshGlb(buildCurrentMesh());
+    } catch (err) {
+      console.error(err);
+      alert('Failed to export GLB. Check the browser console for details.');
+    }
+  };
+
+  const handleExportRoblox = async () => {
+    try {
+      await exportRoadMeshRobloxPackage(buildCurrentMesh());
+    } catch (err) {
+      console.error(err);
+      alert('Failed to export Roblox mesh package. Check the browser console for details.');
+    }
   };
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1850,6 +1883,9 @@ export default function App() {
         setIsSidebarOpen={setIsSidebarOpen}
         handleImport={handleImport}
         handleExport={handleExport}
+        handleExportObj={handleExportObj}
+        handleExportGlb={handleExportGlb}
+        handleExportRoblox={handleExportRoblox}
         showControlPoints={showControlPoints}
         setShowControlPoints={setShowControlPoints}
         is3DMode={is3DMode}

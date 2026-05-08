@@ -4,8 +4,6 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
-local RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
-local RoadMeshBuilder = require(Shared:WaitForChild("RoadMeshBuilder"))
 local RoadSampling = require(Shared:WaitForChild("RoadSampling"))
 local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 
@@ -18,6 +16,7 @@ local RUNTIME_WORLD_NAME = "Cab87World"
 local BAKED_RUNTIME_NAME = "RoadGraphBakedRuntime"
 local BAKED_SURFACES_NAME = "RoadGraphBakedSurfaces"
 local BAKED_COLLISION_NAME = "RoadGraphBakedCollision"
+local ASSETS_NAME = "RoadGraphAssets"
 local LEGACY_COLLISION_NAME = "RoadNetworkCollision"
 local LEGACY_RUNTIME_COLLISION_GENERATOR = "Cab87LegacyRoadRuntimeCollision"
 local ROAD_GRAPH_RUNTIME_MESH_GENERATOR = "Cab87RoadGraphRuntimeMesh"
@@ -30,6 +29,23 @@ local MARKER_TYPE_ATTR = "Cab87MarkerType"
 local ROAD_SOURCE_AUTO = "Auto"
 local ROAD_SOURCE_ROAD_GRAPH = "RoadGraph"
 local ROAD_SOURCE_LEGACY_CURVE = "LegacyCurve"
+
+local RoadGraphMesher = nil
+local RoadMeshBuilder = nil
+
+local function getRoadGraphMesher()
+	if not RoadGraphMesher then
+		RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
+	end
+	return RoadGraphMesher
+end
+
+local function getRoadMeshBuilder()
+	if not RoadMeshBuilder then
+		RoadMeshBuilder = require(Shared:WaitForChild("RoadMeshBuilder"))
+	end
+	return RoadMeshBuilder
+end
 
 local function roadDebugLog(message, ...)
 	if Config.authoredRoadDebugLogging == true then
@@ -442,7 +458,7 @@ local function projectCabSpawnToDriveSurface(position, driveSurfaces)
 end
 
 local function createRuntimeGraphMeshes(world, meshData)
-	local result = RoadMeshBuilder.createClassifiedChunkedCollisionMeshes(world, meshData, {
+	local result = getRoadMeshBuilder().createClassifiedChunkedCollisionMeshes(world, meshData, {
 		collisionFolderName = BAKED_COLLISION_NAME,
 		generatedBy = ROAD_GRAPH_RUNTIME_MESH_GENERATOR,
 		chunkSize = ROAD_GRAPH_RUNTIME_CHUNK_STUDS,
@@ -472,6 +488,107 @@ local function createRuntimeGraphMeshes(world, meshData)
 		driveSurfaces = result.driveSurfaces,
 		errors = result.errors,
 		source = "runtime-editable-collision",
+	}
+end
+
+local function configureBakedSurfaceClone(part)
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanTouch = false
+	part.CanQuery = false
+	part.CastShadow = part.CastShadow == true
+	part:SetAttribute("RuntimeClone", true)
+end
+
+local function configureBakedCollisionClone(part)
+	part.Anchored = true
+	part.CanCollide = true
+	part.CanTouch = false
+	part.CanQuery = true
+	part.Transparency = 1
+	part.CastShadow = false
+	part:SetAttribute("DriveSurface", true)
+	part:SetAttribute("RuntimeClone", true)
+end
+
+local function cloneBakedPartFolder(sourceFolder, world, folderName, configurePart)
+	if not sourceFolder then
+		return nil, {}
+	end
+
+	local existing = world:FindFirstChild(folderName)
+	if existing then
+		existing:Destroy()
+	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = folderName
+	for name, value in pairs(sourceFolder:GetAttributes()) do
+		folder:SetAttribute(name, value)
+	end
+	folder.Parent = world
+
+	local parts = {}
+	for _, child in ipairs(sourceFolder:GetChildren()) do
+		local clone = child:Clone()
+		clone.Parent = folder
+	end
+	collectBaseParts(folder, parts)
+	for _, part in ipairs(parts) do
+		configurePart(part)
+	end
+	folder:SetAttribute("RuntimeClone", true)
+	folder:SetAttribute("PartCount", #parts)
+	return folder, parts
+end
+
+local function canUseImportedBakedRuntime(root)
+	local assets = root and root:FindFirstChild(ASSETS_NAME)
+	local bakedContainer = root and root:FindFirstChild(BAKED_RUNTIME_NAME)
+	if not (assets and bakedContainer) then
+		return false
+	end
+	if assets:GetAttribute("BakeMode") ~= "importedGlbManifest" then
+		return false
+	end
+	if assets:GetAttribute("Stale") == true then
+		return false
+	end
+	return bakedContainer:GetAttribute("BakeMode") == "importedGlbManifest"
+end
+
+local function useImportedBakedGraphMeshes(root, world)
+	if not canUseImportedBakedRuntime(root) then
+		return nil
+	end
+
+	local bakedContainer = root:FindFirstChild(BAKED_RUNTIME_NAME)
+	local sourceSurfaces = bakedContainer and bakedContainer:FindFirstChild(BAKED_SURFACES_NAME)
+	local sourceCollision = bakedContainer and bakedContainer:FindFirstChild(BAKED_COLLISION_NAME)
+	if not (sourceSurfaces and sourceCollision) then
+		return nil, { "imported GLB bake is missing surface or collision folders" }
+	end
+
+	local meshFolder, visibleParts = cloneBakedPartFolder(sourceSurfaces, world, BAKED_SURFACES_NAME, configureBakedSurfaceClone)
+	local collisionFolder, collisionParts = cloneBakedPartFolder(sourceCollision, world, BAKED_COLLISION_NAME, configureBakedCollisionClone)
+	if #collisionParts == 0 then
+		if meshFolder then
+			meshFolder:Destroy()
+		end
+		if collisionFolder then
+			collisionFolder:Destroy()
+		end
+		return nil, { "imported GLB bake had no collision MeshParts" }
+	end
+
+	return {
+		meshFolder = meshFolder,
+		collisionFolder = collisionFolder,
+		visibleParts = visibleParts,
+		collisionParts = collisionParts,
+		driveSurfaces = collisionParts,
+		errors = {},
+		source = "imported-glb-manifest",
 	}
 end
 
@@ -507,7 +624,7 @@ local function buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacle
 end
 
 local function buildGraphMeshes(root, world, graph)
-	local meshData = RoadGraphMesher.buildNetworkMesh(graph, graph.settings)
+	local meshData = getRoadGraphMesher().buildNetworkMesh(graph, graph.settings)
 	local runtimeMeshResult = createRuntimeGraphMeshes(world, meshData)
 	roadDebugLog(
 		"generated runtime graph collision meshes: collisionParts=%d",
@@ -858,7 +975,19 @@ local function createGraphWorld(root, graph)
 
 	RoadGraphData.writeGraph(world, graph, RoadGraphData.RUNTIME_DATA_NAME)
 
-	local meshData, meshBuild = buildGraphMeshes(root, world, graph)
+	local meshData = nil
+	local meshBuild, importedMeshErrors = useImportedBakedGraphMeshes(root, world)
+	local importedMeshBuild = nil
+	if meshBuild then
+		importedMeshBuild = meshBuild
+		world:SetAttribute("NeedsClientRoadMesh", false)
+		roadDebugLog("using imported GLB road graph meshes: visibleParts=%d collisionParts=%d", #meshBuild.visibleParts, #meshBuild.collisionParts)
+	else
+		if importedMeshErrors and #importedMeshErrors > 0 then
+			roadDebugWarn("imported GLB mesh skipped: %s", table.concat(importedMeshErrors, " | "))
+		end
+		meshData, meshBuild = buildGraphMeshes(root, world, graph)
+	end
 	local minimapMesh, minimapMeshErrors = useBakedMinimapRoadMesh(root, world)
 	local driveSurfaces = {}
 	local crashObstacles = {}
@@ -878,24 +1007,38 @@ local function createGraphWorld(root, graph)
 		spawnPose = cabCompanySpawnPose
 	end
 
-	local roadEdgeTriangleCount = #(meshData.roadEdgeTriangles or {})
-	local roadHubTriangleCount = #(meshData.roadHubTriangles or {})
-	local polygonFillTriangleCount = 0
-	for _, fill in ipairs(meshData.polygonTriangles or meshData.polygonFills or {}) do
-		polygonFillTriangleCount += #(fill.triangles or {})
+	local assets = root:FindFirstChild(ASSETS_NAME)
+	local function meshCountOrAsset(triangles, attributeName)
+		if meshData then
+			return #(triangles or {})
+		end
+		return tonumber(assets and assets:GetAttribute(attributeName)) or 0
+	end
+
+	local roadTriangleCount = meshCountOrAsset(meshData and meshData.roadTriangles, "RoadTriangles")
+	local roadEdgeTriangleCount = meshCountOrAsset(meshData and meshData.roadEdgeTriangles, "RoadEdgeTriangles")
+	local roadHubTriangleCount = meshCountOrAsset(meshData and meshData.roadHubTriangles, "RoadHubTriangles")
+	local sidewalkTriangleCount = meshCountOrAsset(meshData and meshData.sidewalkTriangles, "SidewalkTriangles")
+	local crosswalkTriangleCount = meshCountOrAsset(meshData and meshData.crosswalkTriangles, "CrosswalkTriangles")
+	local polygonFillTriangleCount = tonumber(assets and assets:GetAttribute("PolygonFillTriangles")) or 0
+	if meshData then
+		polygonFillTriangleCount = 0
+		for _, fill in ipairs(meshData.polygonTriangles or meshData.polygonFills or {}) do
+			polygonFillTriangleCount += #(fill.triangles or {})
+		end
 	end
 
 	world:SetAttribute("AuthoredRoadFormat", "RoadGraph")
 	world:SetAttribute("AuthoredRoadNodeCount", #(graph.nodes or {}))
 	world:SetAttribute("AuthoredRoadEdgeCount", #(graph.edges or {}))
-	world:SetAttribute("AuthoredRoadRoadTriangles", #(meshData.roadTriangles or {}))
+	world:SetAttribute("AuthoredRoadRoadTriangles", roadTriangleCount)
 	world:SetAttribute("AuthoredRoadRoadEdgeTriangles", roadEdgeTriangleCount)
 	world:SetAttribute("AuthoredRoadRoadHubTriangles", roadHubTriangleCount)
-	world:SetAttribute("AuthoredRoadSidewalkTriangles", #(meshData.sidewalkTriangles or {}))
-	world:SetAttribute("AuthoredRoadCrosswalkTriangles", #(meshData.crosswalkTriangles or {}))
+	world:SetAttribute("AuthoredRoadSidewalkTriangles", sidewalkTriangleCount)
+	world:SetAttribute("AuthoredRoadCrosswalkTriangles", crosswalkTriangleCount)
 	world:SetAttribute("AuthoredRoadPolygonFillTriangles", polygonFillTriangleCount)
 	world:SetAttribute("AuthoredRoadMeshSource", meshBuild.source or "runtime")
-	world:SetAttribute("AuthoredRoadVisualSource", "client-runtime-editable-mesh")
+	world:SetAttribute("AuthoredRoadVisualSource", if importedMeshBuild then "imported-glb-manifest" else "client-runtime-editable-mesh")
 	world:SetAttribute("AuthoredRoadServerCollisionSource", BAKED_COLLISION_NAME)
 	world:SetAttribute("AuthoredRoadServerMeshError", "")
 	world:SetAttribute("MinimapRoadMeshSource", minimapMesh and MINIMAP_ROAD_MESH_NAME or BAKED_SURFACES_NAME)
@@ -906,11 +1049,11 @@ local function createGraphWorld(root, graph)
 		"road graph world built: nodes=%d edges=%d roadTris=%d roadEdgeTris=%d roadHubTris=%d sidewalkTris=%d crosswalkTris=%d polygonFillTris=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
 		#(graph.nodes or {}),
 		#(graph.edges or {}),
-		#(meshData.roadTriangles or {}),
+		roadTriangleCount,
 		roadEdgeTriangleCount,
 		roadHubTriangleCount,
-		#(meshData.sidewalkTriangles or {}),
-		#(meshData.crosswalkTriangles or {}),
+		sidewalkTriangleCount,
+		crosswalkTriangleCount,
 		polygonFillTriangleCount,
 		#driveSurfaces,
 		spawnPose.position.X,
