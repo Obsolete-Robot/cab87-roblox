@@ -168,16 +168,21 @@ export default function App() {
   const topologyKey = useMemo(() => getTopologyKey(nodes, edges), [nodes, edges]);
 
   const prevTopologyKey = useRef<string | null>(null);
+  const prevFaceKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (prevTopologyKey.current === topologyKey) return;
     prevTopologyKey.current = topologyKey;
+    const faces = findClosedAreas(nodes, edges);
+    const currentFaceKeys = new Set(faces.map(getFaceKey));
+    const previousFaceKeys = prevFaceKeysRef.current;
 
     setPolygonFills(prevPolygonFills => {
       try {
         const validNodes = new Set(nodes.map(n => n.id));
         const validPreviousFills = prevPolygonFills.filter(pf => pf.points.every(pid => validNodes.has(pid)));
-        const faces = findClosedAreas(nodes, edges);
+        const previousAutoFills = validPreviousFills.filter(pf => previousFaceKeys.has(getFaceKey(pf.points)));
+        const previousAutoFillIds = new Set(previousAutoFills.map(pf => pf.id));
 
         const newPolygonFills: typeof prevPolygonFills = [];
         const usedOldIds = new Set<string>();
@@ -193,12 +198,30 @@ export default function App() {
               return;
           }
 
-          const id = Math.random().toString(36).substring(2, 9);
-          const color = '#10b981'; // default fill color (emerald)
-          newPolygonFills.push({ id, points: faceNodes, color });
+          let bestMatch: typeof prevPolygonFills[number] | null = null;
+          let bestScore = -1;
+
+          previousAutoFills.forEach(pf => {
+             if (usedOldIds.has(pf.id)) return;
+             const sharedCount = pf.points.filter((nid: string) => faceNodes.includes(nid)).length;
+             if (sharedCount > bestScore) {
+                 bestScore = sharedCount;
+                 bestMatch = pf;
+             }
+          });
+
+          // Migrate old auto-detected fills through topology edits, but do not consume custom fills.
+          if (bestMatch && bestScore >= 2) {
+              usedOldIds.add((bestMatch as any).id);
+              newPolygonFills.push({ id: (bestMatch as any).id, points: faceNodes, color: (bestMatch as any).color });
+          } else {
+              const id = Math.random().toString(36).substring(2, 9);
+              const color = '#10b981'; // default fill color (emerald)
+              newPolygonFills.push({ id, points: faceNodes, color });
+          }
         });
 
-        const preservedFills = validPreviousFills.filter(pf => !usedOldIds.has(pf.id));
+        const preservedFills = validPreviousFills.filter(pf => !usedOldIds.has(pf.id) && !previousAutoFillIds.has(pf.id));
         const nextPolygonFills = [...newPolygonFills, ...preservedFills];
 
         // Determine if there is actually a change to prevent infinite loops
@@ -213,6 +236,7 @@ export default function App() {
         return prevPolygonFills;
       }
     });
+    prevFaceKeysRef.current = currentFaceKeys;
   }, [topologyKey, nodes, edges, deletedFaces]);
 
   const handleExport = () => {
@@ -284,6 +308,7 @@ export default function App() {
         }
         if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
           prevTopologyKey.current = getTopologyKey(data.nodes, data.edges);
+          prevFaceKeysRef.current = new Set(findClosedAreas(data.nodes, data.edges).map(getFaceKey));
           setNodes(data.nodes);
           setEdges(data.edges);
           if (typeof data.settings?.chamferAngleDeg === 'number') {
