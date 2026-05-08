@@ -8,6 +8,7 @@ interface HeaderProps {
   handleExport: () => void;
   handleExportObj: () => void;
   handleExportGlb: () => void;
+  handleExportRoblox: () => void;
   showControlPoints: boolean;
   setShowControlPoints: (v: boolean) => void;
   is3DMode: boolean;
@@ -23,6 +24,7 @@ export default function Header({
   handleExport,
   handleExportObj,
   handleExportGlb,
+  handleExportRoblox,
   showControlPoints,
   setShowControlPoints,
   is3DMode,
@@ -88,6 +90,14 @@ export default function Header({
         >
           <Download className="w-4 h-4" />
           <span className="hidden lg:inline">GLB</span>
+        </button>
+        <button
+          onClick={handleExportRoblox}
+          className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
+          title="Export Roblox GLB and Manifest"
+        >
+          <Download className="w-4 h-4" />
+          <span className="hidden lg:inline">Roblox</span>
         </button>
         <div className="w-px h-6 bg-slate-700 hidden sm:block mx-1"></div>
         <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300 font-medium hover:text-white sm:mr-2">

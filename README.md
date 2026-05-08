@@ -97,23 +97,26 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
    - `cd tools/intersection-visualizer`
    - `npm ci`
    - `npm run dev`
-2. Open `http://localhost:3000`, author the road graph, and export JSON.
-   - Keep Road-Maker and Roblox mesher changes in sync. See [Road-Maker sync and mesher parity](docs/ROAD_MAKER_SYNC.md).
+2. Open `http://localhost:3000`, author the road graph, then export both:
+   - **Export JSON** for lightweight graph/gameplay data.
+   - **Roblox** for `cab87-road-mesh.glb` plus `cab87-road-mesh.manifest.json`.
 3. In Studio, open **Road Graph Builder**.
 4. Set **Import Y** for the Roblox plane height.
 5. Set **Map ID** to a stable level id such as `downtown_v1`.
 6. Click **Import Graph JSON**.
    - The plugin imports to `Cab87RoadEditor/RoadGraph`.
-   - It builds a disposable preview mesh for quick inspection.
-7. Click **Bake Runtime Geometry**.
-   - If Studio allows programmatic mesh uploads, the plugin uploads or updates permanent mesh assets and stores their IDs in `Cab87RoadEditor/RoadGraphAssets`.
-   - If Studio reports that `CreateAssetAsync` is not available, the plugin builds persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead. This creates no package or mesh asset IDs, but it survives save/reopen and Play.
-   - The bake also creates a hidden `MinimapRoadMesh` for the GPS viewport so Play mode does not generate minimap geometry at runtime.
-   - If an older bake does not include a current `MinimapRoadMesh`, the GPS viewport uses the existing pregenerated `RoadGraphBakedSurfaces` as its fallback.
-   - The bake clears disposable preview mesh folders so Play mode does not render overlapping preview/runtime geometry.
-8. Press Play and test traversal.
+   - It does not run the Luau mesher automatically.
+7. Import `cab87-road-mesh.glb` with Studio's 3D Importer.
+8. Select the imported model or imported MeshParts.
+9. Click **Adopt Imported GLB Mesh** and choose `cab87-road-mesh.manifest.json`.
+   - The plugin moves the imported chunks into `Cab87RoadEditor/RoadGraphBakedRuntime`.
+   - It configures visual, collision, and minimap MeshParts from the manifest.
+   - Play mode uses these imported MeshParts instead of runtime `EditableMesh` generation.
+10. Press Play and test traversal.
 
-For an update to the same map, keep the same **Map ID** and click **Bake Runtime Geometry** again. Asset-backed bakes update existing mesh asset versions when Roblox exposes that API; fallback bakes replace the saved `RoadGraphBakedRuntime` model in the place. For a new level, click **Fork As New Map** or set a new **Map ID** before baking so the new map gets separate baked output.
+**Bake Runtime Geometry** remains available as the older Studio-generated mesh path. Prefer the GLB + manifest workflow for large maps so the TypeScript visualizer remains the source of truth for meshing.
+
+For an update to the same map, keep the same **Map ID**, re-export JSON + Roblox GLB/manifest, import the new GLB, and run **Adopt Imported GLB Mesh** again. For a new level, click **Fork As New Map** or set a new **Map ID** before adopting so the new map gets separate baked output.
 
 ### Dialogue timing workflow
 

@@ -4,8 +4,6 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local RoadGraphData = require(Shared:WaitForChild("RoadGraphData"))
-local RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
-local RoadMeshBuilder = require(Shared:WaitForChild("RoadMeshBuilder"))
 
 local WORLD_NAME = "Cab87World"
 local CLIENT_VISUALS_NAME = "AuthoredRoadClientVisuals"
@@ -16,6 +14,22 @@ local MAX_DEBUG_PARTS = 12
 local buildToken = 0
 local watchedWorld = nil
 local worldConnections = {}
+local RoadGraphMesher = nil
+local RoadMeshBuilder = nil
+
+local function getRoadGraphMesher()
+	if not RoadGraphMesher then
+		RoadGraphMesher = require(Shared:WaitForChild("RoadGraphMesher"))
+	end
+	return RoadGraphMesher
+end
+
+local function getRoadMeshBuilder()
+	if not RoadMeshBuilder then
+		RoadMeshBuilder = require(Shared:WaitForChild("RoadMeshBuilder"))
+	end
+	return RoadMeshBuilder
+end
 
 local function disconnectWorldConnections()
 	for _, connection in ipairs(worldConnections) do
@@ -175,6 +189,11 @@ local function buildClientVisuals(world)
 	if not (world and world:IsA("Model")) then
 		return
 	end
+	if world:GetAttribute("NeedsClientRoadMesh") == false then
+		clearClientVisuals(world)
+		debugLog("client runtime road mesh skipped: world uses baked MeshParts")
+		return
+	end
 
 	task.spawn(function()
 		local graphRoot = world:FindFirstChild(RUNTIME_GRAPH_DATA_NAME) or world:WaitForChild(RUNTIME_GRAPH_DATA_NAME, 30)
@@ -200,7 +219,7 @@ local function buildClientVisuals(world)
 		clearClientVisuals(world)
 
 		local okMesh, meshDataOrErr = pcall(function()
-			return RoadGraphMesher.buildNetworkMesh(graph, graph.settings)
+			return getRoadGraphMesher().buildNetworkMesh(graph, graph.settings)
 		end)
 		if token ~= buildToken then
 			return
@@ -229,7 +248,7 @@ local function buildClientVisuals(world)
 		)
 
 		local okBuild, resultOrErr = pcall(function()
-			return RoadMeshBuilder.createClassifiedCompactSurfaceMeshes(world, meshDataOrErr, {
+			return getRoadMeshBuilder().createClassifiedCompactSurfaceMeshes(world, meshDataOrErr, {
 				meshFolderName = CLIENT_VISUALS_NAME,
 				generatedBy = CLIENT_MESH_GENERATOR,
 				canCollide = false,
