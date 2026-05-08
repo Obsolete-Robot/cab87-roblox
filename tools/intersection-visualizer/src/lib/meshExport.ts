@@ -43,7 +43,7 @@ const ROBLOX_MAX_SURFACE_TRIANGLES = 6000;
 const ROBLOX_MAX_COLLISION_INPUT_TRIANGLES = 900;
 const ROBLOX_COLLISION_THICKNESS = 0.2;
 
-export function createTriangleGeometry(triangles: Point[][], yOffset = 0): THREE.BufferGeometry {
+export function createTriangleGeometry(triangles: Point[][], yOffset = 0, defaultY = 4): THREE.BufferGeometry {
   const positions: number[] = [];
   const uvs: number[] = [];
 
@@ -51,7 +51,7 @@ export function createTriangleGeometry(triangles: Point[][], yOffset = 0): THREE
     if (tri.length !== 3) return;
 
     tri.forEach((point) => {
-      positions.push(point.x, (point.z ?? 4) + yOffset, point.y);
+      positions.push(point.x, (point.z ?? defaultY) + yOffset, point.y);
       uvs.push(point.u ?? 0, point.v ?? 0);
     });
   });
@@ -82,18 +82,23 @@ function addQuadPositions(positions: number[], a: THREE.Vector3, b: THREE.Vector
   addTrianglePositions(positions, a, c, d);
 }
 
-function toVector(point: Point, yOffset = 0) {
-  return new THREE.Vector3(point.x, (point.z ?? 4) + yOffset, point.y);
+function toVector(point: Point, yOffset = 0, defaultY = 4) {
+  return new THREE.Vector3(point.x, (point.z ?? defaultY) + yOffset, point.y);
 }
 
-function createCollisionGeometry(triangles: Triangle[], yOffset = 0, thickness = ROBLOX_COLLISION_THICKNESS) {
+function createCollisionGeometry(
+  triangles: Triangle[],
+  yOffset = 0,
+  thickness = ROBLOX_COLLISION_THICKNESS,
+  defaultY = 4
+) {
   const positions: number[] = [];
   const bottomOffset = new THREE.Vector3(0, -Math.max(thickness, 0.05), 0);
 
   triangles.forEach((triangle) => {
-    const a = toVector(triangle[0], yOffset);
-    const b = toVector(triangle[1], yOffset);
-    const c = toVector(triangle[2], yOffset);
+    const a = toVector(triangle[0], yOffset, defaultY);
+    const b = toVector(triangle[1], yOffset, defaultY);
+    const c = toVector(triangle[2], yOffset, defaultY);
     const ab = a.clone().add(bottomOffset);
     const bb = b.clone().add(bottomOffset);
     const cb = c.clone().add(bottomOffset);
@@ -328,8 +333,8 @@ export function createRobloxRoadMeshExport(meshData: MeshData) {
     const name = chunkName(isCollision ? (layer.collisionBaseName ?? `${layer.baseName}Collision`) : layer.baseName, bucket, batchIndex);
     const yOffset = layer.yOffset ?? 0;
     const geometry = isCollision
-      ? createCollisionGeometry(batch, yOffset, ROBLOX_COLLISION_THICKNESS)
-      : createTriangleGeometry(batch, yOffset);
+      ? createCollisionGeometry(batch, yOffset, ROBLOX_COLLISION_THICKNESS, 0)
+      : createTriangleGeometry(batch, yOffset, 0);
     const actualTriangleCount = Math.floor((geometry.getAttribute('position')?.count ?? 0) / 3);
     const mesh = createMeshFromGeometry(name, geometry, isCollision ? '#38bdf8' : layer.color, isCollision ? 0.18 : 1);
     group.add(mesh);

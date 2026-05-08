@@ -942,6 +942,26 @@ local function applyManifestPartOptions(part, chunk, mapIdValue)
 	end
 end
 
+local function applyImportedMeshTransform(part)
+	if part:GetAttribute("ImportTransformApplied") == true then
+		return
+	end
+
+	local pointScale = importPointScale
+	local planeY = importPlaneY
+	local position = part.Position
+	local rotation = part.CFrame - position
+	part.Size *= pointScale
+	part.CFrame = CFrame.new(
+		position.X * pointScale,
+		planeY + position.Y * pointScale,
+		position.Z * pointScale
+	) * rotation
+	part:SetAttribute("ImportTransformApplied", true)
+	part:SetAttribute("ImportPlaneY", planeY)
+	part:SetAttribute("ImportPointScale", pointScale)
+end
+
 local function cloneMinimapPart(sourcePart, parent, mapIdValue)
 	local clone = sourcePart:Clone()
 	clone.Name = sourcePart.Name
@@ -968,6 +988,9 @@ local function adoptImportedMeshFromManifest()
 		return nil
 	end
 	if not refreshMapId() then
+		return nil
+	end
+	if not refreshImportPlane() then
 		return nil
 	end
 	refreshImportScales()
@@ -1053,6 +1076,7 @@ local function adoptImportedMeshFromManifest()
 		local chunk = match.chunk
 		local part = match.part
 		local isCollision = tostring(chunk.kind or "surface") == "collision"
+		applyImportedMeshTransform(part)
 		applyManifestPartOptions(part, chunk, mapId)
 		part.Parent = if isCollision then collisionFolder else surfacesFolder
 
