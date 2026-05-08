@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for distance-based mesh density, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. In Studio, import the JSON, set a stable map ID, then use **Bake Runtime Geometry** so runtime uses baked road, sidewalk, crosswalk, and collision geometry. If Roblox Studio has not enabled programmatic mesh asset upload yet, the plugin falls back to persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead of uploading package or mesh asset IDs.
+Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for distance-based mesh density, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. You can also export the current generated mesh as OBJ or GLB from the header; GLB keeps material colors, while OBJ is mostly geometry/object names. In Studio, import the JSON, set a stable map ID, then use **Bake Runtime Geometry** so runtime uses baked road, sidewalk, crosswalk, and collision geometry. If Roblox Studio has not enabled programmatic mesh asset upload yet, the plugin falls back to persistent saved `WedgePart` geometry under `RoadGraphBakedRuntime` instead of uploading package or mesh asset IDs.
 
 Mesher changes must stay in parity with Roblox's Luau port in `src/shared/RoadGraphMesher.lua`.
 See [`../../docs/ROAD_MAKER_SYNC.md`](../../docs/ROAD_MAKER_SYNC.md) before changing

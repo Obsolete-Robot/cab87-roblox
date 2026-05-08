@@ -6,6 +6,8 @@ interface HeaderProps {
   setIsSidebarOpen: (v: boolean) => void;
   handleImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleExport: () => void;
+  handleExportObj: () => void;
+  handleExportGlb: () => void;
   showControlPoints: boolean;
   setShowControlPoints: (v: boolean) => void;
   is3DMode: boolean;
@@ -19,6 +21,8 @@ export default function Header({
   setIsSidebarOpen,
   handleImport,
   handleExport,
+  handleExportObj,
+  handleExportGlb,
   showControlPoints,
   setShowControlPoints,
   is3DMode,
@@ -68,6 +72,22 @@ export default function Header({
         >
           <Download className="w-4 h-4" />
           <span className="hidden xl:inline">Export</span>
+        </button>
+        <button
+          onClick={handleExportObj}
+          className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
+          title="Export OBJ Mesh"
+        >
+          <Download className="w-4 h-4" />
+          <span className="hidden lg:inline">OBJ</span>
+        </button>
+        <button
+          onClick={handleExportGlb}
+          className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
+          title="Export GLB Mesh"
+        >
+          <Download className="w-4 h-4" />
+          <span className="hidden lg:inline">GLB</span>
         </button>
         <div className="w-px h-6 bg-slate-700 hidden sm:block mx-1"></div>
         <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300 font-medium hover:text-white sm:mr-2">
