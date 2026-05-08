@@ -159,11 +159,13 @@ export default function App() {
     return minKey;
   };
 
-  const topologyKey = useMemo(() => {
-    const nodeKey = nodes.map(n => n.id).sort().join('|');
-    const edgeKey = edges.map(e => `${e.id}:${e.source}-${e.target || ''}`).sort().join('|');
+  const getTopologyKey = (nextNodes: Node[], nextEdges: Edge[]) => {
+    const nodeKey = nextNodes.map(n => n.id).sort().join('|');
+    const edgeKey = nextEdges.map(e => `${e.id}:${e.source}-${e.target || ''}`).sort().join('|');
     return `${nodeKey}::${edgeKey}`;
-  }, [nodes, edges]);
+  };
+
+  const topologyKey = useMemo(() => getTopologyKey(nodes, edges), [nodes, edges]);
 
   const prevTopologyKey = useRef<string | null>(null);
 
@@ -191,36 +193,21 @@ export default function App() {
               return;
           }
 
-          let bestMatch: typeof prevPolygonFills[number] | null = null;
-          let bestScore = -1;
-
-          validPreviousFills.forEach(pf => {
-             if (usedOldIds.has(pf.id)) return;
-             const sharedCount = pf.points.filter((nid: string) => faceNodes.includes(nid)).length;
-             if (sharedCount > bestScore) {
-                 bestScore = sharedCount;
-                 bestMatch = pf;
-             }
-          });
-
-          // Minimum 2 shared nodes to inherit properties (color, id)
-          if (bestMatch && bestScore >= 2) {
-              usedOldIds.add((bestMatch as any).id);
-              newPolygonFills.push({ id: (bestMatch as any).id, points: faceNodes, color: (bestMatch as any).color });
-          } else {
-              const id = Math.random().toString(36).substring(2, 9);
-              const color = '#10b981'; // default fill color (emerald)
-              newPolygonFills.push({ id, points: faceNodes, color });
-          }
+          const id = Math.random().toString(36).substring(2, 9);
+          const color = '#10b981'; // default fill color (emerald)
+          newPolygonFills.push({ id, points: faceNodes, color });
         });
 
+        const preservedFills = validPreviousFills.filter(pf => !usedOldIds.has(pf.id));
+        const nextPolygonFills = [...newPolygonFills, ...preservedFills];
+
         // Determine if there is actually a change to prevent infinite loops
-        const changed = newPolygonFills.length !== prevPolygonFills.length || newPolygonFills.some((nf) => {
+        const changed = nextPolygonFills.length !== prevPolygonFills.length || nextPolygonFills.some((nf) => {
           const of = prevPolygonFills.find(p => p.id === nf.id);
           return !of || of.color !== nf.color || of.points.length !== nf.points.length || nf.points.some((pointId, index) => pointId !== of.points[index]);
         });
 
-        return changed ? newPolygonFills : prevPolygonFills;
+        return changed ? nextPolygonFills : prevPolygonFills;
       } catch (err) {
         console.error(err);
         return prevPolygonFills;
@@ -296,6 +283,7 @@ export default function App() {
           return;
         }
         if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
+          prevTopologyKey.current = getTopologyKey(data.nodes, data.edges);
           setNodes(data.nodes);
           setEdges(data.edges);
           if (typeof data.settings?.chamferAngleDeg === 'number') {
