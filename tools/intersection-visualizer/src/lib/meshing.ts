@@ -76,7 +76,6 @@ function buildOpenBoundaryPath(hubPolygon: Point[], from: Point, to: Point): Poi
   const toBoundary = closestBoundaryPoint(to, hubPolygon, false);
 
   if (fromBoundary.segmentIndex === -1 || toBoundary.segmentIndex === -1) return [];
-  if (fromBoundary.distance > 25 || toBoundary.distance > 25) return [];
 
   const fromPosition = fromBoundary.segmentIndex + fromBoundary.t;
   const toPosition = toBoundary.segmentIndex + toBoundary.t;
@@ -145,9 +144,41 @@ function intersectSegmentBoundary(p1: Point, p2: Point, boundary: Point[], close
   return closest;
 }
 
+function closestBoundaryPointToSegment(p1: Point, p2: Point, boundary: Point[], closed = true): Point | null {
+  let closest: Point | null = null;
+  let minDistance = Infinity;
+  const segmentCount = closed ? boundary.length : Math.max(boundary.length - 1, 0);
+
+  const consider = (point: Point, distance: number) => {
+    if (distance < minDistance) {
+      minDistance = distance;
+      closest = point;
+    }
+  };
+
+  for (let i = 0; i < segmentCount; i++) {
+    const a = boundary[i];
+    const b = boundary[(i + 1) % boundary.length];
+    const p1ToBoundary = closestPointOnSegment(p1, a, b);
+    const p2ToBoundary = closestPointOnSegment(p2, a, b);
+    const aToSegment = closestPointOnSegment(a, p1, p2);
+    const bToSegment = closestPointOnSegment(b, p1, p2);
+
+    consider(p1ToBoundary.point, p1ToBoundary.distance);
+    consider(p2ToBoundary.point, p2ToBoundary.distance);
+    consider(a, aToSegment.distance);
+    consider(b, bToSegment.distance);
+  }
+
+  return closest;
+}
+
 function intersectHubBoundarySegment(p1: Point, p2: Point, hub: MeshData['hubs'][number]): Point | null {
   if (hub.corners.length === 1) {
-    return intersectSegmentBoundary(p1, p2, hub.outerPolygon, false);
+    return (
+      intersectSegmentBoundary(p1, p2, hub.outerPolygon, false) ??
+      closestBoundaryPointToSegment(p1, p2, hub.outerPolygon, false)
+    );
   }
 
   return intersectSegmentPolygon(p1, p2, hub.outerPolygon);
