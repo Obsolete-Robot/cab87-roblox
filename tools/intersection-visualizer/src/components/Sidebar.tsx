@@ -2,8 +2,12 @@ import React, { useState } from 'react';
 import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2 } from 'lucide-react';
 import { Node, Edge } from '../lib/types';
 import { sanitizeMeshResolution } from '../lib/constants';
+import { getEdgeClearance } from '../lib/junctions';
+import { isTrueJunction } from '../lib/network';
 
 import { DEFAULTS } from '../lib/constants';
+
+const JUNCTION_HANDLE_EXTRA_LENGTH = 6;
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -129,6 +133,87 @@ export default function Sidebar({
       sidewalk: Math.max(0, Math.round((e.sidewalk ?? DEFAULTS.sidewalkWidth) * scale)),
     })));
     setGlobalScaleSidewalks("1.0");
+  };
+
+  const normalizeJunctionHandles = () => {
+    const nodeById = new Map(nodes.map(node => [node.id, node]));
+
+    type PointLike = { x: number; y: number; z?: number };
+
+    const getDirection = (from: PointLike, to?: PointLike | null) => {
+      if (!to) return null;
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.001) return null;
+      return { x: dx / len, y: dy / len };
+    };
+
+    type Endpoint = {
+      node: Node;
+      handleIndex: number;
+      isSource: boolean;
+      fallbackPoint?: PointLike;
+    };
+
+    const normalizeEndpoint = (edge: Edge, nextPoints: Edge['points'], allEdges: Edge[], endpoint: Endpoint) => {
+      const handle = nextPoints[endpoint.handleIndex];
+      if (!handle) return false;
+
+      const clearance = Math.max(0, getEdgeClearance(endpoint.node.id, edge, endpoint.isSource, nodes, allEdges, chamferAngle));
+      const crosswalkLength = isTrueJunction(endpoint.node.id, nodes, allEdges) ? DEFAULTS.crosswalkLength : 0;
+      const minLength = clearance + crosswalkLength + JUNCTION_HANDLE_EXTRA_LENGTH;
+      if (minLength <= JUNCTION_HANDLE_EXTRA_LENGTH) return false;
+
+      const hx = handle.x - endpoint.node.point.x;
+      const hy = handle.y - endpoint.node.point.y;
+      const handleLength = Math.hypot(hx, hy);
+      const fallbackDir = getDirection(endpoint.node.point, endpoint.fallbackPoint);
+      let dir = handleLength > 0.001 ? { x: hx / handleLength, y: hy / handleLength } : fallbackDir;
+      let shouldNormalize = handleLength < minLength;
+
+      if (dir && fallbackDir && dir.x * fallbackDir.x + dir.y * fallbackDir.y < 0) {
+        dir = fallbackDir;
+        shouldNormalize = true;
+      }
+
+      if (!dir || !shouldNormalize) return false;
+
+      nextPoints[endpoint.handleIndex] = {
+        ...handle,
+        x: endpoint.node.point.x + dir.x * minLength,
+        y: endpoint.node.point.y + dir.y * minLength,
+        z: handle.z ?? endpoint.node.point.z ?? 4,
+      };
+      return true;
+    };
+
+    setEdges(prev => prev.map(edge => {
+      const sourceNode = nodeById.get(edge.source);
+      if (!sourceNode || edge.points.length === 0) return edge;
+
+      const targetNode = edge.target ? nodeById.get(edge.target) : null;
+      const nextPoints = edge.points.map(point => ({ ...point }));
+      let changed = false;
+
+      changed = normalizeEndpoint(edge, nextPoints, prev, {
+        node: sourceNode,
+        handleIndex: 0,
+        isSource: true,
+        fallbackPoint: edge.points.length >= 3 ? edge.points[2] : (targetNode?.point ?? edge.points[1]),
+      }) || changed;
+
+      if (targetNode && edge.points.length > 1) {
+        changed = normalizeEndpoint(edge, nextPoints, prev, {
+          node: targetNode,
+          handleIndex: edge.points.length - 1,
+          isSource: false,
+          fallbackPoint: edge.points.length >= 3 ? edge.points[edge.points.length - 3] : sourceNode.point,
+        }) || changed;
+      }
+
+      return changed ? { ...edge, points: nextPoints } : edge;
+    }));
   };
 
   const handleFlipEdge = (id: string) => {
@@ -697,6 +782,14 @@ export default function Sidebar({
                   />
                   <button onClick={applyGlobalScaleSidewalks} className="flex-1 px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-xs font-semibold">Apply Scale</button>
                 </div>
+              </div>
+              <div className="pt-2 border-t border-slate-800">
+                <button
+                  onClick={normalizeJunctionHandles}
+                  className="w-full px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-semibold flex items-center justify-center transition-colors"
+                >
+                  Normalize Junction Handles
+                </button>
               </div>
             </div>
           )}

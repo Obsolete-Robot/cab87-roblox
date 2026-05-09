@@ -5,6 +5,7 @@ export const ROAD_NETWORK_VERSION = 1;
 export const DEFAULTS = {
   roadWidth: 60,
   sidewalkWidth: 24,
+  crosswalkLength: 14,
   laneWidth: 30,
   softSelectionRadius: 200,
   chamferAngle: 70,

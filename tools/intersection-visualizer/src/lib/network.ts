@@ -2,6 +2,7 @@ import { Point, Node, Edge } from "./types";
 import { sampleSpline } from "./splines";
 import { getEdgeClearance } from "./junctions";
 import { getDir } from "./math";
+import { DEFAULTS } from "./constants";
 
 export function findClosedAreas(nodes: Node[], edges: Edge[]): string[][] {
   const edgeSet = new Set(edges.filter(e => e.target).map(e => e.id));
@@ -235,7 +236,7 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
   const d0y = u1.y - p0.y;
   const len0 = Math.hypot(d0x, d0y);
 
-  let W0 = getEdgeClearance(edge.source, edge, true, nodes, edges, chamferAngleDeg) + (isTrueJunction(edge.source, nodes, edges) ? 14 : 0);
+  let W0 = getEdgeClearance(edge.source, edge, true, nodes, edges, chamferAngleDeg) + (isTrueJunction(edge.source, nodes, edges) ? DEFAULTS.crosswalkLength : 0);
 
   if (basePts.length === 2 && W0 > len0 / 2 - 5) {
       W0 = Math.max(0, len0 / 2 - 5);
@@ -260,7 +261,7 @@ export function getExtendedEdgeControlPoints(edge: Edge, nodes: Node[], edges: E
   const dnY = uLast.y - pN.y;
   const lenN = Math.hypot(dnX, dnY);
 
-  let WN = (edge.target ? getEdgeClearance(edge.target, edge, false, nodes, edges, chamferAngleDeg) : 0) + (edge.target && isTrueJunction(edge.target, nodes, edges) ? 14 : 0);
+  let WN = (edge.target ? getEdgeClearance(edge.target, edge, false, nodes, edges, chamferAngleDeg) : 0) + (edge.target && isTrueJunction(edge.target, nodes, edges) ? DEFAULTS.crosswalkLength : 0);
 
   if (basePts.length === 2 && WN > lenN / 2 - 5) {
       WN = Math.max(0, lenN / 2 - 5);

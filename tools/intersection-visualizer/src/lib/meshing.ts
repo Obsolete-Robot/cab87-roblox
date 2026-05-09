@@ -14,6 +14,11 @@ export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource:
   return [bases[0], bases[1]];
 }
 
+function topFacingTriangle(a: Point, b: Point, c: Point): Triangle {
+  const signedArea = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  return signedArea > 0 ? [a, c, b] : [a, b, c];
+}
+
 export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = DEFAULTS.meshResolution, laneWidth: number = DEFAULTS.laneWidth, polygonFills: PolygonFill[] = []): MeshData {
   const mesh: MeshData = {
     vertices: [],
@@ -159,16 +164,24 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
           hubPolygon.push(sL);
           if (!node.ignoreMeshing) {
             mesh.sidewalkPolygons.push({ polygon: [obL, bL, sL, osL] });
-            mesh.sidewalkTriangles.push([bL, sL, osL], [bL, osL, obL]);
-            mesh.triangles.push([bL, sL, osL], [bL, osL, obL]);
+            const smoothingTriangles = [
+              topFacingTriangle(bL, sL, osL),
+              topFacingTriangle(bL, osL, obL),
+            ];
+            mesh.sidewalkTriangles.push(...smoothingTriangles);
+            mesh.triangles.push(...smoothingTriangles);
           }
         }
         if (distR < maxDist - 0.01) {
           hubPolygon.push(sR);
           if (!node.ignoreMeshing) {
             mesh.sidewalkPolygons.push({ polygon: [osR, sR, bR, obR] });
-            mesh.sidewalkTriangles.push([bR, osR, sR], [bR, obR, osR]);
-            mesh.triangles.push([bR, osR, sR], [bR, obR, osR]);
+            const smoothingTriangles = [
+              topFacingTriangle(bR, osR, sR),
+              topFacingTriangle(bR, obR, osR),
+            ];
+            mesh.sidewalkTriangles.push(...smoothingTriangles);
+            mesh.triangles.push(...smoothingTriangles);
           }
         }
 
@@ -192,8 +205,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       for (let i = 0; i < hubPolygon.length; i++) {
         const p1 = hubPolygon[i];
         const p2 = hubPolygon[(i + 1) % hubPolygon.length];
-        mesh.hubTriangles.push([node.point, p1, p2]);
-        mesh.triangles.push([node.point, p1, p2]);
+        mesh.hubTriangles.push([node.point, p2, p1]);
+        mesh.triangles.push([node.point, p2, p1]);
       }
 
       for (let i = 0; i < corners.length; i++) {
@@ -205,10 +218,12 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         mesh.sidewalkPolygons.push({ polygon: poly });
 
         for (let j = 0; j < innerPts.length - 1; j++) {
-          mesh.sidewalkTriangles.push([innerPts[j], outerPts[j], outerPts[j+1]]);
-          mesh.sidewalkTriangles.push([innerPts[j], outerPts[j+1], innerPts[j+1]]);
-          mesh.triangles.push([innerPts[j], outerPts[j], outerPts[j+1]]);
-          mesh.triangles.push([innerPts[j], outerPts[j+1], innerPts[j+1]]);
+          const smoothingTriangles = [
+            topFacingTriangle(innerPts[j], outerPts[j], outerPts[j+1]),
+            topFacingTriangle(innerPts[j], outerPts[j+1], innerPts[j+1]),
+          ];
+          mesh.sidewalkTriangles.push(...smoothingTriangles);
+          mesh.triangles.push(...smoothingTriangles);
         }
       }
     }
@@ -289,7 +304,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       outerRightPoints.push({ x: p2.x + right.x * OW_R, y: p2.y + right.y * OW_R, z: p2.z });
     }
 
-    const cwWidth = 14;
+    const cwWidth = DEFAULTS.crosswalkLength;
 
     if (sourceBases && outerSourceBases) {
        let [bL, bR] = sourceBases;
@@ -353,12 +368,12 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                mesh.sidewalkPolygons.push({ polygon: [otbL, tbL, new_tbL, new_otbL] });
                mesh.sidewalkPolygons.push({ polygon: [tbR, otbR, new_otbR, new_tbR] });
 
-               mesh.crosswalkTriangles.push([tbL, tbR, new_tbR], [tbL, new_tbR, new_tbL]);
-               mesh.sidewalkTriangles.push([otbL, tbL, new_tbL], [otbL, new_tbL, new_otbL]);
-               mesh.sidewalkTriangles.push([tbR, otbR, new_otbR], [tbR, new_otbR, new_tbR]);
-               mesh.triangles.push([tbL, tbR, new_tbR], [tbL, new_tbR, new_tbL]);
-               mesh.triangles.push([otbL, tbL, new_tbL], [otbL, new_tbL, new_otbL]);
-               mesh.triangles.push([tbR, otbR, new_otbR], [tbR, new_otbR, new_tbR]);
+               mesh.crosswalkTriangles.push([tbL, new_tbR, tbR], [tbL, new_tbL, new_tbR]);
+               mesh.sidewalkTriangles.push([otbL, new_tbL, tbL], [otbL, new_otbL, new_tbL]);
+               mesh.sidewalkTriangles.push([tbR, new_otbR, otbR], [tbR, new_tbR, new_otbR]);
+               mesh.triangles.push([tbL, new_tbR, tbR], [tbL, new_tbL, new_tbR]);
+               mesh.triangles.push([otbL, new_tbL, tbL], [otbL, new_otbL, new_tbL]);
+               mesh.triangles.push([tbR, new_otbR, otbR], [tbR, new_tbR, new_otbR]);
              }
 
              tbL = new_tbL; tbR = new_tbR;
