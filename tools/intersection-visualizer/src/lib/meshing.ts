@@ -1062,16 +1062,67 @@ function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
         const p1 = filteredPoints[i1];
         const p2 = filteredPoints[i2];
 
-        // Final check: only keep triangles if their centroid is inside the polygon
-        const cx = (p0.x + p1.x + p2.x) / 3;
-        const cy = (p0.y + p1.y + p2.y) / 3;
-
-        if (pointInPolygon({ x: cx, y: cy }, boundaryPoints)) {
+        if (triangleInsideBoundary(p0, p1, p2, boundaryPoints)) {
             result.push([p0, p1, p2]);
         }
     }
 
     return result;
+}
+
+const POLYGON_BOUNDARY_EPSILON = 0.1;
+
+function triangleInsideBoundary(p0: Point, p1: Point, p2: Point, boundary: Point[]): boolean {
+    const centroid = {
+        x: (p0.x + p1.x + p2.x) / 3,
+        y: (p0.y + p1.y + p2.y) / 3,
+    };
+    if (!pointInPolygonOrOnBoundary(centroid, boundary)) {
+        return false;
+    }
+
+    const edgeMidpoints = [
+        { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 },
+        { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+        { x: (p2.x + p0.x) / 2, y: (p2.y + p0.y) / 2 },
+    ];
+    if (edgeMidpoints.some((point) => !pointInPolygonOrOnBoundary(point, boundary))) {
+        return false;
+    }
+
+    const triangleEdges: [Point, Point][] = [[p0, p1], [p1, p2], [p2, p0]];
+    for (const [a, b] of triangleEdges) {
+        for (let i = 0; i < boundary.length; i++) {
+            const c = boundary[i];
+            const d = boundary[(i + 1) % boundary.length];
+            const intersection = segmentIntersect(a, b, c, d);
+            if (!intersection) continue;
+            if (pointsClose(intersection, a) || pointsClose(intersection, b)) continue;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function pointInPolygonOrOnBoundary(p: { x: number, y: number }, polygon: Point[]): boolean {
+    return pointOnPolygonBoundary(p, polygon) || pointInPolygon(p, polygon);
+}
+
+function pointOnPolygonBoundary(p: { x: number, y: number }, polygon: Point[]): boolean {
+    if (polygon.length < 2) return false;
+    for (let i = 0; i < polygon.length; i++) {
+        const a = polygon[i];
+        const b = polygon[(i + 1) % polygon.length];
+        if (closestPointOnSegment(p, a, b).distance <= POLYGON_BOUNDARY_EPSILON) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function pointsClose(a: { x: number, y: number }, b: { x: number, y: number }): boolean {
+    return Math.hypot(a.x - b.x, a.y - b.y) <= POLYGON_BOUNDARY_EPSILON;
 }
 
 function pointInPolygon(p: { x: number, y: number }, polygon: Point[]): boolean {
