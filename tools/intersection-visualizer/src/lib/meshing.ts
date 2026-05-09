@@ -1062,7 +1062,15 @@ function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
         if (a !== b) edges.push([a, b]);
     }
 
-    const triangles = cdt2d(points, edges, { exterior: false });
+    let triangles: [number, number, number][];
+    try {
+        triangles = cdt2d(points, edges, { interior: true, exterior: true });
+    } catch {
+        triangles = cdt2d(points);
+    }
+    if (triangles.length === 0) {
+        triangles = cdt2d(points);
+    }
 
     const result: Triangle[] = [];
     for (const [i0, i1, i2] of triangles) {
