@@ -3,7 +3,7 @@ import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
 import { getDir, intersectSegmentPolygon, segmentIntersect } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
-import * as THREE from 'three';
+import Delaunator from 'delaunator';
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
   const corners = nodeCorners.get(node.id);
@@ -963,7 +963,10 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
     if (uniqueBoundaryPoints.length < 3) continue;
 
-    const fillTriangles = buildGridMesh(uniqueBoundaryPoints);
+    const roundedCapExclusions = mesh.hubs
+        .filter((hub) => hub.corners.length === 1 && hub.polygon.length >= 3)
+        .map((hub) => hub.polygon);
+    const fillTriangles = buildGridMesh(uniqueBoundaryPoints, roundedCapExclusions);
 
     mesh.polygonTriangles.push({ triangles: fillTriangles, color: poly.color });
   }
@@ -971,10 +974,150 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
   return mesh;
 }
 
-function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
-    const contour = boundaryPoints.map((point) => new THREE.Vector2(point.x, point.y));
-    const faces = THREE.ShapeUtils.triangulateShape(contour, []);
-    return faces.map(([i0, i1, i2]) => topFacingTriangle(boundaryPoints[i0], boundaryPoints[i1], boundaryPoints[i2]));
+function buildGridMesh(boundaryPoints: Point[], exclusionPolygons: Point[][] = []): Triangle[] {
+    // Calculate average segment length from boundary to match density
+    let totalSegLen = 0;
+    let count = 0;
+    for (let i = 0; i < boundaryPoints.length - 1; i++) {
+        const d = Math.hypot(boundaryPoints[i+1].x - boundaryPoints[i].x, boundaryPoints[i+1].y - boundaryPoints[i].y);
+        if (d > 0.001) {
+            totalSegLen += d;
+            count++;
+        }
+    }
+    // Match the average density of the boundary points
+    const S = count > 0 ? (totalSegLen / count) * 1.5 : 30; // Slightly larger grid for internal points
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of boundaryPoints) {
+        minX = Math.min(minX, p.x);
+        maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y);
+        maxY = Math.max(maxY, p.y);
+    }
+
+    // Safety check for huge polygons
+    const width = maxX - minX;
+    const height = maxY - minY;
+    if (width > 10000 || height > 10000) return [];
+
+    const internalPoints: Point[] = [];
+    // Increase the grid start to avoid points too close to boundary
+    for (let x = minX + S; x < maxX; x += S) {
+        for (let y = minY + S; y < maxY; y += S) {
+            const pt = { x, y, z: 0 };
+            if (pointInPolygon(pt, boundaryPoints) && !pointInAnyPolygon(pt, exclusionPolygons)) {
+                let tooClose = false;
+                for (const bp of boundaryPoints) {
+                    if (Math.hypot(bp.x - x, bp.y - y) < S * 0.7) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+                if (!tooClose) {
+                    internalPoints.push(pt);
+                }
+            }
+        }
+    }
+
+    // Weight interpolation based on proximity to boundary
+    for (const pt of internalPoints) {
+        let sumZ = 0;
+        let sumW = 0;
+        for (const bp of boundaryPoints) {
+            const d = Math.hypot(bp.x - pt.x, bp.y - pt.y);
+            const w = 1.0 / (d * d * d + 0.0001); // Cube weight for faster decay
+            sumZ += (bp.z ?? 0) * w;
+            sumW += w;
+        }
+        pt.z = sumW > 0 ? sumZ / sumW : 0;
+    }
+
+    const allPoints = [...boundaryPoints, ...internalPoints];
+
+    // Ensure all points have unique coords for delaunay
+    const coords: number[] = [];
+    const used = new Set<string>();
+    const filteredPoints: Point[] = [];
+
+    for (const p of allPoints) {
+        const key = `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
+        if (!used.has(key)) {
+            used.add(key);
+            coords.push(p.x, p.y);
+            filteredPoints.push(p);
+        }
+    }
+
+    if (filteredPoints.length < 3) return [];
+
+    const delaunay = new Delaunator(coords);
+    const triangles = delaunay.triangles;
+
+    const result: Triangle[] = [];
+    for (let i = 0; i < triangles.length; i += 3) {
+        const i0 = triangles[i];
+        const i1 = triangles[i + 1];
+        const i2 = triangles[i + 2];
+        const p0 = filteredPoints[i0];
+        const p1 = filteredPoints[i1];
+        const p2 = filteredPoints[i2];
+
+        // Final check: only keep triangles if their centroid is inside the polygon
+        const cx = (p0.x + p1.x + p2.x) / 3;
+        const cy = (p0.y + p1.y + p2.y) / 3;
+
+        if (
+            pointInPolygon({ x: cx, y: cy }, boundaryPoints) &&
+            !triangleTouchesExclusion(p0, p1, p2, exclusionPolygons)
+        ) {
+            result.push([p0, p1, p2]);
+        }
+    }
+
+    return result;
+}
+
+function triangleTouchesExclusion(p0: Point, p1: Point, p2: Point, exclusionPolygons: Point[][]): boolean {
+    if (exclusionPolygons.length === 0) return false;
+
+    const samplePoints = [
+        { x: (p0.x + p1.x + p2.x) / 3, y: (p0.y + p1.y + p2.y) / 3 },
+        { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 },
+        { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+        { x: (p2.x + p0.x) / 2, y: (p2.y + p0.y) / 2 },
+    ];
+
+    if (samplePoints.some((point) => pointInAnyPolygon(point, exclusionPolygons))) {
+        return true;
+    }
+
+    const triangleEdges: [Point, Point][] = [[p0, p1], [p1, p2], [p2, p0]];
+    for (const polygon of exclusionPolygons) {
+        for (const [a, b] of triangleEdges) {
+            for (let i = 0; i < polygon.length; i++) {
+                const c = polygon[i];
+                const d = polygon[(i + 1) % polygon.length];
+                const intersection = segmentIntersect(a, b, c, d);
+                if (!intersection) continue;
+                if (pointsClose(intersection, a) || pointsClose(intersection, b) || pointsClose(intersection, c) || pointsClose(intersection, d)) {
+                    continue;
+                }
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function pointInAnyPolygon(point: { x: number, y: number }, polygons: Point[][]): boolean {
+    return polygons.some((polygon) => pointInPolygon(point, polygon));
+}
+
+function pointsClose(a: { x: number, y: number }, b: { x: number, y: number }): boolean {
+    return Math.hypot(a.x - b.x, a.y - b.y) <= 0.1;
 }
 
 function pointInPolygon(p: { x: number, y: number }, polygon: Point[]): boolean {
