@@ -3,7 +3,7 @@ import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
 import { getDir, intersectSegmentPolygon, segmentIntersect } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
-import Delaunator from 'delaunator';
+import cdt2d from 'cdt2d';
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
   const corners = nodeCorners.get(node.id);
@@ -963,10 +963,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
     if (uniqueBoundaryPoints.length < 3) continue;
 
-    const roundedCapExclusions = mesh.hubs
-        .filter((hub) => hub.corners.length === 1 && hub.polygon.length >= 3)
-        .map((hub) => hub.polygon);
-    const fillTriangles = buildGridMesh(uniqueBoundaryPoints, roundedCapExclusions);
+    const fillTriangles = buildGridMesh(uniqueBoundaryPoints);
 
     mesh.polygonTriangles.push({ triangles: fillTriangles, color: poly.color });
   }
@@ -974,7 +971,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
   return mesh;
 }
 
-function buildGridMesh(boundaryPoints: Point[], exclusionPolygons: Point[][] = []): Triangle[] {
+function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
     // Calculate average segment length from boundary to match density
     let totalSegLen = 0;
     let count = 0;
@@ -1006,7 +1003,7 @@ function buildGridMesh(boundaryPoints: Point[], exclusionPolygons: Point[][] = [
     for (let x = minX + S; x < maxX; x += S) {
         for (let y = minY + S; y < maxY; y += S) {
             const pt = { x, y, z: 0 };
-            if (pointInPolygon(pt, boundaryPoints) && !pointInAnyPolygon(pt, exclusionPolygons)) {
+            if (pointInPolygon(pt, boundaryPoints)) {
                 let tooClose = false;
                 for (const bp of boundaryPoints) {
                     if (Math.hypot(bp.x - x, bp.y - y) < S * 0.7) {
@@ -1036,88 +1033,54 @@ function buildGridMesh(boundaryPoints: Point[], exclusionPolygons: Point[][] = [
 
     const allPoints = [...boundaryPoints, ...internalPoints];
 
-    // Ensure all points have unique coords for delaunay
-    const coords: number[] = [];
-    const used = new Set<string>();
+    // Ensure all points have unique coords for constrained triangulation.
+    const points: [number, number][] = [];
     const filteredPoints: Point[] = [];
+    const used = new Map<string, number>();
 
-    for (const p of allPoints) {
+    const addPoint = (p: Point) => {
         const key = `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
-        if (!used.has(key)) {
-            used.add(key);
-            coords.push(p.x, p.y);
-            filteredPoints.push(p);
-        }
-    }
+        const existing = used.get(key);
+        if (existing !== undefined) return existing;
+
+        const index = filteredPoints.length;
+        used.set(key, index);
+        points.push([p.x, p.y]);
+        filteredPoints.push(p);
+        return index;
+    };
+
+    const boundaryIndices = boundaryPoints.map(addPoint);
+    for (const p of internalPoints) addPoint(p);
 
     if (filteredPoints.length < 3) return [];
 
-    const delaunay = new Delaunator(coords);
-    const triangles = delaunay.triangles;
+    const edges: [number, number][] = [];
+    for (let i = 0; i < boundaryIndices.length; i++) {
+        const a = boundaryIndices[i];
+        const b = boundaryIndices[(i + 1) % boundaryIndices.length];
+        if (a !== b) edges.push([a, b]);
+    }
+
+    const triangles = cdt2d(points, edges, { exterior: false });
 
     const result: Triangle[] = [];
-    for (let i = 0; i < triangles.length; i += 3) {
-        const i0 = triangles[i];
-        const i1 = triangles[i + 1];
-        const i2 = triangles[i + 2];
+    for (const [i0, i1, i2] of triangles) {
         const p0 = filteredPoints[i0];
         const p1 = filteredPoints[i1];
         const p2 = filteredPoints[i2];
+        if (!p0 || !p1 || !p2) continue;
 
-        // Final check: only keep triangles if their centroid is inside the polygon
+        // Keep the centroid check as a guard for invalid/self-intersecting fill outlines.
         const cx = (p0.x + p1.x + p2.x) / 3;
         const cy = (p0.y + p1.y + p2.y) / 3;
 
-        if (
-            pointInPolygon({ x: cx, y: cy }, boundaryPoints) &&
-            !triangleTouchesExclusion(p0, p1, p2, exclusionPolygons)
-        ) {
-            result.push([p0, p1, p2]);
+        if (pointInPolygon({ x: cx, y: cy }, boundaryPoints)) {
+            result.push(topFacingTriangle(p0, p1, p2));
         }
     }
 
     return result;
-}
-
-function triangleTouchesExclusion(p0: Point, p1: Point, p2: Point, exclusionPolygons: Point[][]): boolean {
-    if (exclusionPolygons.length === 0) return false;
-
-    const samplePoints = [
-        { x: (p0.x + p1.x + p2.x) / 3, y: (p0.y + p1.y + p2.y) / 3 },
-        { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 },
-        { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
-        { x: (p2.x + p0.x) / 2, y: (p2.y + p0.y) / 2 },
-    ];
-
-    if (samplePoints.some((point) => pointInAnyPolygon(point, exclusionPolygons))) {
-        return true;
-    }
-
-    const triangleEdges: [Point, Point][] = [[p0, p1], [p1, p2], [p2, p0]];
-    for (const polygon of exclusionPolygons) {
-        for (const [a, b] of triangleEdges) {
-            for (let i = 0; i < polygon.length; i++) {
-                const c = polygon[i];
-                const d = polygon[(i + 1) % polygon.length];
-                const intersection = segmentIntersect(a, b, c, d);
-                if (!intersection) continue;
-                if (pointsClose(intersection, a) || pointsClose(intersection, b) || pointsClose(intersection, c) || pointsClose(intersection, d)) {
-                    continue;
-                }
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-function pointInAnyPolygon(point: { x: number, y: number }, polygons: Point[][]): boolean {
-    return polygons.some((polygon) => pointInPolygon(point, polygon));
-}
-
-function pointsClose(a: { x: number, y: number }, b: { x: number, y: number }): boolean {
-    return Math.hypot(a.x - b.x, a.y - b.y) <= 0.1;
 }
 
 function pointInPolygon(p: { x: number, y: number }, polygon: Point[]): boolean {
