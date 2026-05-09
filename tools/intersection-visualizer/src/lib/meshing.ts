@@ -19,6 +19,82 @@ function topFacingTriangle(a: Point, b: Point, c: Point): Triangle {
   return signedArea > 0 ? [a, c, b] : [a, b, c];
 }
 
+function closestPointOnSegment(point: Point, a: Point, b: Point) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 0.0001) {
+    return {
+      point: a,
+      distance: Math.hypot(point.x - a.x, point.y - a.y),
+      t: 0,
+    };
+  }
+
+  const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lenSq));
+  const closest = {
+    x: a.x + dx * t,
+    y: a.y + dy * t,
+    z: (a.z ?? 4) + ((b.z ?? 4) - (a.z ?? 4)) * t,
+  };
+
+  return {
+    point: closest,
+    distance: Math.hypot(point.x - closest.x, point.y - closest.y),
+    t,
+  };
+}
+
+function closestBoundaryPoint(point: Point, polygon: Point[]) {
+  let best = {
+    point,
+    segmentIndex: -1,
+    distance: Infinity,
+  };
+
+  for (let i = 0; i < polygon.length; i++) {
+    const closest = closestPointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.length]);
+    if (closest.distance < best.distance) {
+      best = {
+        point: closest.point,
+        segmentIndex: i,
+        distance: closest.distance,
+      };
+    }
+  }
+
+  return best;
+}
+
+function buildHubBoundaryPath(hubPolygon: Point[], from: Point, to: Point, isClockwise: boolean): Point[] {
+  if (hubPolygon.length < 2) return [];
+
+  const fromBoundary = closestBoundaryPoint(from, hubPolygon);
+  const toBoundary = closestBoundaryPoint(to, hubPolygon);
+
+  if (fromBoundary.segmentIndex === -1 || toBoundary.segmentIndex === -1) return [];
+  if (fromBoundary.distance > 25 || toBoundary.distance > 25) return [];
+
+  const forwardPath: Point[] = [fromBoundary.point];
+  let forwardIndex = (fromBoundary.segmentIndex + 1) % hubPolygon.length;
+  const forwardStop = (toBoundary.segmentIndex + 1) % hubPolygon.length;
+  while (forwardIndex !== forwardStop && forwardPath.length < hubPolygon.length + 2) {
+    forwardPath.push(hubPolygon[forwardIndex]);
+    forwardIndex = (forwardIndex + 1) % hubPolygon.length;
+  }
+  forwardPath.push(toBoundary.point);
+
+  const backwardPath: Point[] = [fromBoundary.point];
+  let backwardIndex = fromBoundary.segmentIndex;
+  while (backwardIndex !== toBoundary.segmentIndex && backwardPath.length < hubPolygon.length + 2) {
+    backwardPath.push(hubPolygon[backwardIndex]);
+    backwardIndex = (backwardIndex - 1 + hubPolygon.length) % hubPolygon.length;
+  }
+  backwardPath.push(toBoundary.point);
+
+  return isClockwise ? backwardPath : forwardPath;
+}
+
 export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = DEFAULTS.meshResolution, laneWidth: number = DEFAULTS.laneWidth, polygonFills: PolygonFill[] = []): MeshData {
   const mesh: MeshData = {
     vertices: [],
@@ -205,8 +281,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
       for (let i = 0; i < hubPolygon.length; i++) {
         const p1 = hubPolygon[i];
         const p2 = hubPolygon[(i + 1) % hubPolygon.length];
-        mesh.hubTriangles.push([node.point, p2, p1]);
-        mesh.triangles.push([node.point, p2, p1]);
+        const hubTriangle = topFacingTriangle(node.point, p1, p2);
+        mesh.hubTriangles.push(hubTriangle);
+        mesh.triangles.push(hubTriangle);
       }
 
       for (let i = 0; i < corners.length; i++) {
@@ -777,37 +854,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         const hub = mesh.hubs.find(h => h.id === n2_id);
 
         if (hub && hub.outerPolygon.length > 0) {
-            let minDEnd = Infinity, minDStart = Infinity;
-            let iEnd = -1, iStart = -1;
-            for (let k = 0; k < hub.outerPolygon.length; k++) {
-                const hp = hub.outerPolygon[k];
-                const d1 = Math.hypot(hp.x - p_end.x, hp.y - p_end.y);
-                const d2 = Math.hypot(hp.x - p_start.x, hp.y - p_start.y);
-                if (d1 < minDEnd) { minDEnd = d1; iEnd = k; }
-                if (d2 < minDStart) { minDStart = d2; iStart = k; }
-            }
-
-            if (iEnd !== -1 && iStart !== -1 && minDEnd < 20 && minDStart < 20) {
-                const path1 = [hub.outerPolygon[iEnd]];
-                let k1 = iEnd;
-                while (k1 !== iStart && path1.length < hub.outerPolygon.length + 2) {
-                    k1 = (k1 + 1) % hub.outerPolygon.length;
-                    path1.push(hub.outerPolygon[k1]);
-                }
-
-                const path2 = [hub.outerPolygon[iEnd]];
-                let k2 = iEnd;
-                while (k2 !== iStart && path2.length < hub.outerPolygon.length + 2) {
-                    k2 = (k2 - 1 + hub.outerPolygon.length) % hub.outerPolygon.length;
-                    path2.push(hub.outerPolygon[k2]);
-                }
-
-                if (path1.length > 0 || path2.length > 0) {
-                    const chosenPath = isClockwise ? path2 : path1;
-                    for (let j = 0; j < chosenPath.length; j++) {
-                        boundaryPoints.push(chosenPath[j]);
-                    }
-                }
+            const hubPath = buildHubBoundaryPath(hub.outerPolygon, p_end, p_start, isClockwise);
+            for (let j = 0; j < hubPath.length; j++) {
+                boundaryPoints.push(hubPath[j]);
             }
         }
     }
