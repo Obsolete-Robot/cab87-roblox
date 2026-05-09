@@ -3,7 +3,8 @@ import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
 import { getDir, intersectSegmentPolygon, segmentIntersect } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
-import cdt2d from 'cdt2d';
+import * as THREE from 'three';
+import * as poly2tri from 'poly2tri';
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
   const corners = nodeCorners.get(node.id);
@@ -951,7 +952,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
     if (boundaryPoints.length < 3) continue;
 
-    // Filter consecutive duplicate points (ShapeUtils doesn't like duplicates)
+    // Filter consecutive duplicate points before triangulation.
     const uniqueBoundaryPoints: Point[] = [];
     for (let i = 0; i < boundaryPoints.length; i++) {
         const p = boundaryPoints[i];
@@ -972,11 +973,15 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 }
 
 function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
+    const contourPoints = cleanPolygonBoundary(boundaryPoints);
+    if (contourPoints.length < 3) return [];
+
     // Calculate average segment length from boundary to match density
     let totalSegLen = 0;
     let count = 0;
-    for (let i = 0; i < boundaryPoints.length - 1; i++) {
-        const d = Math.hypot(boundaryPoints[i+1].x - boundaryPoints[i].x, boundaryPoints[i+1].y - boundaryPoints[i].y);
+    for (let i = 0; i < contourPoints.length; i++) {
+        const next = contourPoints[(i + 1) % contourPoints.length];
+        const d = Math.hypot(next.x - contourPoints[i].x, next.y - contourPoints[i].y);
         if (d > 0.001) {
             totalSegLen += d;
             count++;
@@ -986,7 +991,7 @@ function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
     const S = count > 0 ? (totalSegLen / count) * 1.5 : 30; // Slightly larger grid for internal points
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const p of boundaryPoints) {
+    for (const p of contourPoints) {
         minX = Math.min(minX, p.x);
         maxX = Math.max(maxX, p.x);
         minY = Math.min(minY, p.y);
@@ -999,21 +1004,17 @@ function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
     if (width > 10000 || height > 10000) return [];
 
     const internalPoints: Point[] = [];
+    const estimatedGridPoints = Math.max(1, Math.ceil(width / S) * Math.ceil(height / S));
+    const maxGridPoints = 500;
+    const gridStep = estimatedGridPoints > maxGridPoints ? S * Math.sqrt(estimatedGridPoints / maxGridPoints) : S;
+    const boundaryPadding = Math.max(1, gridStep * 0.35);
+
     // Increase the grid start to avoid points too close to boundary
-    for (let x = minX + S; x < maxX; x += S) {
-        for (let y = minY + S; y < maxY; y += S) {
+    for (let x = minX + gridStep; x < maxX; x += gridStep) {
+        for (let y = minY + gridStep; y < maxY; y += gridStep) {
             const pt = { x, y, z: 0 };
-            if (pointInPolygon(pt, boundaryPoints)) {
-                let tooClose = false;
-                for (const bp of boundaryPoints) {
-                    if (Math.hypot(bp.x - x, bp.y - y) < S * 0.7) {
-                        tooClose = true;
-                        break;
-                    }
-                }
-                if (!tooClose) {
-                    internalPoints.push(pt);
-                }
+            if (pointInPolygon(pt, contourPoints) && !pointNearPolygonBoundary(pt, contourPoints, boundaryPadding)) {
+                internalPoints.push(pt);
             }
         }
     }
@@ -1022,7 +1023,7 @@ function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
     for (const pt of internalPoints) {
         let sumZ = 0;
         let sumW = 0;
-        for (const bp of boundaryPoints) {
+        for (const bp of contourPoints) {
             const d = Math.hypot(bp.x - pt.x, bp.y - pt.y);
             const w = 1.0 / (d * d * d + 0.0001); // Cube weight for faster decay
             sumZ += (bp.z ?? 0) * w;
@@ -1031,64 +1032,92 @@ function buildGridMesh(boundaryPoints: Point[]): Triangle[] {
         pt.z = sumW > 0 ? sumZ / sumW : 0;
     }
 
-    const allPoints = [...boundaryPoints, ...internalPoints];
+    const contour = contourPoints.map((point) => createTriangulationPoint(point));
+    const steinerPoints = internalPoints.map((point) => createTriangulationPoint(point));
 
-    // Ensure all points have unique coords for constrained triangulation.
-    const points: [number, number][] = [];
-    const filteredPoints: Point[] = [];
-    const used = new Map<string, number>();
-
-    const addPoint = (p: Point) => {
-        const key = `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
-        const existing = used.get(key);
-        if (existing !== undefined) return existing;
-
-        const index = filteredPoints.length;
-        used.set(key, index);
-        points.push([p.x, p.y]);
-        filteredPoints.push(p);
-        return index;
-    };
-
-    const boundaryIndices = boundaryPoints.map(addPoint);
-    for (const p of internalPoints) addPoint(p);
-
-    if (filteredPoints.length < 3) return [];
-
-    const edges: [number, number][] = [];
-    for (let i = 0; i < boundaryIndices.length; i++) {
-        const a = boundaryIndices[i];
-        const b = boundaryIndices[(i + 1) % boundaryIndices.length];
-        if (a !== b) edges.push([a, b]);
-    }
-
-    let triangles: [number, number, number][];
     try {
-        triangles = cdt2d(points, edges, { interior: true, exterior: true });
-    } catch {
-        triangles = cdt2d(points);
-    }
-    if (triangles.length === 0) {
-        triangles = cdt2d(points);
-    }
+        const sweep = new poly2tri.SweepContext(contour);
+        sweep.addPoints(steinerPoints);
+        sweep.triangulate();
 
-    const result: Triangle[] = [];
-    for (const [i0, i1, i2] of triangles) {
-        const p0 = filteredPoints[i0];
-        const p1 = filteredPoints[i1];
-        const p2 = filteredPoints[i2];
-        if (!p0 || !p1 || !p2) continue;
-
-        // Keep the centroid check as a guard for invalid/self-intersecting fill outlines.
-        const cx = (p0.x + p1.x + p2.x) / 3;
-        const cy = (p0.y + p1.y + p2.y) / 3;
-
-        if (pointInPolygon({ x: cx, y: cy }, boundaryPoints)) {
+        const result: Triangle[] = [];
+        for (const tri of sweep.getTriangles()) {
+            const [p0, p1, p2] = tri.getPoints().map((point) => getSourcePoint(point));
             result.push(topFacingTriangle(p0, p1, p2));
+        }
+        if (result.length > 0) return result;
+    } catch {
+    }
+
+    const fallbackContour = contourPoints.map((point) => new THREE.Vector2(point.x, point.y));
+    const fallbackFaces = THREE.ShapeUtils.triangulateShape(fallbackContour, []);
+    return fallbackFaces.map(([i0, i1, i2]) => topFacingTriangle(contourPoints[i0], contourPoints[i1], contourPoints[i2]));
+}
+
+type TriangulationPoint = poly2tri.IPointLike & { sourcePoint: Point };
+
+function createTriangulationPoint(point: Point): TriangulationPoint {
+    const triangulationPoint = new poly2tri.Point(point.x, point.y) as unknown as TriangulationPoint;
+    triangulationPoint.sourcePoint = point;
+    return triangulationPoint;
+}
+
+function getSourcePoint(point: poly2tri.IPointLike): Point {
+    const sourcePoint = (point as TriangulationPoint).sourcePoint;
+    return sourcePoint ?? { x: point.x, y: point.y, z: 0 };
+}
+
+function cleanPolygonBoundary(points: Point[]): Point[] {
+    const uniquePoints: Point[] = [];
+    const used = new Set<string>();
+
+    for (const point of points) {
+        const previous = uniquePoints[uniquePoints.length - 1];
+        if (previous && Math.hypot(point.x - previous.x, point.y - previous.y) < 0.01) {
+            continue;
+        }
+
+        const key = `${point.x.toFixed(3)},${point.y.toFixed(3)}`;
+        if (used.has(key)) continue;
+        used.add(key);
+        uniquePoints.push(point);
+    }
+
+    if (uniquePoints.length > 1) {
+        const first = uniquePoints[0];
+        const last = uniquePoints[uniquePoints.length - 1];
+        if (Math.hypot(first.x - last.x, first.y - last.y) < 0.01) {
+            uniquePoints.pop();
         }
     }
 
-    return result;
+    let changed = true;
+    while (changed && uniquePoints.length >= 3) {
+        changed = false;
+        for (let i = 0; i < uniquePoints.length; i++) {
+            const prev = uniquePoints[(i - 1 + uniquePoints.length) % uniquePoints.length];
+            const current = uniquePoints[i];
+            const next = uniquePoints[(i + 1) % uniquePoints.length];
+            const area = Math.abs((current.x - prev.x) * (next.y - prev.y) - (current.y - prev.y) * (next.x - prev.x));
+            const edgeLength = Math.hypot(next.x - prev.x, next.y - prev.y);
+            if (edgeLength > 0.001 && area / edgeLength < 0.01) {
+                uniquePoints.splice(i, 1);
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    return uniquePoints;
+}
+
+function pointNearPolygonBoundary(point: Point, polygon: Point[], distance: number): boolean {
+    for (let i = 0; i < polygon.length; i++) {
+        if (closestPointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.length]).distance <= distance) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function pointInPolygon(p: { x: number, y: number }, polygon: Point[]): boolean {
