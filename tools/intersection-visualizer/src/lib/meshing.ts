@@ -1,6 +1,6 @@
 import { DEFAULTS } from './constants';
 import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
-import { getDir, intersectSegmentPolygon } from "./math";
+import { getDir, intersectSegmentPolygon, segmentIntersect } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
 import * as THREE from 'three';
@@ -124,6 +124,33 @@ function buildHubBoundaryPath(hubPolygon: Point[], from: Point, to: Point, isClo
   backwardPath.push(toBoundary.point);
 
   return isClockwise ? backwardPath : forwardPath;
+}
+
+function intersectSegmentBoundary(p1: Point, p2: Point, boundary: Point[], closed = true): Point | null {
+  let closest: Point | null = null;
+  let minDist = Infinity;
+  const segmentCount = closed ? boundary.length : Math.max(boundary.length - 1, 0);
+
+  for (let i = 0; i < segmentCount; i++) {
+    const intersection = segmentIntersect(p1, p2, boundary[i], boundary[(i + 1) % boundary.length]);
+    if (!intersection) continue;
+
+    const dist = Math.hypot(intersection.x - p1.x, intersection.y - p1.y);
+    if (dist < minDist) {
+      minDist = dist;
+      closest = intersection;
+    }
+  }
+
+  return closest;
+}
+
+function intersectHubBoundarySegment(p1: Point, p2: Point, hub: MeshData['hubs'][number]): Point | null {
+  if (hub.corners.length === 1) {
+    return intersectSegmentBoundary(p1, p2, hub.outerPolygon, false);
+  }
+
+  return intersectSegmentPolygon(p1, p2, hub.outerPolygon);
 }
 
 export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = DEFAULTS.meshResolution, laneWidth: number = DEFAULTS.laneWidth, polygonFills: PolygonFill[] = []): MeshData {
@@ -842,7 +869,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                     endIdx--;
                 }
                 if (endIdx < curve.length - 1) {
-                    const exactIntersect = intersectSegmentPolygon(curve[endIdx], curve[endIdx + 1], hub2.outerPolygon);
+                    const exactIntersect = intersectHubBoundarySegment(curve[endIdx], curve[endIdx + 1], hub2);
                     curve.length = endIdx + 1;
                     if (exactIntersect) {
                         curve.push(exactIntersect);
@@ -857,7 +884,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                     startIdx++;
                 }
                 if (startIdx > 0) {
-                    const exactIntersect = intersectSegmentPolygon(curve[startIdx], curve[startIdx - 1], hub1.outerPolygon);
+                    const exactIntersect = intersectHubBoundarySegment(curve[startIdx], curve[startIdx - 1], hub1);
                     curve = curve.slice(startIdx);
                     if (exactIntersect) {
                         curve.unshift(exactIntersect);
