@@ -45,20 +45,23 @@ function closestPointOnSegment(point: Point, a: Point, b: Point) {
   };
 }
 
-function closestBoundaryPoint(point: Point, polygon: Point[]) {
+function closestBoundaryPoint(point: Point, polygon: Point[], closed = true) {
   let best = {
     point,
     segmentIndex: -1,
     distance: Infinity,
+    t: 0,
   };
 
-  for (let i = 0; i < polygon.length; i++) {
+  const segmentCount = closed ? polygon.length : Math.max(polygon.length - 1, 0);
+  for (let i = 0; i < segmentCount; i++) {
     const closest = closestPointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.length]);
     if (closest.distance < best.distance) {
       best = {
         point: closest.point,
         segmentIndex: i,
         distance: closest.distance,
+        t: closest.t,
       };
     }
   }
@@ -66,8 +69,36 @@ function closestBoundaryPoint(point: Point, polygon: Point[]) {
   return best;
 }
 
-function buildHubBoundaryPath(hubPolygon: Point[], from: Point, to: Point, isClockwise: boolean): Point[] {
+function buildOpenBoundaryPath(hubPolygon: Point[], from: Point, to: Point): Point[] {
   if (hubPolygon.length < 2) return [];
+
+  const fromBoundary = closestBoundaryPoint(from, hubPolygon, false);
+  const toBoundary = closestBoundaryPoint(to, hubPolygon, false);
+
+  if (fromBoundary.segmentIndex === -1 || toBoundary.segmentIndex === -1) return [];
+  if (fromBoundary.distance > 25 || toBoundary.distance > 25) return [];
+
+  const fromPosition = fromBoundary.segmentIndex + fromBoundary.t;
+  const toPosition = toBoundary.segmentIndex + toBoundary.t;
+  const path: Point[] = [fromBoundary.point];
+
+  if (fromPosition <= toPosition) {
+    for (let i = fromBoundary.segmentIndex + 1; i <= toBoundary.segmentIndex; i++) {
+      path.push(hubPolygon[i]);
+    }
+  } else {
+    for (let i = fromBoundary.segmentIndex; i > toBoundary.segmentIndex; i--) {
+      path.push(hubPolygon[i]);
+    }
+  }
+
+  path.push(toBoundary.point);
+  return path;
+}
+
+function buildHubBoundaryPath(hubPolygon: Point[], from: Point, to: Point, isClockwise: boolean, openBoundary = false): Point[] {
+  if (hubPolygon.length < 2) return [];
+  if (openBoundary) return buildOpenBoundaryPath(hubPolygon, from, to);
 
   const fromBoundary = closestBoundaryPoint(from, hubPolygon);
   const toBoundary = closestBoundaryPoint(to, hubPolygon);
@@ -854,7 +885,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         const hub = mesh.hubs.find(h => h.id === n2_id);
 
         if (hub && hub.outerPolygon.length > 0) {
-            const hubPath = buildHubBoundaryPath(hub.outerPolygon, p_end, p_start, isClockwise);
+            const hubPath = buildHubBoundaryPath(hub.outerPolygon, p_end, p_start, isClockwise, hub.corners.length === 1);
             for (let j = 0; j < hubPath.length; j++) {
                 boundaryPoints.push(hubPath[j]);
             }
