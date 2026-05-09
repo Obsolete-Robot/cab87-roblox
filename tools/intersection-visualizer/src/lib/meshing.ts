@@ -406,7 +406,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     // We get the forward-facing spline
     const spline = edgeSplines.get(edge.id)!;
     const W = edge.width / 2;
-    const skipRoadMeshing = !!(sourceNode.ignoreMeshing || (targetNode ? targetNode.ignoreMeshing : false));
+    const skipRoadMeshing = !!(edge.ignoreMeshing || sourceNode.ignoreMeshing || (targetNode ? targetNode.ignoreMeshing : false));
 
     const sourceClearance = nodeClearances.get(sourceNode.id)?.get(`${edge.id}_true`) || 0;
     const targetClearance = targetNode ? (nodeClearances.get(targetNode.id)?.get(`${edge.id}_false`) || 0) : 0;
@@ -485,7 +485,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
          const new_obR = { x: obR.x + sDir.x * cwWidth, y: obR.y + sDir.y * cwWidth, z: sz };
 
          if (hasCrosswalk(edge.id, true, nodes, roadEdges)) {
-           mesh.crosswalks.push({ edgeId: edge.id, nodeId: sourceNode.id, polygon: [bL, bR, new_bR, new_bL] });
+           mesh.crosswalks.push({ edgeId: edge.id, nodeId: sourceNode.id, polygon: [bL, bR, new_bR, new_bL], ignoreMeshing: skipRoadMeshing });
          }
          if (!skipRoadMeshing) {
            mesh.sidewalkPolygons.push({ polygon: [obL, bL, new_bL, new_obL] });
@@ -527,7 +527,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
              const new_otbR = { x: otbR.x + tDir.x * cwWidth, y: otbR.y + tDir.y * cwWidth, z: tz };
 
              if (hasCrosswalk(edge.id, false, nodes, roadEdges)) {
-               mesh.crosswalks.push({ edgeId: edge.id, nodeId: targetNode!.id, polygon: [tbL, tbR, new_tbR, new_tbL] });
+               mesh.crosswalks.push({ edgeId: edge.id, nodeId: targetNode!.id, polygon: [tbL, tbR, new_tbR, new_tbL], ignoreMeshing: skipRoadMeshing });
              }
              if (!skipRoadMeshing) {
                mesh.sidewalkPolygons.push({ polygon: [otbL, tbL, new_tbL, new_otbL] });

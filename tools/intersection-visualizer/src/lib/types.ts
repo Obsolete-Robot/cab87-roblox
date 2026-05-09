@@ -40,6 +40,7 @@ export type Edge = {
   color: string;
   name?: string;
   oneWay?: boolean;
+  ignoreMeshing?: boolean;
 };
 
 export type MeshData = {
@@ -51,7 +52,7 @@ export type MeshData = {
   crosswalkTriangles: Triangle[];
   hubs: { id: string; polygon: Point[]; corners: { points: Point[]; sidewalkWidth: number }[]; outerPolygon: Point[]; outerCorners: Point[][]; ignoreMeshing?: boolean }[];
   roadPolygons: { id: string; polygon: Point[]; leftCurve: Point[]; rightCurve: Point[]; outerPolygon: Point[]; outerLeftCurve: Point[]; outerRightCurve: Point[]; sidewalkWidth: number; ignoreMeshing?: boolean }[];
-  crosswalks: { edgeId: string; nodeId: string; polygon: Point[] }[];
+  crosswalks: { edgeId: string; nodeId: string; polygon: Point[]; ignoreMeshing?: boolean }[];
   sidewalkPolygons: { polygon: Point[]; ignoreMeshing?: boolean }[];
   dashedLines: { points: Point[]; ignoreMeshing?: boolean }[];
   solidYellowLines: { points: Point[]; ignoreMeshing?: boolean }[];

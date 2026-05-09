@@ -627,6 +627,19 @@ export default function Sidebar({
                           />
                           <span className="text-xs text-slate-400">One Way Road</span>
                         </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={e.ignoreMeshing ?? false}
+                            onChange={(evt) =>
+                              setEdges((prev) =>
+                                prev.map((pr) => (pr.id === e.id ? { ...pr, ignoreMeshing: evt.target.checked } : pr))
+                              )
+                            }
+                            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <span className="text-xs text-slate-400">Ignore Road Rendering</span>
+                        </div>
                         <div className="mt-2 flex justify-end">
                           <button
                             onClick={() => handleFlipEdge(e.id)}

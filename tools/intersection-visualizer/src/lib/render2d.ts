@@ -338,6 +338,7 @@ export const drawNetwork2D = (
     });
 
     mesh.crosswalks.forEach(cw => {
+       if (cw.ignoreMeshing) return;
        if (cw.polygon.length === 0) return;
        renderables.push({
            z: getAvgZ(cw.polygon),
