@@ -165,6 +165,33 @@ export default function App() {
     return `${nodeKey}::${edgeKey}`;
   };
 
+  const getNodePairKey = (a: string, b: string) => a < b ? `${a}:${b}` : `${b}:${a}`;
+
+  const isFillBoundaryUnchanged = (points: string[], nextEdges: Edge[]) => {
+    if (points.length < 3) return false;
+
+    const boundaryPairs = new Set<string>();
+    for (let i = 0; i < points.length; i++) {
+      boundaryPairs.add(getNodePairKey(points[i], points[(i + 1) % points.length]));
+    }
+
+    const connectedPairs = new Set(
+      nextEdges
+        .filter((edge) => edge.target)
+        .map((edge) => getNodePairKey(edge.source, edge.target!))
+    );
+
+    for (const pair of boundaryPairs) {
+      if (!connectedPairs.has(pair)) return false;
+    }
+
+    const fillNodes = new Set(points);
+    return !nextEdges.some((edge) => {
+      if (!edge.target || !fillNodes.has(edge.source) || !fillNodes.has(edge.target)) return false;
+      return !boundaryPairs.has(getNodePairKey(edge.source, edge.target));
+    });
+  };
+
   const topologyKey = useMemo(() => getTopologyKey(nodes, edges), [nodes, edges]);
 
   const prevTopologyKey = useRef<string | null>(null);
@@ -221,7 +248,12 @@ export default function App() {
           }
         });
 
-        const preservedFills = validPreviousFills.filter(pf => !usedOldIds.has(pf.id) && !previousAutoFillIds.has(pf.id));
+        const preservedFills = validPreviousFills.filter(pf => {
+          if (usedOldIds.has(pf.id)) return false;
+          if (deletedFaces.includes(getFaceKey(pf.points))) return false;
+          if (!previousAutoFillIds.has(pf.id)) return true;
+          return isFillBoundaryUnchanged(pf.points, edges);
+        });
         const nextPolygonFills = [...newPolygonFills, ...preservedFills];
 
         // Determine if there is actually a change to prevent infinite loops
