@@ -184,6 +184,84 @@ function intersectHubBoundarySegment(p1: Point, p2: Point, hub: MeshData['hubs']
   return intersectSegmentPolygon(p1, p2, hub.outerPolygon);
 }
 
+function trimCenterLineToHubBoundaries(centerLine: Point[], hubs: MeshData['hubs'], sourceNodeId: string, targetNodeId: string | null): Point[] {
+  let curve = [...centerLine];
+
+  const targetHub = targetNodeId ? hubs.find(h => h.id === targetNodeId) : null;
+  if (targetHub && targetHub.outerPolygon.length > 0 && curve.length > 1) {
+    let endIdx = curve.length - 1;
+    while (endIdx > 0 && pointInPolygon(curve[endIdx], targetHub.outerPolygon)) {
+      endIdx--;
+    }
+    if (endIdx < curve.length - 1) {
+      const exactIntersect = intersectHubBoundarySegment(curve[endIdx], curve[endIdx + 1], targetHub);
+      curve.length = endIdx + 1;
+      if (exactIntersect) {
+        curve.push(exactIntersect);
+      }
+    }
+  }
+
+  const sourceHub = hubs.find(h => h.id === sourceNodeId);
+  if (sourceHub && sourceHub.outerPolygon.length > 0 && curve.length > 1) {
+    let startIdx = 0;
+    while (startIdx < curve.length - 1 && pointInPolygon(curve[startIdx], sourceHub.outerPolygon)) {
+      startIdx++;
+    }
+    if (startIdx > 0) {
+      const exactIntersect = intersectHubBoundarySegment(curve[startIdx], curve[startIdx - 1], sourceHub);
+      curve = curve.slice(startIdx);
+      if (exactIntersect) {
+        curve.unshift(exactIntersect);
+      }
+    }
+  }
+
+  return curve;
+}
+
+function buildIgnoredRoadPolygon(edge: Edge, centerLine: Point[], hubs: MeshData['hubs']): MeshData['roadPolygons'][number] | null {
+  const curve = trimCenterLineToHubBoundaries(centerLine, hubs, edge.source, edge.target);
+  if (curve.length < 2) return null;
+
+  const W = edge.width / 2;
+  const swLeft = edge.sidewalkLeft ?? edge.sidewalk ?? DEFAULTS.sidewalkWidth;
+  const swRight = edge.sidewalkRight ?? edge.sidewalk ?? DEFAULTS.sidewalkWidth;
+  const outerLeftWidth = W + swLeft;
+  const outerRightWidth = W + swRight;
+
+  const leftCurve: Point[] = [];
+  const rightCurve: Point[] = [];
+  const outerLeftCurve: Point[] = [];
+  const outerRightCurve: Point[] = [];
+
+  for (let i = 0; i < curve.length; i++) {
+    const prev = curve[Math.max(0, i - 1)];
+    const next = curve[Math.min(curve.length - 1, i + 1)];
+    const dir = getDir(prev, next);
+    const left = { x: dir.y, y: -dir.x };
+    const right = { x: -dir.y, y: dir.x };
+    const p = curve[i];
+
+    leftCurve.push({ x: p.x + left.x * W, y: p.y + left.y * W, z: p.z });
+    rightCurve.push({ x: p.x + right.x * W, y: p.y + right.y * W, z: p.z });
+    outerLeftCurve.push({ x: p.x + left.x * outerLeftWidth, y: p.y + left.y * outerLeftWidth, z: p.z });
+    outerRightCurve.push({ x: p.x + right.x * outerRightWidth, y: p.y + right.y * outerRightWidth, z: p.z });
+  }
+
+  return {
+    id: edge.id,
+    polygon: [...leftCurve, ...[...rightCurve].reverse()],
+    leftCurve,
+    rightCurve,
+    outerPolygon: [...outerLeftCurve, ...[...outerRightCurve].reverse()],
+    outerLeftCurve,
+    outerRightCurve,
+    sidewalkWidth: edge.sidewalk ?? DEFAULTS.sidewalkWidth,
+    ignoreMeshing: true,
+  };
+}
+
 export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = DEFAULTS.meshResolution, laneWidth: number = DEFAULTS.laneWidth, polygonFills: PolygonFill[] = []): MeshData {
   const mesh: MeshData = {
     vertices: [],
@@ -209,6 +287,8 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
   const nodeOuterCorners = new Map<string, Map<string, Point[]>>();
 
   const roadNodes = nodes.filter((node) => !node.ignoreMeshing);
+  // Active road edges build junction shape. Individually ignored roads stay in the graph,
+  // but they should not create hub corners, clearances, or crosswalk decisions.
   const roadEdges = edges.filter((edge) => {
     if (edge.ignoreMeshing) return false;
     const source = nodes.find((node) => node.id === edge.source);
@@ -794,6 +874,19 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
           mesh.triangles.push([currR, currOR, otbR]);
           mesh.triangles.push([currR, otbR, tbR]);
        }
+    }
+  }
+
+  // Preserve non-rendered boundary geometry for ignored connector roads so polygon fills can
+  // still walk those graph edges cleanly without making the edge part of either endpoint hub.
+  for (const edge of edges) {
+    if (!edge.ignoreMeshing || roadEdgeIds.has(edge.id)) continue;
+    const spline = edgeSplines.get(edge.id);
+    if (!spline) continue;
+
+    const ignoredRoadPolygon = buildIgnoredRoadPolygon(edge, spline, mesh.hubs);
+    if (ignoredRoadPolygon) {
+      mesh.roadPolygons.push(ignoredRoadPolygon);
     }
   }
 
