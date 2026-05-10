@@ -12,6 +12,7 @@ local PassengerStopService = require(ServicesFolder:WaitForChild("PassengerStopS
 local CabHudStatePublisher = require(ServicesFolder:WaitForChild("CabHudStatePublisher"))
 
 local PassengerService = {}
+local DEBUG_PREFIX = "[cab87 passenger]"
 
 local STOP_LAYOUT_TUNING_KEYS = PassengerStopService.STOP_LAYOUT_TUNING_KEYS
 
@@ -37,6 +38,37 @@ local function getConfigString(key, fallback)
 	end
 
 	return fallback
+end
+
+local function debugLoggingEnabled()
+	return Config.passengerDebugLogging == true
+end
+
+local function debugLog(message, ...)
+	if not debugLoggingEnabled() then
+		return
+	end
+
+	local ok, formatted = pcall(string.format, tostring(message), ...)
+	print(DEBUG_PREFIX .. " " .. (ok and formatted or tostring(message)))
+end
+
+local function formatVector(position)
+	if typeof(position) ~= "Vector3" then
+		return "nil"
+	end
+
+	return string.format("(%.1f, %.1f, %.1f)", position.X, position.Y, position.Z)
+end
+
+local function countDriveSurfaces(driveSurfaces)
+	local count = 0
+	for _, surface in ipairs(driveSurfaces or {}) do
+		if surface and surface:IsA("BasePart") then
+			count += 1
+		end
+	end
+	return count
 end
 
 local horizontalDistance = RoadSampling.distanceXZ
@@ -411,6 +443,15 @@ local function spawnWaitingPassenger(service)
 	PassengerVisuals.setDeliveryVisible(passenger.visual, false)
 	PassengerVisuals.setPickupVisible(passenger.visual, service.mode == "pickup")
 	table.insert(service.passengers, passenger)
+	debugLog(
+		"spawned waiting passenger id=%d pickupStop=%s pickup=%s targetStop=%s target=%s routeDistance=%.1f",
+		passengerId,
+		tostring(pickupStop.id),
+		formatVector(pickupStop.position),
+		tostring(targetStop.id),
+		formatVector(targetStop.position),
+		horizontalDistance(pickupStop.position, targetStop.position)
+	)
 	return passenger
 end
 
@@ -470,6 +511,13 @@ local function startBoarding(service, passenger)
 	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
 	passenger.status = "boarding"
 	passenger.runPhase = 0
+	debugLog(
+		"starting boarding passenger id=%d cab=%s pickup=%s distance=%.1f",
+		passenger.id,
+		formatVector(service.car:GetPivot().Position),
+		formatVector(passenger.pickupStop and passenger.pickupStop.position or nil),
+		passenger.pickupStop and horizontalDistance(service.car:GetPivot().Position, passenger.pickupStop.position) or -1
+	)
 	clearPassengerDive(passenger)
 	clearGpsDestination(service)
 	setPickupMarkersVisible(service, false)
@@ -702,6 +750,31 @@ local function updateService(service, dt)
 		end
 	end
 
+	if debugLoggingEnabled() and service.mode == "pickup" and service.elapsedTime >= (service.nextPickupDebugLogAt or 0) then
+		local pickupRadius = math.max(getConfigNumber("passengerPickupRadius", 24), 1)
+		local nearestPassenger, nearestDistance = getNearestWaitingPassenger(service, cabPosition, math.huge)
+		debugLog(
+			"pickup state: cab=%s hasDriver=%s speed=%.2f stoppedSpeed=%.2f cooldown=%.2f waiting=%d stops=%d nearestPassenger=%s nearestPickup=%s nearestDistance=%.1f pickupRadius=%.1f stopSource=%s projectionHits=%s projectionMisses=%s meshSource=%s driveSurfaces=%d",
+			formatVector(cabPosition),
+			tostring(hasDriver),
+			cabSpeed,
+			stoppedSpeed,
+			service.pickupCooldown or 0,
+			countWaitingPassengers(service),
+			#(service.stops or {}),
+			nearestPassenger and tostring(nearestPassenger.id) or "nil",
+			nearestPassenger and formatVector(nearestPassenger.pickupStop.position) or "nil",
+			nearestDistance,
+			pickupRadius,
+			tostring(service.world:GetAttribute("PassengerStopCandidateSource")),
+			tostring(service.world:GetAttribute("PassengerStopProjectionHitCount")),
+			tostring(service.world:GetAttribute("PassengerStopProjectionMissCount")),
+			tostring(service.world:GetAttribute("AuthoredRoadMeshSource")),
+			countDriveSurfaces(service.driveSurfaces)
+		)
+		service.nextPickupDebugLogAt = service.elapsedTime + math.max(getConfigNumber("passengerDebugLogInterval", 2), 0.25)
+	end
+
 	if service.mode == "delivery" and service.activePassenger and service.fareService then
 		local hasActiveFare = service.fareService.hasActiveFare and service.fareService:hasActiveFare() or false
 		if not hasActiveFare then
@@ -792,6 +865,7 @@ function PassengerService.start(options)
 		lastCabAttributeMirrorAt = nil,
 		previousCabPosition = nil,
 		previousCabMotionDirection = nil,
+		nextPickupDebugLogAt = 0,
 		horizontalDistance = horizontalDistance,
 	}
 	car:SetAttribute(getConfigString("gameplayStateCabIdAttribute", "Cab87GameplayCabId"), service.cabStateId)
@@ -807,6 +881,18 @@ function PassengerService.start(options)
 	})
 	service.world:SetAttribute("PassengerStopCount", #service.stops)
 	recordStopLayoutValues(service)
+	debugLog(
+		"started passenger service: world=%s meshSource=%s visualSource=%s driveSurfaces=%d stops=%d spawn=%s stopSource=%s projectionHits=%s projectionMisses=%s",
+		world:GetFullName(),
+		tostring(world:GetAttribute("AuthoredRoadMeshSource")),
+		tostring(world:GetAttribute("AuthoredRoadVisualSource")),
+		countDriveSurfaces(options.driveSurfaces),
+		#service.stops,
+		formatVector(options.spawnPose and options.spawnPose.position or nil),
+		tostring(world:GetAttribute("PassengerStopCandidateSource")),
+		tostring(world:GetAttribute("PassengerStopProjectionHitCount")),
+		tostring(world:GetAttribute("PassengerStopProjectionMissCount"))
+	)
 
 	ensureWaitingPassengerCount(service)
 	updateCabFareAttributes(service, car:GetPivot().Position, getCabSpeed(car))

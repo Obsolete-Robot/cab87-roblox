@@ -14,6 +14,7 @@ local GpsService = {}
 
 local ROAD_SPLINE_DATA_NAME = RoadSplineData.RUNTIME_DATA_NAME
 local GPS_BASE_TRANSPARENCY_ATTR = "Cab87BaseTransparency"
+local DEBUG_PREFIX = "[cab87 gps]"
 
 local function getConfigNumber(key, fallback)
 	local value = Config[key]
@@ -31,6 +32,61 @@ local function getConfigString(key, fallback)
 	end
 
 	return fallback
+end
+
+local function debugLoggingEnabled()
+	return Config.passengerDebugLogging == true
+end
+
+local function debugLog(message, ...)
+	if not debugLoggingEnabled() then
+		return
+	end
+
+	local ok, formatted = pcall(string.format, tostring(message), ...)
+	print(DEBUG_PREFIX .. " " .. (ok and formatted or tostring(message)))
+end
+
+local function formatVector(position)
+	if typeof(position) ~= "Vector3" then
+		return "nil"
+	end
+
+	return string.format("(%.1f, %.1f, %.1f)", position.X, position.Y, position.Z)
+end
+
+local function countParts(instances)
+	local count = 0
+	for _, instance in ipairs(instances or {}) do
+		if instance and instance:IsA("BasePart") then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function graphDataRoot(world)
+	return world and (world:FindFirstChild(RoadGraphData.RUNTIME_DATA_NAME) or world:FindFirstChild(RoadGraphData.ROAD_GRAPH_NAME))
+end
+
+local function graphTransformSummary(world)
+	local root = graphDataRoot(world)
+	if not root then
+		return "none"
+	end
+
+	return string.format(
+		"%s status=%s error=%s offset=(%s,%s) matrix=[%s,%s;%s,%s]",
+		tostring(root:GetAttribute("ImportedGlbCoordinateTransform") or "none"),
+		tostring(root:GetAttribute("ImportedGlbCoordinateTransformApplied")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateTransformError")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateOffsetX")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateOffsetZ")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateXX")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateXZ")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateZX")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateZZ"))
+	)
 end
 
 local function getConfigColor(key, fallback)
@@ -172,6 +228,16 @@ local function buildAuthoredRouteGraph(world)
 		end
 
 		if #graph.nodes > 0 and #graph.edges > 0 then
+			debugLog(
+				"authored route graph: world=%s graph=%d nodes/%d edges centerLines=%d route=%d nodes/%d edges transform=%s",
+				world and world:GetFullName() or "nil",
+				#(graphData.nodes or {}),
+				#(graphData.edges or {}),
+				#(meshData.centerLines or {}),
+				#graph.nodes,
+				#graph.edges,
+				graphTransformSummary(world)
+			)
 			return graph
 		end
 	end
@@ -514,6 +580,19 @@ local function updateRouteLine(service, cabPosition, targetPosition)
 		for _, segment in ipairs(guide.segments) do
 			setRouteSegmentVisible(segment, false)
 		end
+		if debugLoggingEnabled() and (service.elapsedTime or 0) >= (service.nextRouteDebugLogAt or 0) then
+			debugLog(
+				"route failed: cab=%s target=%s graphSource=%s nodes=%s edges=%s driveSurfaces=%d transform=%s",
+				formatVector(cabPosition),
+				formatVector(targetPosition),
+				tostring(service.routeGraph and service.routeGraph.source or "none"),
+				tostring(service.routeGraph and #service.routeGraph.nodes or 0),
+				tostring(service.routeGraph and #service.routeGraph.edges or 0),
+				countParts(service.driveSurfaces),
+				graphTransformSummary(service.world)
+			)
+			service.nextRouteDebugLogAt = (service.elapsedTime or 0) + math.max(getConfigNumber("passengerDebugLogInterval", 2), 0.25)
+		end
 		return
 	end
 
@@ -532,6 +611,20 @@ local function updateRouteLine(service, cabPosition, targetPosition)
 	for _, point in ipairs(displayPoints) do
 		local surfacePoint = getSurfacePosition(service, point, point.Y)
 		table.insert(points, Vector3.new(point.X, surfacePoint.Y + heightOffset, point.Z))
+	end
+	if debugLoggingEnabled() and (service.elapsedTime or 0) >= (service.nextRouteDebugLogAt or 0) then
+		debugLog(
+			"route update: cab=%s target=%s pathPoints=%d displaySegments=%d first=%s last=%s graphSource=%s transform=%s",
+			formatVector(cabPosition),
+			formatVector(targetPosition),
+			#routePath,
+			segmentCount,
+			formatVector(routePath[1]),
+			formatVector(routePath[#routePath]),
+			tostring(service.routeGraph and service.routeGraph.source or "none"),
+			graphTransformSummary(service.world)
+		)
+		service.nextRouteDebugLogAt = (service.elapsedTime or 0) + math.max(getConfigNumber("passengerDebugLogInterval", 2), 0.25)
 	end
 
 	local routeWidth = math.max(getConfigNumber("passengerRouteWidth", 2.6), 0.2)
@@ -598,9 +691,11 @@ function GpsService.start(options)
 	local service = {
 		world = world,
 		car = car,
+		driveSurfaces = options.driveSurfaces,
 		destination = nil,
 		elapsedTime = 0,
 		routeUpdateAccumulator = math.huge,
+		nextRouteDebugLogAt = 0,
 	}
 
 	service.routeGraph = buildRouteGraph(world, options.driveSurfaces)
@@ -613,6 +708,17 @@ function GpsService.start(options)
 	service.world:SetAttribute("GpsRouteGraphSource", service.routeGraph and service.routeGraph.source or "none")
 	service.world:SetAttribute("GpsRouteGraphNodes", service.routeGraph and #service.routeGraph.nodes or 0)
 	service.world:SetAttribute("GpsRouteGraphEdges", service.routeGraph and #service.routeGraph.edges or 0)
+	debugLog(
+		"started gps: world=%s meshSource=%s visualSource=%s graphSource=%s nodes=%d edges=%d driveSurfaces=%d transform=%s",
+		world:GetFullName(),
+		tostring(world:GetAttribute("AuthoredRoadMeshSource")),
+		tostring(world:GetAttribute("AuthoredRoadVisualSource")),
+		service.routeGraph and tostring(service.routeGraph.source) or "none",
+		service.routeGraph and #service.routeGraph.nodes or 0,
+		service.routeGraph and #service.routeGraph.edges or 0,
+		countParts(options.driveSurfaces),
+		graphTransformSummary(world)
+	)
 
 	function service:setDestination(destination)
 		if typeof(destination) ~= "Vector3" then
@@ -622,6 +728,7 @@ function GpsService.start(options)
 
 		self.destination = destination
 		self.routeUpdateAccumulator = math.huge
+		debugLog("set destination: %s", formatVector(destination))
 		setGpsGuideVisible(self, true)
 		updateDestinationArrow(self, destination)
 	end

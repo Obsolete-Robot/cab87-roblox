@@ -11,6 +11,7 @@ local RoadSplineData = require(Shared:WaitForChild("RoadSplineData"))
 local PassengerVisuals = require(script.Parent.Parent:WaitForChild("PassengerVisuals"))
 
 local PassengerStopService = {}
+local DEBUG_PREFIX = "[cab87 passenger stops]"
 
 PassengerStopService.STOP_LAYOUT_TUNING_KEYS = {
 	passengerMaxStops = true,
@@ -38,6 +39,115 @@ local function getConfigString(key, fallback)
 	end
 
 	return fallback
+end
+
+local function debugLoggingEnabled()
+	return Config.passengerDebugLogging == true
+end
+
+local function debugLog(message, ...)
+	if not debugLoggingEnabled() then
+		return
+	end
+
+	local ok, formatted = pcall(string.format, tostring(message), ...)
+	print(DEBUG_PREFIX .. " " .. (ok and formatted or tostring(message)))
+end
+
+local function formatVector(position)
+	if typeof(position) ~= "Vector3" then
+		return "nil"
+	end
+
+	return string.format("(%.1f, %.1f, %.1f)", position.X, position.Y, position.Z)
+end
+
+local function countParts(instances)
+	local count = 0
+	for _, instance in ipairs(instances or {}) do
+		if instance and instance:IsA("BasePart") then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function createBounds()
+	return {
+		min = Vector3.new(math.huge, math.huge, math.huge),
+		max = Vector3.new(-math.huge, -math.huge, -math.huge),
+		count = 0,
+	}
+end
+
+local function includeBounds(bounds, position)
+	if typeof(position) ~= "Vector3" then
+		return
+	end
+
+	bounds.count += 1
+	bounds.min = Vector3.new(
+		math.min(bounds.min.X, position.X),
+		math.min(bounds.min.Y, position.Y),
+		math.min(bounds.min.Z, position.Z)
+	)
+	bounds.max = Vector3.new(
+		math.max(bounds.max.X, position.X),
+		math.max(bounds.max.Y, position.Y),
+		math.max(bounds.max.Z, position.Z)
+	)
+end
+
+local function formatBounds(bounds)
+	if not bounds or bounds.count <= 0 then
+		return "empty"
+	end
+
+	return string.format("min=%s max=%s count=%d", formatVector(bounds.min), formatVector(bounds.max), bounds.count)
+end
+
+local function setVectorAttributes(instance, prefix, position)
+	if not (instance and typeof(position) == "Vector3") then
+		return
+	end
+
+	instance:SetAttribute(prefix .. "X", position.X)
+	instance:SetAttribute(prefix .. "Y", position.Y)
+	instance:SetAttribute(prefix .. "Z", position.Z)
+end
+
+local function setBoundsAttributes(instance, prefix, bounds)
+	if not (instance and bounds and bounds.count > 0) then
+		return
+	end
+
+	setVectorAttributes(instance, prefix .. "Min", bounds.min)
+	setVectorAttributes(instance, prefix .. "Max", bounds.max)
+	instance:SetAttribute(prefix .. "Count", bounds.count)
+end
+
+local function graphDataRoot(world)
+	return world and (world:FindFirstChild(RoadGraphData.RUNTIME_DATA_NAME) or world:FindFirstChild(RoadGraphData.ROAD_GRAPH_NAME))
+end
+
+local function graphTransformSummary(world)
+	local root = graphDataRoot(world)
+	if not root then
+		return "none"
+	end
+
+	return string.format(
+		"%s status=%s error=%s offset=(%s,%s) matrix=[%s,%s;%s,%s]",
+		tostring(root:GetAttribute("ImportedGlbCoordinateTransform") or "none"),
+		tostring(root:GetAttribute("ImportedGlbCoordinateTransformApplied")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateTransformError")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateOffsetX")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateOffsetZ")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateXX")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateXZ")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateZX")),
+		tostring(root:GetAttribute("ImportedGlbCoordinateZZ"))
+	)
 end
 
 function PassengerStopService.recordStopLayoutValues(target)
@@ -107,12 +217,15 @@ local function collectAuthoredRoadCandidates(world, minSeparation)
 	local graphData = RoadGraphData.collectGraph(world, Config)
 	if graphData then
 		local meshData = RoadGraphMesher.buildNetworkMesh(graphData, graphData.settings)
+		local graphBounds = createBounds()
+		local centerLineBounds = createBounds()
 		for recordIndex, centerLine in ipairs(meshData.centerLines or {}) do
 			if #centerLine >= 2 then
 				local distanceSinceLastStop = spacing
 				local previousPosition = nil
 				local fallbackDir = horizontalUnit(centerLine[2] - centerLine[1]) or Vector3.new(0, 0, 1)
 				for index, position in ipairs(centerLine) do
+					includeBounds(centerLineBounds, position)
 					if previousPosition then
 						distanceSinceLastStop += horizontalDistance(position, previousPosition)
 					end
@@ -129,11 +242,41 @@ local function collectAuthoredRoadCandidates(world, minSeparation)
 			end
 		end
 
+		for _, node in ipairs(graphData.nodes or {}) do
+			includeBounds(graphBounds, node.point)
+		end
+		if world then
+			world:SetAttribute("PassengerStopCandidateSource", "RoadGraph")
+			world:SetAttribute("PassengerStopGraphNodeCount", #(graphData.nodes or {}))
+			world:SetAttribute("PassengerStopGraphEdgeCount", #(graphData.edges or {}))
+			world:SetAttribute("PassengerStopGraphCenterLineCount", #(meshData.centerLines or {}))
+			world:SetAttribute("PassengerStopRawCandidateCount", #candidates)
+			setBoundsAttributes(world, "PassengerStopGraphBounds", graphBounds)
+			setBoundsAttributes(world, "PassengerStopCenterLineBounds", centerLineBounds)
+		end
+		debugLog(
+			"authored graph candidates: world=%s meshSource=%s graph=%d nodes/%d edges centerLines=%d candidates=%d graphBounds=%s centerLineBounds=%s transform=%s",
+			world and world:GetFullName() or "nil",
+			tostring(world and world:GetAttribute("AuthoredRoadMeshSource") or "unknown"),
+			#(graphData.nodes or {}),
+			#(graphData.edges or {}),
+			#(meshData.centerLines or {}),
+			#candidates,
+			formatBounds(graphBounds),
+			formatBounds(centerLineBounds),
+			graphTransformSummary(world)
+		)
+
 		return candidates
 	end
 
 	local dataRoot = world:FindFirstChild(ROAD_SPLINE_DATA_NAME)
 	if not dataRoot then
+		if world then
+			world:SetAttribute("PassengerStopCandidateSource", "none")
+			world:SetAttribute("PassengerStopRawCandidateCount", 0)
+		end
+		debugLog("no authored graph or spline data found for passenger stops in %s", world and world:GetFullName() or "nil")
 		return candidates
 	end
 
@@ -174,6 +317,17 @@ local function collectAuthoredRoadCandidates(world, minSeparation)
 			previousPosition = position
 		end
 	end
+
+	if world then
+		world:SetAttribute("PassengerStopCandidateSource", "LegacyCurve")
+		world:SetAttribute("PassengerStopRawCandidateCount", #candidates)
+	end
+	debugLog(
+		"legacy curve candidates: world=%s records=%d candidates=%d",
+		world and world:GetFullName() or "nil",
+		#RoadSplineData.collectSplineRecords(dataRoot, { defaultRoadWidth = defaultRoadWidth }),
+		#candidates
+	)
 
 	return candidates
 end
@@ -271,11 +425,11 @@ function PassengerStopService.projectToSurface(raycastParams, position, fallback
 		local origin = Vector3.new(position.X, position.Y + rayHeight, position.Z)
 		local result = Workspace:Raycast(origin, Vector3.new(0, -rayDepth, 0), raycastParams)
 		if result then
-			return result.Position
+			return result.Position, true, result.Instance
 		end
 	end
 
-	return Vector3.new(position.X, fallbackY or position.Y, position.Z)
+	return Vector3.new(position.X, fallbackY or position.Y, position.Z), false, nil
 end
 
 local function shuffle(values, rng)
@@ -297,26 +451,119 @@ function PassengerStopService.createPassengerStops(options)
 	local maxStops = math.max(2, math.floor(getConfigNumber("passengerMaxStops", 36)))
 	local candidates = collectAuthoredRoadCandidates(world, minSeparation)
 	local surfaceRaycastParams = PassengerStopService.createSurfaceRaycastParams(driveSurfaces)
+	local candidateSource = if #candidates > 0 then tostring((world and world:GetAttribute("PassengerStopCandidateSource")) or "Authored") else "Surface"
+	local rawCandidateCount = #candidates
 
 	if #candidates == 0 then
 		candidates = collectSurfaceCandidates(driveSurfaces, minSeparation)
+		rawCandidateCount = #candidates
+		if #candidates > 0 then
+			candidateSource = "DriveSurface"
+			if world then
+				world:SetAttribute("PassengerStopCandidateSource", candidateSource)
+				world:SetAttribute("PassengerStopRawCandidateCount", rawCandidateCount)
+			end
+			debugLog(
+				"drive surface candidates: world=%s driveSurfaces=%d candidates=%d",
+				world and world:GetFullName() or "nil",
+				countParts(driveSurfaces),
+				#candidates
+			)
+		end
 	end
 
 	ensureMinimumCandidateCount(candidates, spawnPose)
+	if rawCandidateCount == 0 and #candidates > 0 then
+		candidateSource = "FallbackAroundCab"
+		if world then
+			world:SetAttribute("PassengerStopCandidateSource", candidateSource)
+		end
+	end
 	shuffle(candidates, rng)
 
 	local stops = {}
+	local candidateBounds = createBounds()
+	local stopBounds = createBounds()
+	local projectionHits = 0
+	local projectionMisses = 0
+	local sampleCount = math.max(0, math.floor(getConfigNumber("passengerDebugSampleCount", 6)))
+	local samples = {}
 	for i = 1, math.min(#candidates, maxStops) do
 		local candidate = candidates[i]
-		local position = PassengerStopService.projectToSurface(surfaceRaycastParams, candidate, candidate.Y)
+		includeBounds(candidateBounds, candidate)
+		local position, hitSurface, surface = PassengerStopService.projectToSurface(surfaceRaycastParams, candidate, candidate.Y)
+		includeBounds(stopBounds, position)
+		if hitSurface then
+			projectionHits += 1
+		else
+			projectionMisses += 1
+		end
+		if #samples < sampleCount then
+			table.insert(samples, {
+				index = i,
+				candidate = candidate,
+				position = position,
+				hitSurface = hitSurface,
+				surface = surface,
+			})
+		end
+		local instance = PassengerVisuals.createStop(folder, i, position)
+		instance:SetAttribute("ProjectionHit", hitSurface)
+		instance:SetAttribute("ProjectionSurface", surface and surface:GetFullName() or "")
+		setVectorAttributes(instance, "Candidate", candidate)
+		setVectorAttributes(instance, "Projected", position)
 		table.insert(stops, {
 			id = i,
 			position = position,
-			instance = PassengerVisuals.createStop(folder, i, position),
+			instance = instance,
 		})
 	end
 
 	folder:SetAttribute("StopCount", #stops)
+	folder:SetAttribute("CandidateSource", candidateSource)
+	folder:SetAttribute("RawCandidateCount", rawCandidateCount)
+	folder:SetAttribute("FinalCandidateCount", #candidates)
+	folder:SetAttribute("ProjectionHitCount", projectionHits)
+	folder:SetAttribute("ProjectionMissCount", projectionMisses)
+	folder:SetAttribute("DriveSurfaceCount", countParts(driveSurfaces))
+	setBoundsAttributes(folder, "CandidateBounds", candidateBounds)
+	setBoundsAttributes(folder, "StopBounds", stopBounds)
+	if world then
+		world:SetAttribute("PassengerStopCandidateSource", candidateSource)
+		world:SetAttribute("PassengerStopRawCandidateCount", rawCandidateCount)
+		world:SetAttribute("PassengerStopFinalCandidateCount", #candidates)
+		world:SetAttribute("PassengerStopProjectionHitCount", projectionHits)
+		world:SetAttribute("PassengerStopProjectionMissCount", projectionMisses)
+		world:SetAttribute("PassengerStopDriveSurfaceCount", countParts(driveSurfaces))
+		setBoundsAttributes(world, "PassengerStopCandidateBounds", candidateBounds)
+		setBoundsAttributes(world, "PassengerStopBounds", stopBounds)
+	end
+	debugLog(
+		"created stops: world=%s source=%s rawCandidates=%d finalCandidates=%d stops=%d driveSurfaces=%d raycast=%s hits=%d misses=%d candidateBounds=%s stopBounds=%s spawn=%s transform=%s",
+		world and world:GetFullName() or "nil",
+		candidateSource,
+		rawCandidateCount,
+		#candidates,
+		#stops,
+		countParts(driveSurfaces),
+		tostring(surfaceRaycastParams ~= nil),
+		projectionHits,
+		projectionMisses,
+		formatBounds(candidateBounds),
+		formatBounds(stopBounds),
+		formatVector(spawnPose and spawnPose.position or nil),
+		graphTransformSummary(world)
+	)
+	for _, sample in ipairs(samples) do
+		debugLog(
+			"stop sample[%d]: candidate=%s projected=%s hit=%s surface=%s",
+			sample.index,
+			formatVector(sample.candidate),
+			formatVector(sample.position),
+			tostring(sample.hitSurface),
+			sample.surface and sample.surface:GetFullName() or "nil"
+		)
+	end
 	return stops, folder, surfaceRaycastParams
 end
 

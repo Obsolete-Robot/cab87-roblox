@@ -29,6 +29,18 @@ local MARKER_TYPE_ATTR = "Cab87MarkerType"
 local ROAD_SOURCE_AUTO = "Auto"
 local ROAD_SOURCE_ROAD_GRAPH = "RoadGraph"
 local ROAD_SOURCE_LEGACY_CURVE = "LegacyCurve"
+local GRAPH_COORDINATE_DEBUG_ATTRIBUTES = {
+	"ImportedGlbCoordinateTransform",
+	"ImportedGlbCoordinateTransformApplied",
+	"ImportedGlbCoordinateTransformError",
+	"ImportedGlbCoordinateTransformSamples",
+	"ImportedGlbCoordinateOffsetX",
+	"ImportedGlbCoordinateOffsetZ",
+	"ImportedGlbCoordinateXX",
+	"ImportedGlbCoordinateXZ",
+	"ImportedGlbCoordinateZX",
+	"ImportedGlbCoordinateZZ",
+}
 
 local RoadGraphMesher = nil
 local RoadMeshBuilder = nil
@@ -67,6 +79,24 @@ local function safeProperty(instance, propertyName)
 		return value
 	end
 	return nil
+end
+
+local function copyGraphCoordinateDebugAttributes(sourceRoot, targetRoot, world)
+	local sourceGraph = sourceRoot and sourceRoot:FindFirstChild(RoadGraphData.ROAD_GRAPH_NAME)
+	local targetGraph = targetRoot and targetRoot:FindFirstChild(RoadGraphData.RUNTIME_DATA_NAME)
+	if not (sourceGraph and targetGraph) then
+		return
+	end
+
+	for _, attributeName in ipairs(GRAPH_COORDINATE_DEBUG_ATTRIBUTES) do
+		local value = sourceGraph:GetAttribute(attributeName)
+		if value ~= nil then
+			targetGraph:SetAttribute(attributeName, value)
+			if world then
+				world:SetAttribute(attributeName, value)
+			end
+		end
+	end
 end
 
 local function describeMinimapPart(part)
@@ -974,6 +1004,7 @@ local function createGraphWorld(root, graph)
 	world.Parent = Workspace
 
 	RoadGraphData.writeGraph(world, graph, RoadGraphData.RUNTIME_DATA_NAME)
+	copyGraphCoordinateDebugAttributes(root, world, world)
 
 	local meshData = nil
 	local meshBuild, importedMeshErrors = useImportedBakedGraphMeshes(root, world)
@@ -1046,7 +1077,7 @@ local function createGraphWorld(root, graph)
 	world:SetAttribute("MinimapRoadMeshDedicated", minimapMesh ~= nil)
 
 	roadDebugLog(
-		"road graph world built: nodes=%d edges=%d roadTris=%d roadEdgeTris=%d roadHubTris=%d sidewalkTris=%d crosswalkTris=%d polygonFillTris=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
+		"road graph world built: nodes=%d edges=%d roadTris=%d roadEdgeTris=%d roadHubTris=%d sidewalkTris=%d crosswalkTris=%d polygonFillTris=%d driveSurfaces=%d meshSource=%s transform=%s error=%s offset=(%s,%s) spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
 		#(graph.nodes or {}),
 		#(graph.edges or {}),
 		roadTriangleCount,
@@ -1056,6 +1087,11 @@ local function createGraphWorld(root, graph)
 		crosswalkTriangleCount,
 		polygonFillTriangleCount,
 		#driveSurfaces,
+		tostring(meshBuild.source or "runtime"),
+		tostring(world:GetAttribute("ImportedGlbCoordinateTransform")),
+		tostring(world:GetAttribute("ImportedGlbCoordinateTransformError")),
+		tostring(world:GetAttribute("ImportedGlbCoordinateOffsetX")),
+		tostring(world:GetAttribute("ImportedGlbCoordinateOffsetZ")),
 		spawnPose.position.X,
 		spawnPose.position.Y,
 		spawnPose.position.Z,
