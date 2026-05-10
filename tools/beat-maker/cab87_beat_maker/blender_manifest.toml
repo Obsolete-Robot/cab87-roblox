@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "cab87_beat_maker"
+name = "Cab87 Beat Maker"
+version = "0.1.0"
+tagline = "Animate camera FOV from major kick beats in a drum stem"
+maintainer = "Cab87"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:MIT"]
+
+tags = ["Animation", "Sequencer", "Audio"]

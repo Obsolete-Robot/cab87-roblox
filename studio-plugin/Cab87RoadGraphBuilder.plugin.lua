@@ -51,6 +51,7 @@ local IMPORT_SCALE_STEP = 0.01
 local BAKE_CHUNK_SIZE_STUDS = 768
 local BAKE_MAX_SURFACE_TRIANGLES = 6000
 local BAKE_MAX_COLLISION_INPUT_TRIANGLES = 900
+local COLLISION_VERTICAL_CHUNK_SIZE_ATTR = "CollisionVerticalChunkSize"
 local AUTO_RELOAD_DELAY_SECONDS = 1.5
 local AUTO_RELOAD_RETRY_SECONDS = 1
 local AUTO_RELOAD_MAX_ATTEMPTS = 20
@@ -1061,9 +1062,10 @@ local function promptMeshManifest()
 	return decodeMeshManifest(contents)
 end
 
-local function applyManifestPartOptions(part, chunk, mapIdValue)
+local function applyManifestPartOptions(part, chunk, mapIdValue, manifest)
 	local kind = tostring(chunk.kind or "surface")
 	local isCollision = kind == "collision"
+	local collisionVerticalChunkSize = tonumber(manifestSetting(manifest, "collisionVerticalChunkSize"))
 
 	part.Name = tostring(chunk.name or part.Name)
 	part.Anchored = true
@@ -1097,10 +1099,14 @@ local function applyManifestPartOptions(part, chunk, mapIdValue)
 	part:SetAttribute("TriangleCount", tonumber(chunk.triangleCount) or nil)
 	part:SetAttribute("InputTriangleCount", tonumber(chunk.inputTriangleCount) or nil)
 	part:SetAttribute("MeshChunkKey", tostring(chunk.chunkKey or ""))
+	part:SetAttribute("MeshChunkY", tonumber(chunk.chunkY) or nil)
 	part:SetAttribute("MeshBatchIndex", tonumber(chunk.batchIndex) or nil)
 
 	if isCollision or chunk.driveSurface == true then
 		part:SetAttribute("DriveSurface", true)
+	end
+	if isCollision and collisionVerticalChunkSize and collisionVerticalChunkSize > 0 then
+		part:SetAttribute(COLLISION_VERTICAL_CHUNK_SIZE_ATTR, collisionVerticalChunkSize)
 	end
 	if tostring(chunk.surfaceType or "") == "polygonFill" then
 		part:SetAttribute("BakedPolygonFillMesh", true)
@@ -1482,6 +1488,10 @@ local function adoptImportedMeshFromManifest()
 	collisionFolder:SetAttribute("MapId", mapId)
 	collisionFolder:SetAttribute("GeneratedBy", BAKED_MESH_GENERATOR_NAME)
 	collisionFolder:SetAttribute("MeshMode", "importedGlbManifest")
+	collisionFolder:SetAttribute(
+		COLLISION_VERTICAL_CHUNK_SIZE_ATTR,
+		tonumber(manifestSetting(manifest, "collisionVerticalChunkSize")) or nil
+	)
 
 	local minimapFolder = createFolder(bakedRoot, MINIMAP_ROAD_MESH_NAME)
 	minimapFolder:SetAttribute("MapId", mapId)
@@ -1505,7 +1515,7 @@ local function adoptImportedMeshFromManifest()
 		local part = match.part
 		local isCollision = tostring(chunk.kind or "surface") == "collision"
 		applyImportedMeshTransform(part, importOriginCFrame)
-		applyManifestPartOptions(part, chunk, mapId)
+		applyManifestPartOptions(part, chunk, mapId, manifest)
 		part.Parent = if isCollision then collisionFolder else surfacesFolder
 
 		local triangleCount = tonumber(chunk.triangleCount) or 0
@@ -1564,6 +1574,10 @@ local function adoptImportedMeshFromManifest()
 	assets:SetAttribute("ChunkSize", tonumber(manifestSetting(manifest, "chunkSize")) or nil)
 	assets:SetAttribute("MaxSurfaceTriangles", tonumber(manifestSetting(manifest, "maxSurfaceTriangles")) or nil)
 	assets:SetAttribute("MaxCollisionInputTriangles", tonumber(manifestSetting(manifest, "maxCollisionInputTriangles")) or nil)
+	assets:SetAttribute(
+		COLLISION_VERTICAL_CHUNK_SIZE_ATTR,
+		tonumber(manifestSetting(manifest, "collisionVerticalChunkSize")) or nil
+	)
 	assets:SetAttribute("ImportOriginModel", tostring(importOriginName or ""))
 	assets:SetAttribute("TransformedMarkerCount", transformedMarkers)
 	assets:SetAttribute("TransformedImportedMarkerCount", transformedImportedMarkers)

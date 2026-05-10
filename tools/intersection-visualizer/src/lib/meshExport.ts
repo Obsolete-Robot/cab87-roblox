@@ -32,6 +32,7 @@ type Bounds = {
 
 type TriangleBucket = {
   chunkX: number;
+  chunkY?: number;
   chunkZ: number;
   triangles: Triangle[];
 };
@@ -42,6 +43,7 @@ const ROBLOX_CHUNK_SIZE = 768;
 const ROBLOX_MAX_SURFACE_TRIANGLES = 6000;
 const ROBLOX_MAX_COLLISION_INPUT_TRIANGLES = 900;
 const ROBLOX_COLLISION_THICKNESS = 0.2;
+const ROBLOX_COLLISION_VERTICAL_CHUNK_SIZE = 12;
 
 export function createTriangleGeometry(triangles: Point[][], yOffset = 0, defaultY = 4): THREE.BufferGeometry {
   const positions: number[] = [];
@@ -145,36 +147,51 @@ function chunkLabel(value: number) {
 }
 
 function chunkName(baseName: string, bucket: TriangleBucket, batchIndex: number) {
+  const yLabel = bucket.chunkY === undefined ? '' : `_y${chunkLabel(bucket.chunkY)}`;
   return safeName(
-    `${baseName}_x${chunkLabel(bucket.chunkX)}_z${chunkLabel(bucket.chunkZ)}_${String(batchIndex + 1).padStart(2, '0')}`
+    `${baseName}_x${chunkLabel(bucket.chunkX)}${yLabel}_z${chunkLabel(bucket.chunkZ)}_${String(batchIndex + 1).padStart(2, '0')}`
   );
 }
 
-function triangleCenter(triangle: Triangle) {
+function triangleCenter(triangle: Triangle, yOffset = 0, defaultY = 0) {
   return {
     x: (triangle[0].x + triangle[1].x + triangle[2].x) / 3,
+    y: ((triangle[0].z ?? defaultY) + (triangle[1].z ?? defaultY) + (triangle[2].z ?? defaultY)) / 3 + yOffset,
     z: (triangle[0].y + triangle[1].y + triangle[2].y) / 3,
   };
 }
 
-function bucketTrianglesByCenter(triangles: Triangle[], chunkSize: number) {
+function bucketTrianglesByCenter(
+  triangles: Triangle[],
+  chunkSize: number,
+  options: { verticalChunkSize?: number; yOffset?: number; defaultY?: number } = {}
+) {
   const bucketsByKey = new Map<string, TriangleBucket>();
+  const verticalChunkSize = options.verticalChunkSize && options.verticalChunkSize > 0
+    ? options.verticalChunkSize
+    : undefined;
 
   triangles.forEach((triangle) => {
-    const center = triangleCenter(triangle);
+    const center = triangleCenter(triangle, options.yOffset ?? 0, options.defaultY ?? 0);
     const chunkX = Math.floor(center.x / chunkSize);
+    const chunkY = verticalChunkSize === undefined ? undefined : Math.floor(center.y / verticalChunkSize);
     const chunkZ = Math.floor(center.z / chunkSize);
-    const key = `${chunkX}:${chunkZ}`;
+    const key = chunkY === undefined ? `${chunkX}:${chunkZ}` : `${chunkX}:${chunkY}:${chunkZ}`;
     let bucket = bucketsByKey.get(key);
     if (!bucket) {
-      bucket = { chunkX, chunkZ, triangles: [] };
+      bucket = { chunkX, chunkY, chunkZ, triangles: [] };
       bucketsByKey.set(key, bucket);
     }
     bucket.triangles.push(triangle);
   });
 
   return [...bucketsByKey.values()].sort((a, b) => {
-    if (a.chunkX === b.chunkX) return a.chunkZ - b.chunkZ;
+    if (a.chunkX === b.chunkX) {
+      const ay = a.chunkY ?? 0;
+      const by = b.chunkY ?? 0;
+      if (ay === by) return a.chunkZ - b.chunkZ;
+      return ay - by;
+    }
     return a.chunkX - b.chunkX;
   });
 }
@@ -355,8 +372,11 @@ export function createRobloxRoadMeshExport(meshData: MeshData) {
       collisionFidelity: isCollision ? 'PreciseConvexDecomposition' : 'Box',
       triangleCount: actualTriangleCount,
       inputTriangleCount: batch.length,
-      chunkKey: `${bucket.chunkX}:${bucket.chunkZ}`,
+      chunkKey: bucket.chunkY === undefined
+        ? `${bucket.chunkX}:${bucket.chunkZ}`
+        : `${bucket.chunkX}:${bucket.chunkY}:${bucket.chunkZ}`,
       chunkX: bucket.chunkX,
+      chunkY: bucket.chunkY,
       chunkZ: bucket.chunkZ,
       batchIndex: batchIndex + 1,
       bounds: computeBounds(geometry),
@@ -373,13 +393,19 @@ export function createRobloxRoadMeshExport(meshData: MeshData) {
       triangleBatches(bucket.triangles, surfaceMaxTriangles).forEach((batch, batchIndex) => {
         addChunk(layer, bucket, batch, batchIndex, layer.kind ?? 'surface');
       });
-
-      if (layer.includeCollision) {
-        triangleBatches(bucket.triangles, ROBLOX_MAX_COLLISION_INPUT_TRIANGLES).forEach((batch, batchIndex) => {
-          addChunk(layer, bucket, batch, batchIndex, 'collision');
-        });
-      }
     });
+
+    if (layer.includeCollision) {
+      bucketTrianglesByCenter(layer.triangles, ROBLOX_CHUNK_SIZE, {
+        verticalChunkSize: ROBLOX_COLLISION_VERTICAL_CHUNK_SIZE,
+        yOffset: layer.yOffset ?? 0,
+        defaultY: 0,
+      }).forEach((collisionBucket) => {
+        triangleBatches(collisionBucket.triangles, ROBLOX_MAX_COLLISION_INPUT_TRIANGLES).forEach((batch, batchIndex) => {
+          addChunk(layer, collisionBucket, batch, batchIndex, 'collision');
+        });
+      });
+    }
   });
 
   group.updateMatrixWorld(true);
@@ -392,6 +418,7 @@ export function createRobloxRoadMeshExport(meshData: MeshData) {
       maxSurfaceTriangles: ROBLOX_MAX_SURFACE_TRIANGLES,
       maxCollisionInputTriangles: ROBLOX_MAX_COLLISION_INPUT_TRIANGLES,
       collisionThickness: ROBLOX_COLLISION_THICKNESS,
+      collisionVerticalChunkSize: ROBLOX_COLLISION_VERTICAL_CHUNK_SIZE,
     },
     counts: {
       chunks: chunks.length,
