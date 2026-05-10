@@ -1,9 +1,9 @@
 import { DEFAULTS } from './constants';
 import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
-import { getDir, intersectSegmentPolygon } from "./math";
+import { getDir, intersectSegmentPolygon, segmentIntersect } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
-import * as THREE from 'three';
+import { sampleSpline } from "./splines";
 import Delaunator from 'delaunator';
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
@@ -45,20 +45,23 @@ function closestPointOnSegment(point: Point, a: Point, b: Point) {
   };
 }
 
-function closestBoundaryPoint(point: Point, polygon: Point[]) {
+function closestBoundaryPoint(point: Point, polygon: Point[], closed = true) {
   let best = {
     point,
     segmentIndex: -1,
     distance: Infinity,
+    t: 0,
   };
 
-  for (let i = 0; i < polygon.length; i++) {
+  const segmentCount = closed ? polygon.length : Math.max(polygon.length - 1, 0);
+  for (let i = 0; i < segmentCount; i++) {
     const closest = closestPointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.length]);
     if (closest.distance < best.distance) {
       best = {
         point: closest.point,
         segmentIndex: i,
         distance: closest.distance,
+        t: closest.t,
       };
     }
   }
@@ -66,8 +69,35 @@ function closestBoundaryPoint(point: Point, polygon: Point[]) {
   return best;
 }
 
-function buildHubBoundaryPath(hubPolygon: Point[], from: Point, to: Point, isClockwise: boolean): Point[] {
+function buildOpenBoundaryPath(hubPolygon: Point[], from: Point, to: Point): Point[] {
   if (hubPolygon.length < 2) return [];
+
+  const fromBoundary = closestBoundaryPoint(from, hubPolygon, false);
+  const toBoundary = closestBoundaryPoint(to, hubPolygon, false);
+
+  if (fromBoundary.segmentIndex === -1 || toBoundary.segmentIndex === -1) return [];
+
+  const fromPosition = fromBoundary.segmentIndex + fromBoundary.t;
+  const toPosition = toBoundary.segmentIndex + toBoundary.t;
+  const path: Point[] = [fromBoundary.point];
+
+  if (fromPosition <= toPosition) {
+    for (let i = fromBoundary.segmentIndex + 1; i <= toBoundary.segmentIndex; i++) {
+      path.push(hubPolygon[i]);
+    }
+  } else {
+    for (let i = fromBoundary.segmentIndex; i > toBoundary.segmentIndex; i--) {
+      path.push(hubPolygon[i]);
+    }
+  }
+
+  path.push(toBoundary.point);
+  return path;
+}
+
+function buildHubBoundaryPath(hubPolygon: Point[], from: Point, to: Point, isClockwise: boolean, openBoundary = false): Point[] {
+  if (hubPolygon.length < 2) return [];
+  if (openBoundary) return buildOpenBoundaryPath(hubPolygon, from, to);
 
   const fromBoundary = closestBoundaryPoint(from, hubPolygon);
   const toBoundary = closestBoundaryPoint(to, hubPolygon);
@@ -95,6 +125,143 @@ function buildHubBoundaryPath(hubPolygon: Point[], from: Point, to: Point, isClo
   return isClockwise ? backwardPath : forwardPath;
 }
 
+function intersectSegmentBoundary(p1: Point, p2: Point, boundary: Point[], closed = true): Point | null {
+  let closest: Point | null = null;
+  let minDist = Infinity;
+  const segmentCount = closed ? boundary.length : Math.max(boundary.length - 1, 0);
+
+  for (let i = 0; i < segmentCount; i++) {
+    const intersection = segmentIntersect(p1, p2, boundary[i], boundary[(i + 1) % boundary.length]);
+    if (!intersection) continue;
+
+    const dist = Math.hypot(intersection.x - p1.x, intersection.y - p1.y);
+    if (dist < minDist) {
+      minDist = dist;
+      closest = intersection;
+    }
+  }
+
+  return closest;
+}
+
+function closestBoundaryPointToSegment(p1: Point, p2: Point, boundary: Point[], closed = true): Point | null {
+  let closest: Point | null = null;
+  let minDistance = Infinity;
+  const segmentCount = closed ? boundary.length : Math.max(boundary.length - 1, 0);
+
+  const consider = (point: Point, distance: number) => {
+    if (distance < minDistance) {
+      minDistance = distance;
+      closest = point;
+    }
+  };
+
+  for (let i = 0; i < segmentCount; i++) {
+    const a = boundary[i];
+    const b = boundary[(i + 1) % boundary.length];
+    const p1ToBoundary = closestPointOnSegment(p1, a, b);
+    const p2ToBoundary = closestPointOnSegment(p2, a, b);
+    const aToSegment = closestPointOnSegment(a, p1, p2);
+    const bToSegment = closestPointOnSegment(b, p1, p2);
+
+    consider(p1ToBoundary.point, p1ToBoundary.distance);
+    consider(p2ToBoundary.point, p2ToBoundary.distance);
+    consider(a, aToSegment.distance);
+    consider(b, bToSegment.distance);
+  }
+
+  return closest;
+}
+
+function intersectHubBoundarySegment(p1: Point, p2: Point, hub: MeshData['hubs'][number]): Point | null {
+  if (hub.corners.length === 1) {
+    return (
+      intersectSegmentBoundary(p1, p2, hub.outerPolygon, false) ??
+      closestBoundaryPointToSegment(p1, p2, hub.outerPolygon, false)
+    );
+  }
+
+  return intersectSegmentPolygon(p1, p2, hub.outerPolygon);
+}
+
+function trimCenterLineToHubBoundaries(centerLine: Point[], hubs: MeshData['hubs'], sourceNodeId: string, targetNodeId: string | null): Point[] {
+  let curve = [...centerLine];
+
+  const targetHub = targetNodeId ? hubs.find(h => h.id === targetNodeId) : null;
+  if (targetHub && targetHub.outerPolygon.length > 0 && curve.length > 1) {
+    let endIdx = curve.length - 1;
+    while (endIdx > 0 && pointInPolygon(curve[endIdx], targetHub.outerPolygon)) {
+      endIdx--;
+    }
+    if (endIdx < curve.length - 1) {
+      const exactIntersect = intersectHubBoundarySegment(curve[endIdx], curve[endIdx + 1], targetHub);
+      curve.length = endIdx + 1;
+      if (exactIntersect) {
+        curve.push(exactIntersect);
+      }
+    }
+  }
+
+  const sourceHub = hubs.find(h => h.id === sourceNodeId);
+  if (sourceHub && sourceHub.outerPolygon.length > 0 && curve.length > 1) {
+    let startIdx = 0;
+    while (startIdx < curve.length - 1 && pointInPolygon(curve[startIdx], sourceHub.outerPolygon)) {
+      startIdx++;
+    }
+    if (startIdx > 0) {
+      const exactIntersect = intersectHubBoundarySegment(curve[startIdx], curve[startIdx - 1], sourceHub);
+      curve = curve.slice(startIdx);
+      if (exactIntersect) {
+        curve.unshift(exactIntersect);
+      }
+    }
+  }
+
+  return curve;
+}
+
+function buildIgnoredRoadPolygon(edge: Edge, centerLine: Point[], hubs: MeshData['hubs']): MeshData['roadPolygons'][number] | null {
+  const curve = trimCenterLineToHubBoundaries(centerLine, hubs, edge.source, edge.target);
+  if (curve.length < 2) return null;
+
+  const W = edge.width / 2;
+  const swLeft = edge.sidewalkLeft ?? edge.sidewalk ?? DEFAULTS.sidewalkWidth;
+  const swRight = edge.sidewalkRight ?? edge.sidewalk ?? DEFAULTS.sidewalkWidth;
+  const outerLeftWidth = W + swLeft;
+  const outerRightWidth = W + swRight;
+
+  const leftCurve: Point[] = [];
+  const rightCurve: Point[] = [];
+  const outerLeftCurve: Point[] = [];
+  const outerRightCurve: Point[] = [];
+
+  for (let i = 0; i < curve.length; i++) {
+    const prev = curve[Math.max(0, i - 1)];
+    const next = curve[Math.min(curve.length - 1, i + 1)];
+    const dir = getDir(prev, next);
+    const left = { x: dir.y, y: -dir.x };
+    const right = { x: -dir.y, y: dir.x };
+    const p = curve[i];
+
+    leftCurve.push({ x: p.x + left.x * W, y: p.y + left.y * W, z: p.z });
+    rightCurve.push({ x: p.x + right.x * W, y: p.y + right.y * W, z: p.z });
+    outerLeftCurve.push({ x: p.x + left.x * outerLeftWidth, y: p.y + left.y * outerLeftWidth, z: p.z });
+    outerRightCurve.push({ x: p.x + right.x * outerRightWidth, y: p.y + right.y * outerRightWidth, z: p.z });
+  }
+
+  return {
+    id: edge.id,
+    polygon: [...leftCurve, ...[...rightCurve].reverse()],
+    leftCurve,
+    rightCurve,
+    outerPolygon: [...outerLeftCurve, ...[...outerRightCurve].reverse()],
+    outerLeftCurve,
+    outerRightCurve,
+    sidewalkWidth: edge.sidewalk ?? DEFAULTS.sidewalkWidth,
+    ignoreMeshing: true,
+  };
+}
+
 export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = DEFAULTS.meshResolution, laneWidth: number = DEFAULTS.laneWidth, polygonFills: PolygonFill[] = []): MeshData {
   const mesh: MeshData = {
     vertices: [],
@@ -115,18 +282,27 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     polygonTriangles: []
   };
 
-  const edgeSplines = new Map<string, Point[]>();
-  edges.forEach(e => edgeSplines.set(e.id, sampleEdgeSpline(e, nodes, edges, chamferAngleDeg, meshResolution)));
-
   const nodeClearances = new Map<string, Map<string, number>>();
   const nodeCorners = new Map<string, Map<string, Point[]>>();
   const nodeOuterCorners = new Map<string, Map<string, Point[]>>();
 
   const roadNodes = nodes.filter((node) => !node.ignoreMeshing);
+  // Active road edges build junction shape. Individually ignored roads stay in the graph,
+  // but they should not create hub corners, clearances, or crosswalk decisions.
   const roadEdges = edges.filter((edge) => {
+    if (edge.ignoreMeshing) return false;
     const source = nodes.find((node) => node.id === edge.source);
     const target = edge.target ? nodes.find((node) => node.id === edge.target) : null;
     return !(source?.ignoreMeshing || target?.ignoreMeshing);
+  });
+  const roadEdgeIds = new Set(roadEdges.map((edge) => edge.id));
+
+  const edgeSplines = new Map<string, Point[]>();
+  edges.forEach((edge) => {
+    const spline = roadEdgeIds.has(edge.id)
+      ? sampleEdgeSpline(edge, nodes, roadEdges, chamferAngleDeg, meshResolution)
+      : sampleSpline(getEdgeControlPoints(edge, nodes), meshResolution);
+    edgeSplines.set(edge.id, spline);
   });
 
   // 1. Build Hubs
@@ -318,7 +494,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     // We get the forward-facing spline
     const spline = edgeSplines.get(edge.id)!;
     const W = edge.width / 2;
-    const skipRoadMeshing = !!(sourceNode.ignoreMeshing || (targetNode ? targetNode.ignoreMeshing : false));
+    const skipRoadMeshing = !!(edge.ignoreMeshing || sourceNode.ignoreMeshing || (targetNode ? targetNode.ignoreMeshing : false));
 
     const sourceClearance = nodeClearances.get(sourceNode.id)?.get(`${edge.id}_true`) || 0;
     const targetClearance = targetNode ? (nodeClearances.get(targetNode.id)?.get(`${edge.id}_false`) || 0) : 0;
@@ -397,7 +573,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
          const new_obR = { x: obR.x + sDir.x * cwWidth, y: obR.y + sDir.y * cwWidth, z: sz };
 
          if (hasCrosswalk(edge.id, true, nodes, roadEdges)) {
-           mesh.crosswalks.push({ edgeId: edge.id, nodeId: sourceNode.id, polygon: [bL, bR, new_bR, new_bL] });
+           mesh.crosswalks.push({ edgeId: edge.id, nodeId: sourceNode.id, polygon: [bL, bR, new_bR, new_bL], ignoreMeshing: skipRoadMeshing });
          }
          if (!skipRoadMeshing) {
            mesh.sidewalkPolygons.push({ polygon: [obL, bL, new_bL, new_obL] });
@@ -439,7 +615,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
              const new_otbR = { x: otbR.x + tDir.x * cwWidth, y: otbR.y + tDir.y * cwWidth, z: tz };
 
              if (hasCrosswalk(edge.id, false, nodes, roadEdges)) {
-               mesh.crosswalks.push({ edgeId: edge.id, nodeId: targetNode!.id, polygon: [tbL, tbR, new_tbR, new_tbL] });
+               mesh.crosswalks.push({ edgeId: edge.id, nodeId: targetNode!.id, polygon: [tbL, tbR, new_tbR, new_tbL], ignoreMeshing: skipRoadMeshing });
              }
              if (!skipRoadMeshing) {
                mesh.sidewalkPolygons.push({ polygon: [otbL, tbL, new_tbL, new_otbL] });
@@ -701,6 +877,19 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     }
   }
 
+  // Preserve non-rendered boundary geometry for ignored connector roads so polygon fills can
+  // still walk those graph edges cleanly without making the edge part of either endpoint hub.
+  for (const edge of edges) {
+    if (!edge.ignoreMeshing || roadEdgeIds.has(edge.id)) continue;
+    const spline = edgeSplines.get(edge.id);
+    if (!spline) continue;
+
+    const ignoredRoadPolygon = buildIgnoredRoadPolygon(edge, spline, mesh.hubs);
+    if (ignoredRoadPolygon) {
+      mesh.roadPolygons.push(ignoredRoadPolygon);
+    }
+  }
+
   // 3. Build Polygon Fills
   for (const poly of polygonFills) {
     if (poly.points.length < 3) continue;
@@ -811,7 +1000,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                     endIdx--;
                 }
                 if (endIdx < curve.length - 1) {
-                    const exactIntersect = intersectSegmentPolygon(curve[endIdx], curve[endIdx + 1], hub2.outerPolygon);
+                    const exactIntersect = intersectHubBoundarySegment(curve[endIdx], curve[endIdx + 1], hub2);
                     curve.length = endIdx + 1;
                     if (exactIntersect) {
                         curve.push(exactIntersect);
@@ -826,7 +1015,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
                     startIdx++;
                 }
                 if (startIdx > 0) {
-                    const exactIntersect = intersectSegmentPolygon(curve[startIdx], curve[startIdx - 1], hub1.outerPolygon);
+                    const exactIntersect = intersectHubBoundarySegment(curve[startIdx], curve[startIdx - 1], hub1);
                     curve = curve.slice(startIdx);
                     if (exactIntersect) {
                         curve.unshift(exactIntersect);
@@ -854,7 +1043,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
         const hub = mesh.hubs.find(h => h.id === n2_id);
 
         if (hub && hub.outerPolygon.length > 0) {
-            const hubPath = buildHubBoundaryPath(hub.outerPolygon, p_end, p_start, isClockwise);
+            const hubPath = buildHubBoundaryPath(hub.outerPolygon, p_end, p_start, isClockwise, hub.corners.length === 1);
             for (let j = 0; j < hubPath.length; j++) {
                 boundaryPoints.push(hubPath[j]);
             }
@@ -863,7 +1052,7 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
 
     if (boundaryPoints.length < 3) continue;
 
-    // Filter consecutive duplicate points (ShapeUtils doesn't like duplicates)
+    // Filter consecutive duplicate points before triangulation.
     const uniqueBoundaryPoints: Point[] = [];
     for (let i = 0; i < boundaryPoints.length; i++) {
         const p = boundaryPoints[i];

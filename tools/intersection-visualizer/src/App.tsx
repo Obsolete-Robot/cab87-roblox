@@ -165,6 +165,33 @@ export default function App() {
     return `${nodeKey}::${edgeKey}`;
   };
 
+  const getNodePairKey = (a: string, b: string) => a < b ? `${a}:${b}` : `${b}:${a}`;
+
+  const isFillBoundaryUnchanged = (points: string[], nextEdges: Edge[]) => {
+    if (points.length < 3) return false;
+
+    const boundaryPairs = new Set<string>();
+    for (let i = 0; i < points.length; i++) {
+      boundaryPairs.add(getNodePairKey(points[i], points[(i + 1) % points.length]));
+    }
+
+    const connectedPairs = new Set(
+      nextEdges
+        .filter((edge) => edge.target)
+        .map((edge) => getNodePairKey(edge.source, edge.target!))
+    );
+
+    for (const pair of boundaryPairs) {
+      if (!connectedPairs.has(pair)) return false;
+    }
+
+    const fillNodes = new Set(points);
+    return !nextEdges.some((edge) => {
+      if (!edge.target || !fillNodes.has(edge.source) || !fillNodes.has(edge.target)) return false;
+      return !boundaryPairs.has(getNodePairKey(edge.source, edge.target));
+    });
+  };
+
   const topologyKey = useMemo(() => getTopologyKey(nodes, edges), [nodes, edges]);
 
   const prevTopologyKey = useRef<string | null>(null);
@@ -221,7 +248,12 @@ export default function App() {
           }
         });
 
-        const preservedFills = validPreviousFills.filter(pf => !usedOldIds.has(pf.id) && !previousAutoFillIds.has(pf.id));
+        const preservedFills = validPreviousFills.filter(pf => {
+          if (usedOldIds.has(pf.id)) return false;
+          if (deletedFaces.includes(getFaceKey(pf.points))) return false;
+          if (!previousAutoFillIds.has(pf.id)) return true;
+          return isFillBoundaryUnchanged(pf.points, edges);
+        });
         const nextPolygonFills = [...newPolygonFills, ...preservedFills];
 
         // Determine if there is actually a change to prevent infinite loops
@@ -1495,6 +1527,25 @@ export default function App() {
 
   const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan' | 'marquee'; id: string; pointId?: number }, pos: Point, shiftKey: boolean) => {
     const taper = (dist: number, radius: number) => Math.max(0, 1 - Math.pow(dist / radius, 2));
+    const pointEpsilon = 0.0001;
+    const numbersEqual = (a: number | undefined, b: number | undefined, fallback?: number) => {
+      const aValue = a ?? fallback;
+      const bValue = b ?? fallback;
+      if (aValue === undefined || bValue === undefined) return aValue === bValue;
+      return Math.abs(aValue - bValue) < pointEpsilon;
+    };
+    const pointsEqual = (a: Point, b: Point) =>
+      numbersEqual(a.x, b.x) &&
+      numbersEqual(a.y, b.y) &&
+      numbersEqual(a.z, b.z, 4) &&
+      numbersEqual(a.u, b.u) &&
+      numbersEqual(a.v, b.v) &&
+      numbersEqual(a.curveIndex, b.curveIndex) &&
+      numbersEqual(a.t, b.t) &&
+      a.linked === b.linked &&
+      a.linear === b.linear;
+    const pointListsEqual = (a: Point[], b: Point[]) =>
+      a.length === b.length && a.every((point, index) => pointsEqual(point, b[index]));
 
     if (dragState.type === 'node' || (dragState.type === 'edge' && dragState.pointId !== undefined)) {
         let originPoint: Point;
@@ -1549,31 +1600,39 @@ export default function App() {
         const movedPointsSet = new Set(selectedPoints.map(p => `${p.edgeId}:${p.pointIndex}`));
         if (dragState.type === 'edge') movedPointsSet.add(`${dragState.id}:${dragState.pointId}`);
 
+        let nodesChanged = false;
         const newNodes = nodes.map(n => {
             const isSelected = movedNodes.has(n.id);
             const isDraggingNode = dragState.type === 'node' && n.id === dragState.id;
 
             if (isSelected) {
                 const zVal = (isDraggingNode && pos.z !== undefined) ? pos.z : ((n.point.z ?? 4) + ddz);
-                return { ...n, point: { ...n.point, x: n.point.x + ddx, y: n.point.y + ddy, z: zVal } };
+                const nextPoint = { ...n.point, x: n.point.x + ddx, y: n.point.y + ddy, z: zVal };
+                if (pointsEqual(n.point, nextPoint)) return n;
+                nodesChanged = true;
+                return { ...n, point: nextPoint };
             }
             if (!softSelectionEnabled) return n;
             const d = Math.hypot(n.point.x - originPoint.x, n.point.y - originPoint.y);
             const w = taper(d, softSelectionRadius);
             if (w <= 0) return n;
-            return {
-                ...n,
-                point: {
-                    x: n.point.x + ddx * w,
-                    y: n.point.y + ddy * w,
-                    z: (n.point.z ?? 4) + ddz * w
-                }
+            const nextPoint = {
+                ...n.point,
+                x: n.point.x + ddx * w,
+                y: n.point.y + ddy * w,
+                z: (n.point.z ?? 4) + ddz * w
             };
+            if (pointsEqual(n.point, nextPoint)) return n;
+            nodesChanged = true;
+            return { ...n, point: nextPoint };
         });
 
-        setNodes(newNodes);
+        if (nodesChanged) {
+          setNodes(newNodes);
+        }
 
-        setEdges(edges.map(edge => {
+        let edgesChanged = false;
+        const newEdges = edges.map(edge => {
             let newPoints = [...edge.points];
             let changed = false;
 
@@ -1716,8 +1775,15 @@ export default function App() {
                 });
             }
 
-            return changed ? enforceLinear({ ...edge, points: newPoints }, newNodes, edge, nodes, dragState.type === 'edge' && dragState.id === edge.id ? dragState.pointId : undefined) : edge;
-        }));
+            if (!changed) return edge;
+            const nextEdge = enforceLinear({ ...edge, points: newPoints }, newNodes, edge, nodes, dragState.type === 'edge' && dragState.id === edge.id ? dragState.pointId : undefined);
+            if (nextEdge !== edge && !pointListsEqual(edge.points, nextEdge.points)) edgesChanged = true;
+            return nextEdge;
+        });
+
+        if (edgesChanged) {
+          setEdges(newEdges);
+        }
     }
   };
 
