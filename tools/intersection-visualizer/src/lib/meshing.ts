@@ -3,6 +3,7 @@ import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
 import { getDir, intersectSegmentPolygon, segmentIntersect } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
+import { sampleSpline } from "./splines";
 import Delaunator from 'delaunator';
 
 export function getEdgeBases(node: Node, sourceNode: Node, edge: Edge, isSource: boolean, nodeCorners: Map<string, Map<string, Point[]>>): [Point, Point] | null {
@@ -203,18 +204,25 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     polygonTriangles: []
   };
 
-  const edgeSplines = new Map<string, Point[]>();
-  edges.forEach(e => edgeSplines.set(e.id, sampleEdgeSpline(e, nodes, edges, chamferAngleDeg, meshResolution)));
-
   const nodeClearances = new Map<string, Map<string, number>>();
   const nodeCorners = new Map<string, Map<string, Point[]>>();
   const nodeOuterCorners = new Map<string, Map<string, Point[]>>();
 
   const roadNodes = nodes.filter((node) => !node.ignoreMeshing);
   const roadEdges = edges.filter((edge) => {
+    if (edge.ignoreMeshing) return false;
     const source = nodes.find((node) => node.id === edge.source);
     const target = edge.target ? nodes.find((node) => node.id === edge.target) : null;
     return !(source?.ignoreMeshing || target?.ignoreMeshing);
+  });
+  const roadEdgeIds = new Set(roadEdges.map((edge) => edge.id));
+
+  const edgeSplines = new Map<string, Point[]>();
+  edges.forEach((edge) => {
+    const spline = roadEdgeIds.has(edge.id)
+      ? sampleEdgeSpline(edge, nodes, roadEdges, chamferAngleDeg, meshResolution)
+      : sampleSpline(getEdgeControlPoints(edge, nodes), meshResolution);
+    edgeSplines.set(edge.id, spline);
   });
 
   // 1. Build Hubs
