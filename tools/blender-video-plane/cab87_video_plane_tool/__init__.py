@@ -961,11 +961,12 @@ def keyframe_image_offsets(image_user, offset_keyframes: list[tuple[int, float]]
 		return
 	if action is None:
 		return
-	for fcurve in action.fcurves:
+	target_frames = {frame for frame, _offset in offset_keyframes}
+	for fcurve in iter_action_fcurves(action):
 		if "frame_offset" not in fcurve.data_path:
 			continue
 		for keyframe in fcurve.keyframe_points:
-			if int(round(keyframe.co.x)) in {frame for frame, _offset in offset_keyframes}:
+			if int(round(keyframe.co.x)) in target_frames:
 				keyframe.interpolation = "LINEAR"
 
 
@@ -1065,9 +1066,53 @@ def camera_pose_for_plane(obj, distance: float) -> tuple[Vector, object]:
 def set_object_keyframe_interpolation(obj, interpolation: str) -> None:
 	if obj.animation_data is None or obj.animation_data.action is None:
 		return
-	for fcurve in obj.animation_data.action.fcurves:
+	for fcurve in iter_action_fcurves(obj.animation_data.action):
 		for keyframe in fcurve.keyframe_points:
 			keyframe.interpolation = interpolation
+
+
+def iter_action_fcurves(action):
+	seen = set()
+	for fcurve in safe_iter_collection(getattr(action, "fcurves", None)):
+		identifier = id(fcurve)
+		if identifier not in seen:
+			seen.add(identifier)
+			yield fcurve
+
+	layers = getattr(action, "layers", None)
+	for layer in safe_iter_collection(layers):
+		for strip in safe_iter_collection(getattr(layer, "strips", None)):
+			for channelbag in safe_iter_collection(getattr(strip, "channelbags", None)):
+				for fcurve in safe_iter_collection(getattr(channelbag, "fcurves", None)):
+					identifier = id(fcurve)
+					if identifier not in seen:
+						seen.add(identifier)
+						yield fcurve
+
+			channelbag_for_slot = getattr(strip, "channelbag", None)
+			if not callable(channelbag_for_slot):
+				continue
+			for slot in safe_iter_collection(getattr(action, "slots", None)):
+				try:
+					channelbag = channelbag_for_slot(slot)
+				except Exception:
+					continue
+				for fcurve in safe_iter_collection(getattr(channelbag, "fcurves", None)):
+					identifier = id(fcurve)
+					if identifier not in seen:
+						seen.add(identifier)
+						yield fcurve
+
+
+def safe_iter_collection(collection):
+	if collection is None:
+		return ()
+	try:
+		return tuple(collection)
+	except TypeError:
+		return ()
+	except ReferenceError:
+		return ()
 
 
 def write_video_properties(obj, image, filepath: str, source_width: int, source_height: int, plane_width: float, plane_height: float) -> None:
