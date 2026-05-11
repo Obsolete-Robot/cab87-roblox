@@ -32,6 +32,7 @@ local EPSILON = 1e-5
 local VERTEX_CACHE_SCALE = 1000
 local DEFAULT_MAX_SURFACE_TRIANGLES = 6000
 local DEFAULT_MAX_COLLISION_INPUT_TRIANGLES = 900
+local DEFAULT_COLLISION_VERTICAL_CHUNK_SIZE = 12
 local BUDGET_LOG_PREFIX = "[cab87 road mesh budget]"
 
 local MEMORY_TAGS = {
@@ -716,20 +717,37 @@ local function triangleCenter(triangle)
 	return (a + b + c) / 3
 end
 
-local function bucketTrianglesByCenter(triangles, chunkSize)
+local function getCollisionVerticalChunkSize(options)
+	local value = tonumber(options and (options.collisionVerticalChunkSize or options.verticalChunkSize))
+	if value and value > 0 then
+		return value
+	end
+	return DEFAULT_COLLISION_VERTICAL_CHUNK_SIZE
+end
+
+local function bucketTrianglesByCenter(triangles, chunkSize, verticalChunkSize)
 	local buckets = {}
 	local keys = {}
+	local sanitizedVerticalChunkSize = tonumber(verticalChunkSize)
+	local useVerticalChunk = sanitizedVerticalChunkSize and sanitizedVerticalChunkSize > 0
 
 	for _, triangle in ipairs(triangles or {}) do
 		local center = triangleCenter(triangle)
 		if center then
 			local chunkX = math.floor(center.X / chunkSize)
+			local chunkY = nil
+			if useVerticalChunk then
+				chunkY = math.floor(center.Y / sanitizedVerticalChunkSize)
+			end
 			local chunkZ = math.floor(center.Z / chunkSize)
-			local key = tostring(chunkX) .. ":" .. tostring(chunkZ)
+			local key = if chunkY == nil
+				then tostring(chunkX) .. ":" .. tostring(chunkZ)
+				else tostring(chunkX) .. ":" .. tostring(chunkY) .. ":" .. tostring(chunkZ)
 			local bucket = buckets[key]
 			if not bucket then
 				bucket = {
 					chunkX = chunkX,
+					chunkY = chunkY,
 					chunkZ = chunkZ,
 					triangles = {},
 				}
@@ -744,6 +762,11 @@ local function bucketTrianglesByCenter(triangles, chunkSize)
 		local left = buckets[a]
 		local right = buckets[b]
 		if left.chunkX == right.chunkX then
+			local leftY = left.chunkY or 0
+			local rightY = right.chunkY or 0
+			if leftY ~= rightY then
+				return leftY < rightY
+			end
 			return left.chunkZ < right.chunkZ
 		end
 		return left.chunkX < right.chunkX
@@ -833,11 +856,12 @@ local function buildChunkedCollision(collisionParent, key, triangles, options)
 
 	local surfaceType = string.gsub(key, "s$", "")
 	local chunkSize = math.max(tonumber(options.chunkSize) or DEFAULT_CHUNK_SIZE, 128)
+	local verticalChunkSize = getCollisionVerticalChunkSize(options)
 	local maxTriangles = math.max(
 		math.floor(tonumber(options.maxCollisionInputTriangles) or DEFAULT_MAX_COLLISION_INPUT_TRIANGLES),
 		1
 	)
-	local buckets, keys = bucketTrianglesByCenter(triangles, chunkSize)
+	local buckets, keys = bucketTrianglesByCenter(triangles, chunkSize, verticalChunkSize)
 	local parts = {}
 	local errors = {}
 
@@ -860,6 +884,8 @@ local function buildChunkedCollision(collisionParent, key, triangles, options)
 			if collisionPart then
 				collisionPart:SetAttribute("MeshChunkKey", bucketKey)
 				collisionPart:SetAttribute("MeshChunkSize", chunkSize)
+				collisionPart:SetAttribute("MeshChunkY", bucket.chunkY)
+				collisionPart:SetAttribute("CollisionVerticalChunkSize", verticalChunkSize)
 				collisionPart:SetAttribute("MeshBatchIndex", batchIndex)
 				table.insert(parts, collisionPart)
 			elseif err then
@@ -929,6 +955,8 @@ local function buildChunkedPolygonFillCollisionMeshes(collisionParent, fillGroup
 	local parts = {}
 	local errors = {}
 	local prefix = options.collisionNamePrefix or "PolygonFillCollision"
+	local chunkSize = math.max(tonumber(options.chunkSize) or DEFAULT_CHUNK_SIZE, 128)
+	local verticalChunkSize = getCollisionVerticalChunkSize(options)
 	local maxTriangles = math.max(
 		math.floor(tonumber(options.maxCollisionInputTriangles) or DEFAULT_MAX_COLLISION_INPUT_TRIANGLES),
 		1
@@ -937,29 +965,43 @@ local function buildChunkedPolygonFillCollisionMeshes(collisionParent, fillGroup
 	for fillIndex, fill in ipairs(fillGroups or {}) do
 		local triangles = fill.triangles or {}
 		if #triangles > 0 then
-			for batchIndex, batch in ipairs(triangleBatches(triangles, maxTriangles)) do
-				local part, err = RoadMeshBuilder.createCollisionMesh(
-					collisionParent,
-					chunkName(polygonFillName(prefix, fill, fillIndex), fillIndex, batchIndex),
-					batch,
-					{
-						color = colorFromValue(fill.color, options.color or DEFAULT_POLYGON_FILL_COLOR),
-						material = options.material or DEFAULT_POLYGON_FILL_MATERIAL,
-						surfaceType = options.surfaceType or "polygonFill",
-						generatedBy = options.generatedBy,
-						thickness = options.collisionThickness,
-						surfaceOffset = options.collisionSurfaceOffset,
-					}
-				)
-				if part then
-					part:SetAttribute("PolygonFillId", tostring(fill.id or fillIndex))
-					part:SetAttribute("MeshBatchIndex", batchIndex)
-					table.insert(parts, part)
-				elseif err then
-					table.insert(
-						errors,
-						string.format("polygonFill collision[%s/%d]: %s", tostring(fill.id or fillIndex), batchIndex, tostring(err))
+			local buckets, keys = bucketTrianglesByCenter(triangles, chunkSize, verticalChunkSize)
+			for chunkIndex, bucketKey in ipairs(keys) do
+				local bucket = buckets[bucketKey]
+				for batchIndex, batch in ipairs(triangleBatches(bucket.triangles, maxTriangles)) do
+					local part, err = RoadMeshBuilder.createCollisionMesh(
+						collisionParent,
+						chunkName(polygonFillName(prefix, fill, fillIndex), chunkIndex, batchIndex),
+						batch,
+						{
+							color = colorFromValue(fill.color, options.color or DEFAULT_POLYGON_FILL_COLOR),
+							material = options.material or DEFAULT_POLYGON_FILL_MATERIAL,
+							surfaceType = options.surfaceType or "polygonFill",
+							generatedBy = options.generatedBy,
+							thickness = options.collisionThickness,
+							surfaceOffset = options.collisionSurfaceOffset,
+						}
 					)
+					if part then
+						part:SetAttribute("PolygonFillId", tostring(fill.id or fillIndex))
+						part:SetAttribute("MeshChunkKey", bucketKey)
+						part:SetAttribute("MeshChunkSize", chunkSize)
+						part:SetAttribute("MeshChunkY", bucket.chunkY)
+						part:SetAttribute("CollisionVerticalChunkSize", verticalChunkSize)
+						part:SetAttribute("MeshBatchIndex", batchIndex)
+						table.insert(parts, part)
+					elseif err then
+						table.insert(
+							errors,
+							string.format(
+								"polygonFill collision[%s/%s/%d]: %s",
+								tostring(fill.id or fillIndex),
+								bucketKey,
+								batchIndex,
+								tostring(err)
+							)
+						)
+					end
 				end
 			end
 		end

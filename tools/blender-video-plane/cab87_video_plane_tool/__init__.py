@@ -1,16 +1,19 @@
 bl_info = {
 	"name": "Cab87 Video Plane Tool",
 	"author": "Cab87",
-	"version": (0, 1, 0),
+	"version": (0, 5, 2),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Video Plane",
-	"description": "Create an aspect-ratio plane with a movie texture material.",
+	"description": "Create aspect-ratio movie planes and Resolve/FCP XML cut grids.",
 	"category": "Import-Export",
 }
 
+from dataclasses import dataclass, field
 import math
 from pathlib import Path
 import re
+from urllib.parse import unquote, urlparse
+import xml.etree.ElementTree as ET
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
@@ -21,7 +24,53 @@ from mathutils import Vector
 
 ADDON_VERSION = ".".join(str(part) for part in bl_info["version"])
 COLLECTION_NAME = "Cab87VideoPlanes"
+XML_COLLECTION_PREFIX = "Cab87XmlSequence"
 VIDEO_FILTER = "*.mp4;*.mov;*.m4v;*.avi;*.mkv;*.webm;*.mpg;*.mpeg"
+XML_FILTER = "*.xml;*.fcpxml"
+OPACITY_VALUE_NODE_NAME = "Cab87 Video Opacity"
+OPACITY_MIX_NODE_NAME = "Cab87 Video Opacity Mix"
+OPACITY_TRANSPARENT_NODE_NAME = "Cab87 Video Opacity Transparent"
+
+
+@dataclass
+class TimeRemapInfo:
+	speed_percent: float | None = None
+	reverse: bool = False
+	keyframes: list[tuple[float, float]] = field(default_factory=list)
+
+
+@dataclass
+class XmlVideoClip:
+	clip_id: str
+	name: str
+	filepath: str
+	timeline_start: int
+	timeline_end: int
+	source_in: float
+	source_out: float
+	source_width: int
+	source_height: int
+	track_index: int
+	time_remap: TimeRemapInfo | None = None
+
+
+@dataclass
+class XmlSequence:
+	name: str
+	duration: int
+	timebase: int
+	width: int
+	height: int
+	clips: list[XmlVideoClip]
+
+
+def update_video_plane_opacity(settings, context) -> None:
+	if context is None or not settings.opacity_live_update:
+		return
+	try:
+		apply_video_plane_opacity(context, settings.opacity, keyframe=False)
+	except Exception:
+		return
 
 
 class CAB87_VideoPlaneSettings(PropertyGroup):
@@ -71,6 +120,68 @@ class CAB87_VideoPlaneSettings(PropertyGroup):
 	sync_timeline: BoolProperty(name="Set Scene Frame Range", default=True)
 	frame_start: IntProperty(name="Frame Start", default=1, min=1)
 	use_cyclic: BoolProperty(name="Loop Movie", default=False)
+	opacity: FloatProperty(
+		name="Opacity",
+		description="Opacity for the selected Cab87 video plane. Key this to fade the video plane in or out.",
+		default=1.0,
+		min=0.0,
+		max=1.0,
+		subtype="FACTOR",
+		update=update_video_plane_opacity,
+	)
+	opacity_live_update: BoolProperty(
+		name="Live Slider",
+		description="Apply opacity changes immediately to the loaded target plane.",
+		default=True,
+	)
+	opacity_target: PointerProperty(
+		name="Target Plane",
+		description="Loaded Cab87 video plane edited by the opacity controls.",
+		type=bpy.types.Object,
+	)
+	xml_path: StringProperty(
+		name="XML File",
+		subtype="FILE_PATH",
+	)
+	xml_media_root: StringProperty(
+		name="Media Root Override",
+		description="Optional folder used to resolve XML media by filename when the exported paths are not valid on this machine.",
+		subtype="DIR_PATH",
+	)
+	xml_grid_columns: IntProperty(
+		name="Grid Columns",
+		description="Set to 0 to choose columns automatically.",
+		default=0,
+		min=0,
+		soft_max=24,
+	)
+	xml_grid_gap: FloatProperty(name="Grid Gap", default=0.6, min=0.0, soft_max=20.0)
+	xml_handle_frames: IntProperty(
+		name="Handle Frames",
+		description="Extra movie frames to run before and after each XML cut for edit handles in Blender.",
+		default=0,
+		min=0,
+		soft_max=240,
+	)
+	xml_clear_previous: BoolProperty(
+		name="Clear Previous XML Import",
+		description="Delete objects previously created by this XML importer before importing.",
+		default=False,
+	)
+	xml_add_markers: BoolProperty(name="Add Cut Markers", default=True)
+	xml_animate_camera: BoolProperty(name="Animate Camera", default=True)
+	xml_camera_name: StringProperty(name="Camera Name", default="Cab87 XML Cut Camera")
+	xml_camera_distance: FloatProperty(name="Camera Distance", default=7.0, min=0.01, soft_max=100.0)
+	xml_camera_lens: FloatProperty(name="Camera Lens", default=35.0, min=1.0, soft_max=200.0)
+	xml_camera_interpolation: EnumProperty(
+		name="Camera Interpolation",
+		items=(
+			("CONSTANT", "Cuts", "Hold each camera pose until the next edit."),
+			("LINEAR", "Linear Move", "Move linearly from one plane to the next."),
+			("BEZIER", "Smooth Move", "Use Blender's default eased interpolation between planes."),
+		),
+		default="CONSTANT",
+	)
 
 
 class CAB87_OT_pick_video_plane(Operator, ImportHelper):
@@ -108,12 +219,131 @@ class CAB87_OT_create_video_plane_from_path(Operator):
 		return create_and_report(self, context, settings, settings.video_path)
 
 
+class CAB87_OT_apply_video_plane_opacity(Operator):
+	bl_idname = "cab87.apply_video_plane_opacity"
+	bl_label = "Apply Opacity"
+	bl_description = "Apply the opacity slider to the loaded or selected Cab87 video plane."
+	bl_options = {"REGISTER", "UNDO"}
+
+	def execute(self, context):
+		settings = context.scene.cab87_video_plane_settings
+		result = apply_video_plane_opacity(context, settings.opacity, keyframe=False)
+		if result["ambiguous"]:
+			self.report({"ERROR"}, "Select exactly one Cab87 video plane.")
+			return {"CANCELLED"}
+		if result["objects"] == 0:
+			self.report({"ERROR"}, "Select one Cab87 video plane first.")
+			return {"CANCELLED"}
+		if result["materials"] == 0:
+			self.report({"ERROR"}, "Selected Cab87 video plane has no editable material.")
+			return {"CANCELLED"}
+
+		self.report({"INFO"}, f"Applied opacity to {result['target_name']}.")
+		return {"FINISHED"}
+
+
+class CAB87_OT_key_video_plane_opacity(Operator):
+	bl_idname = "cab87.key_video_plane_opacity"
+	bl_label = "Key Opacity"
+	bl_description = "Apply and keyframe the opacity slider on the loaded or selected Cab87 video plane."
+	bl_options = {"REGISTER", "UNDO"}
+
+	def execute(self, context):
+		settings = context.scene.cab87_video_plane_settings
+		result = apply_video_plane_opacity(context, settings.opacity, keyframe=True)
+		if result["ambiguous"]:
+			self.report({"ERROR"}, "Select exactly one Cab87 video plane.")
+			return {"CANCELLED"}
+		if result["objects"] == 0:
+			self.report({"ERROR"}, "Select one Cab87 video plane first.")
+			return {"CANCELLED"}
+		if result["materials"] == 0:
+			self.report({"ERROR"}, "Selected Cab87 video plane has no editable material.")
+			return {"CANCELLED"}
+
+		self.report({"INFO"}, f"Keyed opacity on {result['target_name']} at frame {context.scene.frame_current}.")
+		return {"FINISHED"}
+
+
+class CAB87_OT_read_video_plane_opacity(Operator):
+	bl_idname = "cab87.read_video_plane_opacity"
+	bl_label = "Load Selected Plane"
+	bl_description = "Load the single selected Cab87 video plane into the opacity controls."
+	bl_options = {"REGISTER", "UNDO"}
+
+	def execute(self, context):
+		settings = context.scene.cab87_video_plane_settings
+		result = load_selected_video_plane_opacity_target(context)
+		if result["ambiguous"]:
+			self.report({"ERROR"}, "Select exactly one Cab87 video plane.")
+			return {"CANCELLED"}
+		opacity = result["opacity"]
+		if opacity is None:
+			self.report({"ERROR"}, "Select a Cab87 video plane first.")
+			return {"CANCELLED"}
+
+		live_update = settings.opacity_live_update
+		settings.opacity_live_update = False
+		settings.opacity = opacity
+		settings.opacity_live_update = live_update
+		self.report({"INFO"}, f"Loaded {result['target_name']} at opacity {opacity:.2f}.")
+		return {"FINISHED"}
+
+
+class CAB87_OT_pick_xml_video_grid(Operator, ImportHelper):
+	bl_idname = "cab87.pick_xml_video_grid"
+	bl_label = "Import XML Video Grid"
+	bl_description = "Choose a Resolve/FCP XML file and create a cut grid of movie-textured planes."
+	bl_options = {"REGISTER", "UNDO"}
+
+	filename_ext = ".xml"
+	filter_glob: StringProperty(default=XML_FILTER, options={"HIDDEN"})
+
+	def invoke(self, context, event):
+		settings = context.scene.cab87_video_plane_settings
+		if settings.xml_path:
+			self.filepath = bpy.path.abspath(settings.xml_path)
+		return super().invoke(context, event)
+
+	def execute(self, context):
+		settings = context.scene.cab87_video_plane_settings
+		settings.xml_path = self.filepath
+		return import_xml_and_report(self, context, settings, self.filepath)
+
+
+class CAB87_OT_import_xml_video_grid_from_path(Operator):
+	bl_idname = "cab87.import_xml_video_grid_from_path"
+	bl_label = "Import XML Grid"
+	bl_description = "Import a Resolve/FCP XML cut grid from the XML File path."
+	bl_options = {"REGISTER", "UNDO"}
+
+	def execute(self, context):
+		settings = context.scene.cab87_video_plane_settings
+		if not settings.xml_path:
+			self.report({"ERROR"}, "Choose an XML file first.")
+			return {"CANCELLED"}
+		return import_xml_and_report(self, context, settings, settings.xml_path)
+
+
 class CAB87_PT_video_plane_panel(Panel):
 	bl_label = f"Video Plane v{ADDON_VERSION}"
 	bl_idname = "CAB87_PT_video_plane_panel"
 	bl_space_type = "VIEW_3D"
 	bl_region_type = "UI"
 	bl_category = "Cab87"
+
+	def draw(self, context):
+		pass
+
+
+class CAB87_PT_video_plane_create_panel(Panel):
+	bl_label = "Create"
+	bl_idname = "CAB87_PT_video_plane_create_panel"
+	bl_space_type = "VIEW_3D"
+	bl_region_type = "UI"
+	bl_category = "Cab87"
+	bl_parent_id = "CAB87_PT_video_plane_panel"
+	bl_order = 0
 
 	def draw(self, context):
 		layout = self.layout
@@ -152,6 +382,51 @@ class CAB87_PT_video_plane_panel(Panel):
 		box.prop(settings, "frame_start")
 		box.prop(settings, "sync_timeline")
 
+		box = layout.box()
+		box.label(text="Resolve/FCP XML")
+		box.operator(CAB87_OT_pick_xml_video_grid.bl_idname, icon="FILE_FOLDER")
+		box.prop(settings, "xml_path")
+		box.operator(CAB87_OT_import_xml_video_grid_from_path.bl_idname, icon="SEQ_STRIP_DUPLICATE")
+		box.prop(settings, "xml_media_root")
+		box.prop(settings, "xml_grid_columns")
+		box.prop(settings, "xml_grid_gap")
+		box.prop(settings, "xml_handle_frames")
+		box.prop(settings, "xml_clear_previous")
+		box.prop(settings, "xml_add_markers")
+
+		box = layout.box()
+		box.label(text="XML Camera")
+		box.prop(settings, "xml_animate_camera")
+		if settings.xml_animate_camera:
+			box.prop(settings, "xml_camera_name")
+			box.prop(settings, "xml_camera_distance")
+			box.prop(settings, "xml_camera_lens")
+			box.prop(settings, "xml_camera_interpolation")
+
+
+class CAB87_PT_video_plane_edit_panel(Panel):
+	bl_label = "Edit"
+	bl_idname = "CAB87_PT_video_plane_edit_panel"
+	bl_space_type = "VIEW_3D"
+	bl_region_type = "UI"
+	bl_category = "Cab87"
+	bl_parent_id = "CAB87_PT_video_plane_panel"
+	bl_order = 1
+
+	def draw(self, context):
+		layout = self.layout
+		settings = context.scene.cab87_video_plane_settings
+
+		box = layout.box()
+		box.label(text="Opacity")
+		box.prop(settings, "opacity_target", text="Target")
+		box.operator(CAB87_OT_read_video_plane_opacity.bl_idname, icon="EYEDROPPER")
+		box.prop(settings, "opacity", slider=True)
+		row = box.row(align=True)
+		row.operator(CAB87_OT_apply_video_plane_opacity.bl_idname, icon="CHECKMARK")
+		row.operator(CAB87_OT_key_video_plane_opacity.bl_idname, icon="KEY_HLT")
+		box.prop(settings, "opacity_live_update")
+
 
 def create_and_report(operator, context, settings: CAB87_VideoPlaneSettings, filepath: str):
 	try:
@@ -166,36 +441,520 @@ def create_and_report(operator, context, settings: CAB87_VideoPlaneSettings, fil
 	message = f"Created {object_name} from {source_width}x{source_height} video."
 	if result["used_fallback"]:
 		message = f"{message} Used fallback dimensions."
+	settings.opacity_target = result["object"]
 	operator.report({"INFO"}, message)
 	return {"FINISHED"}
 
 
-def create_video_plane(context, settings: CAB87_VideoPlaneSettings, filepath: str):
+def import_xml_and_report(operator, context, settings: CAB87_VideoPlaneSettings, filepath: str):
+	try:
+		result = import_xml_video_grid(context, settings, filepath)
+	except Exception as error:
+		operator.report({"ERROR"}, f"Could not import XML grid: {error}")
+		return {"CANCELLED"}
+
+	created_count = len(result["clips"])
+	missing_count = len(result["missing_media"])
+	if created_count == 0:
+		operator.report({"ERROR"}, "XML parsed, but no video planes were created. Check media paths.")
+		return {"CANCELLED"}
+
+	message = f"Imported {created_count} XML video clips into {result['collection'].name}."
+	if result["camera"] is not None:
+		message = f"{message} Animated {result['camera'].name}."
+	if missing_count > 0:
+		message = f"{message} Skipped {missing_count} missing media file(s)."
+		operator.report({"WARNING"}, message)
+	else:
+		operator.report({"INFO"}, message)
+	return {"FINISHED"}
+
+
+def import_xml_video_grid(context, settings: CAB87_VideoPlaneSettings, filepath: str):
+	xml_path = bpy.path.abspath(filepath)
+	if not Path(xml_path).is_file():
+		raise FileNotFoundError(xml_path)
+
+	sequence = parse_xmeml_sequence(xml_path, settings)
+	if not sequence.clips:
+		raise ValueError("No enabled video clipitems with media paths were found.")
+
+	if settings.xml_clear_previous:
+		clear_previous_xml_import(context.scene)
+
+	root_collection = ensure_video_collection(context)
+	sequence_slug = slug(sequence.name) or "Sequence"
+	xml_collection = bpy.data.collections.new(unique_name(f"{XML_COLLECTION_PREFIX}_{sequence_slug}", bpy.data.collections))
+	root_collection.children.link(xml_collection)
+
+	columns = int(settings.xml_grid_columns)
+	if columns <= 0:
+		columns = max(1, math.ceil(math.sqrt(len(sequence.clips))))
+
+	grid_height = resolve_xml_grid_row_height(sequence, settings)
+
+	imported_clips = []
+	missing_media = []
+	for clip in sequence.clips:
+		media_path = resolve_xml_media_path(clip.filepath, settings.xml_media_root)
+		if not Path(bpy.path.abspath(media_path)).is_file():
+			missing_media.append(media_path)
+			continue
+
+		timing = build_clip_timing(clip, settings.frame_start, settings.xml_handle_frames)
+		metadata = {
+			"xml_clip_id": clip.clip_id,
+			"xml_clip_name": clip.name,
+			"xml_track_index": clip.track_index,
+			"xml_timeline_start": clip.timeline_start,
+			"xml_timeline_end": clip.timeline_end,
+			"xml_source_in": clip.source_in,
+			"xml_source_out": clip.source_out,
+			"xml_source_start": timing["source_start"],
+			"xml_source_end": timing["source_end"],
+			"xml_handle_frames": timing["handle_frames"],
+			"xml_movie_frame_start": timing["movie_frame_start"],
+			"xml_movie_source_start": timing["movie_source_start"],
+			"xml_speed_multiplier": timing["speed_multiplier"],
+		}
+		result = create_video_plane(
+			context,
+			settings,
+			media_path,
+			collection=xml_collection,
+			position=Vector((0.0, 0.0, 0.0)),
+			rotation_euler=(math.radians(90.0), 0.0, 0.0),
+			fallback_dimensions=(clip.source_width, clip.source_height),
+			plane_height=grid_height,
+			timing=timing,
+			metadata=metadata,
+			select_object=False,
+		)
+
+		obj = result["object"]
+		obj.name = unique_name(f"Cab87XmlClip_{len(imported_clips) + 1:03d}_{slug(clip.name) or 'Clip'}", bpy.data.objects)
+		imported_clips.append({"clip": clip, "object": obj, "timing": timing, "plane_width": result["plane_width"]})
+
+	position_imported_xml_clips(imported_clips, columns, grid_height, settings.xml_grid_gap)
+
+	if settings.sync_timeline and sequence.duration > 0:
+		context.scene.frame_start = settings.frame_start - settings.xml_handle_frames
+		context.scene.frame_end = settings.frame_start + sequence.duration - 1 + settings.xml_handle_frames
+
+	if settings.xml_add_markers:
+		add_xml_cut_markers(context.scene, imported_clips)
+
+	camera = None
+	if settings.xml_animate_camera and imported_clips:
+		camera = animate_xml_camera(context, settings, xml_collection, imported_clips)
+
+	if imported_clips:
+		for item in imported_clips:
+			item["object"].select_set(True)
+		context.view_layer.objects.active = imported_clips[0]["object"]
+
+	return {
+		"sequence": sequence,
+		"collection": xml_collection,
+		"clips": imported_clips,
+		"missing_media": missing_media,
+		"camera": camera,
+	}
+
+
+def parse_xmeml_sequence(filepath: str, settings: CAB87_VideoPlaneSettings) -> XmlSequence:
+	tree = ET.parse(filepath)
+	root = tree.getroot()
+	sequence_element = root.find("sequence")
+	if sequence_element is None:
+		sequence_element = root.find(".//sequence")
+	if sequence_element is None:
+		raise ValueError("XML does not contain a sequence element.")
+
+	file_lookup = build_xml_file_lookup(root)
+	name = read_text(sequence_element, "name", "XML Sequence")
+	timebase = read_int(sequence_element.find("rate"), "timebase", 30)
+	duration = read_int(sequence_element, "duration", 0)
+	width = read_int(sequence_element.find("./media/video/format/samplecharacteristics"), "width", settings.fallback_width)
+	height = read_int(sequence_element.find("./media/video/format/samplecharacteristics"), "height", settings.fallback_height)
+
+	clips: list[XmlVideoClip] = []
+	video_element = sequence_element.find("./media/video")
+	if video_element is not None:
+		for track_index, track_element in enumerate(video_element.findall("track"), start=1):
+			for clip_element in track_element.findall("clipitem"):
+				if not read_bool(clip_element, "enabled", True):
+					continue
+				clip = parse_xml_video_clip(clip_element, file_lookup, track_index, width, height)
+				if clip is not None:
+					clips.append(clip)
+
+	clips.sort(key=lambda item: (item.timeline_start, item.track_index, item.clip_id))
+	if duration <= 0 and clips:
+		duration = max(clip.timeline_end for clip in clips)
+
+	return XmlSequence(name=name, duration=duration, timebase=timebase, width=width, height=height, clips=clips)
+
+
+def build_xml_file_lookup(root) -> dict[str, dict]:
+	file_lookup = {}
+	for file_element in root.findall(".//file"):
+		file_id = file_element.get("id")
+		if not file_id:
+			continue
+		info = read_xml_file_info(file_element)
+		if info["path"]:
+			file_lookup[file_id] = info
+	return file_lookup
+
+
+def parse_xml_video_clip(clip_element, file_lookup: dict[str, dict], track_index: int, sequence_width: int, sequence_height: int) -> XmlVideoClip | None:
+	start = read_int(clip_element, "start", -1)
+	end = read_int(clip_element, "end", -1)
+	if start < 0 or end <= start:
+		return None
+
+	file_element = clip_element.find("file")
+	if file_element is None:
+		return None
+
+	file_info = read_xml_file_info(file_element)
+	file_id = file_element.get("id")
+	if not file_info["path"] and file_id in file_lookup:
+		file_info = file_lookup[file_id]
+	if not file_info["path"]:
+		return None
+
+	name = read_text(clip_element, "name", file_info["name"] or "Clip")
+	source_in = read_float(clip_element, "in", 0.0)
+	source_out = read_float(clip_element, "out", source_in + (end - start))
+	source_width = int(file_info["width"] or sequence_width)
+	source_height = int(file_info["height"] or sequence_height)
+
+	return XmlVideoClip(
+		clip_id=clip_element.get("id", name),
+		name=name,
+		filepath=pathurl_to_path(file_info["path"]),
+		timeline_start=start,
+		timeline_end=end,
+		source_in=source_in,
+		source_out=source_out,
+		source_width=source_width,
+		source_height=source_height,
+		track_index=track_index,
+		time_remap=parse_time_remap(clip_element),
+	)
+
+
+def read_xml_file_info(file_element) -> dict:
+	return {
+		"name": read_text(file_element, "name", ""),
+		"path": read_text(file_element, "pathurl", ""),
+		"width": read_int(file_element.find("./media/video/samplecharacteristics"), "width", 0),
+		"height": read_int(file_element.find("./media/video/samplecharacteristics"), "height", 0),
+		"duration": read_int(file_element, "duration", 0),
+	}
+
+
+def parse_time_remap(clip_element) -> TimeRemapInfo | None:
+	for filter_element in clip_element.findall("filter"):
+		effect_element = filter_element.find("effect")
+		if effect_element is None:
+			continue
+		effect_id = read_text(effect_element, "effectid", "").lower()
+		effect_name = read_text(effect_element, "name", "").lower()
+		if effect_id != "timeremap" and "time remap" not in effect_name:
+			continue
+
+		info = TimeRemapInfo()
+		for parameter in effect_element.findall("parameter"):
+			parameter_id = read_text(parameter, "parameterid", "").lower()
+			parameter_name = read_text(parameter, "name", "").lower()
+			key = parameter_id or parameter_name
+			if key == "speed":
+				info.speed_percent = read_float(parameter, "value", 100.0)
+			elif key == "reverse":
+				info.reverse = read_bool(parameter, "value", False)
+			elif key == "graphdict":
+				info.keyframes = read_time_remap_keyframes(parameter)
+		return info
+	return None
+
+
+def read_time_remap_keyframes(parameter) -> list[tuple[float, float]]:
+	keyframes = []
+	for keyframe in parameter.findall("keyframe"):
+		when = read_float(keyframe, "when", 0.0)
+		value = read_float(keyframe, "value", when)
+		keyframes.append((when, value))
+	keyframes.sort(key=lambda item: item[0])
+	return keyframes
+
+
+def build_clip_timing(clip: XmlVideoClip, scene_frame_start: int, handle_frames: int = 0) -> dict:
+	handle_frames = max(0, int(handle_frames))
+	duration = max(1, clip.timeline_end - clip.timeline_start)
+	source_start = resolve_displayed_source_at_relative_frame(clip, 0.0, duration)
+	source_end = resolve_displayed_source_at_relative_frame(clip, float(duration), duration)
+	speed_multiplier = (source_end - source_start) / duration
+
+	frame_start = scene_frame_start + clip.timeline_start
+	frame_end = scene_frame_start + clip.timeline_end - 1
+	movie_frame_start = frame_start - handle_frames
+	movie_duration = duration + handle_frames * 2
+	movie_source_start = resolve_displayed_source_at_relative_frame(clip, -float(handle_frames), duration)
+	return {
+		"frame_start": frame_start,
+		"frame_end": frame_end,
+		"duration": duration,
+		"movie_frame_start": movie_frame_start,
+		"movie_duration": movie_duration,
+		"source_start": source_start,
+		"source_end": source_end,
+		"movie_source_start": movie_source_start,
+		"speed_multiplier": speed_multiplier,
+		"handle_frames": handle_frames,
+		"offset_keyframes": build_clip_offset_keyframes(clip, frame_start, duration, handle_frames),
+	}
+
+
+def resolve_remapped_source_frame(clip: XmlVideoClip, source_frame: float) -> float:
+	time_remap = clip.time_remap
+	if time_remap is None:
+		return source_frame
+	if time_remap is not None and time_remap.keyframes:
+		return interpolate_keyframes(time_remap.keyframes, source_frame)
+	return source_frame
+
+
+def resolve_displayed_source_at_relative_frame(clip: XmlVideoClip, relative_frame: float, timeline_duration: int) -> float:
+	time_remap = clip.time_remap
+	if time_remap is None:
+		source_span = resolve_source_span(clip, timeline_duration)
+		return clip.source_in + source_span * (relative_frame / max(1, timeline_duration))
+
+	if time_remap is not None and time_remap.keyframes:
+		source_span = resolve_source_span(clip, timeline_duration)
+		source_time = clip.source_in + source_span * (relative_frame / max(1, timeline_duration))
+		source_frame = resolve_remapped_source_frame(clip, source_time)
+	elif time_remap.speed_percent is not None:
+		speed_multiplier = time_remap.speed_percent / 100.0
+		source_frame = clip.source_in + relative_frame * speed_multiplier
+	else:
+		source_frame = clip.source_in + relative_frame
+
+	if time_remap.reverse:
+		source_frame = clip.source_out - (source_frame - clip.source_in)
+	return source_frame
+
+
+def build_clip_offset_keyframes(clip: XmlVideoClip, frame_start: int, timeline_duration: int, handle_frames: int = 0) -> list[tuple[int, float]]:
+	time_remap = clip.time_remap
+	source_span = resolve_source_span(clip, timeline_duration)
+	implicit_speed = source_span / max(1, timeline_duration)
+	if time_remap is None and abs(implicit_speed - 1.0) <= 0.001:
+		return []
+
+	handle_frames = max(0, int(handle_frames))
+	start_relative = -float(handle_frames)
+	end_relative = float(timeline_duration + handle_frames - 1)
+	movie_frame_start = frame_start - handle_frames
+
+	samples: list[float] = [start_relative]
+	if time_remap is not None and time_remap.keyframes:
+		for when, _value in time_remap.keyframes:
+			relative_frame = ((when - clip.source_in) / source_span) * timeline_duration
+			if relative_frame <= start_relative or relative_frame >= end_relative:
+				continue
+			samples.append(relative_frame)
+	if timeline_duration + handle_frames * 2 > 1:
+		samples.append(end_relative)
+
+	keyframes_by_frame: dict[int, float] = {}
+	for relative_frame in sorted(samples):
+		scene_frame = frame_start + int(round(relative_frame))
+		movie_relative_frame = scene_frame - movie_frame_start
+		displayed_source = resolve_displayed_source_at_relative_frame(clip, relative_frame, timeline_duration)
+		keyframes_by_frame[scene_frame] = displayed_source - movie_relative_frame
+	return sorted(keyframes_by_frame.items())
+
+
+def resolve_source_span(clip: XmlVideoClip, timeline_duration: int) -> float:
+	source_span = clip.source_out - clip.source_in
+	if source_span <= 0:
+		return float(timeline_duration)
+	return source_span
+
+
+def interpolate_keyframes(keyframes: list[tuple[float, float]], frame: float) -> float:
+	if not keyframes:
+		return frame
+	if frame <= keyframes[0][0]:
+		return keyframes[0][1]
+	for index in range(1, len(keyframes)):
+		left_when, left_value = keyframes[index - 1]
+		right_when, right_value = keyframes[index]
+		if frame <= right_when:
+			span = right_when - left_when
+			if span == 0:
+				return right_value
+			alpha = (frame - left_when) / span
+			return left_value + (right_value - left_value) * alpha
+	return keyframes[-1][1]
+
+
+def pathurl_to_path(pathurl: str) -> str:
+	if not pathurl:
+		return ""
+	parsed = urlparse(pathurl)
+	if parsed.scheme.lower() != "file":
+		return unquote(pathurl)
+
+	path = unquote(parsed.path or "")
+	if parsed.netloc and parsed.netloc.lower() != "localhost":
+		return f"//{parsed.netloc}{path}"
+	if re.match(r"^/[A-Za-z]:/", path):
+		path = path[1:]
+	return path
+
+
+def resolve_xml_media_path(filepath: str, media_root: str) -> str:
+	if not media_root:
+		return filepath
+	absolute = bpy.path.abspath(filepath)
+	if Path(absolute).is_file():
+		return filepath
+	filename = path_leaf(filepath)
+	if not filename:
+		return filepath
+	return str(Path(bpy.path.abspath(media_root)) / filename)
+
+
+def path_leaf(filepath: str) -> str:
+	normalized = filepath.replace("\\", "/")
+	return Path(normalized).name
+
+
+def resolve_xml_grid_row_height(sequence: XmlSequence, settings: CAB87_VideoPlaneSettings) -> float:
+	_sequence_width, sequence_height = resolve_plane_dimensions(max(1, sequence.width), max(1, sequence.height), settings)
+	return sequence_height
+
+
+def resolve_xml_clip_grid_dimensions(clip: XmlVideoClip, row_height: float) -> tuple[float, float]:
+	aspect = max(1, clip.source_width) / max(1, clip.source_height)
+	return row_height * aspect, row_height
+
+
+def resolve_dimensions_from_height(source_width: int, source_height: int, height: float) -> tuple[float, float]:
+	aspect = source_width / source_height
+	return height * aspect, height
+
+
+def position_imported_xml_clips(imported_clips: list[dict], columns: int, grid_height: float, grid_gap: float) -> None:
+	if not imported_clips:
+		return
+	grid_width = max(item["plane_width"] for item in imported_clips)
+	cell_width = grid_width + grid_gap
+	cell_height = grid_height + grid_gap
+	rows = math.ceil(len(imported_clips) / columns)
+
+	for index, item in enumerate(imported_clips):
+		column = index % columns
+		row = index // columns
+		x = (column - (columns - 1) * 0.5) * cell_width
+		z = ((rows - 1) * 0.5 - row) * cell_height
+		item["object"].location = Vector((x, 0.0, z))
+
+
+def read_text(element, path: str, default: str = "") -> str:
+	if element is None:
+		return default
+	found = element.find(path)
+	if found is None or found.text is None:
+		return default
+	return found.text.strip()
+
+
+def read_int(element, path: str, default: int = 0) -> int:
+	value = read_float(element, path, float(default))
+	return int(round(value))
+
+
+def read_float(element, path: str, default: float = 0.0) -> float:
+	text = read_text(element, path, "")
+	if text == "":
+		return default
+	try:
+		return float(text)
+	except ValueError:
+		return default
+
+
+def read_bool(element, path: str, default: bool = False) -> bool:
+	text = read_text(element, path, "")
+	if text == "":
+		return default
+	return text.strip().upper() in {"TRUE", "1", "YES"}
+
+
+def create_video_plane(
+	context,
+	settings: CAB87_VideoPlaneSettings,
+	filepath: str,
+	*,
+	collection=None,
+	position: Vector | None = None,
+	rotation_euler=None,
+	fallback_dimensions: tuple[int, int] | None = None,
+	plane_dimensions: tuple[float, float] | None = None,
+	plane_height: float | None = None,
+	timing: dict | None = None,
+	metadata: dict | None = None,
+	select_object: bool = True,
+):
 	absolute_path = bpy.path.abspath(filepath)
 	if not Path(absolute_path).is_file():
 		raise FileNotFoundError(absolute_path)
 
 	image = load_movie_image(absolute_path, settings)
-	source_width, source_height, used_fallback = resolve_image_dimensions(image, settings)
-	plane_width, plane_height = resolve_plane_dimensions(source_width, source_height, settings)
+	source_width, source_height, used_fallback = resolve_image_dimensions(image, settings, fallback_dimensions)
+	if plane_dimensions is None:
+		if plane_height is None:
+			plane_width, resolved_plane_height = resolve_plane_dimensions(source_width, source_height, settings)
+		else:
+			plane_width, resolved_plane_height = resolve_dimensions_from_height(source_width, source_height, plane_height)
+	else:
+		plane_width, resolved_plane_height = plane_dimensions
 
 	stem = slug(Path(absolute_path).stem) or "Video"
-	mesh = create_plane_mesh(unique_name(f"Cab87VideoPlane_{stem}_Mesh", bpy.data.meshes), plane_width, plane_height)
+	mesh = create_plane_mesh(unique_name(f"Cab87VideoPlane_{stem}_Mesh", bpy.data.meshes), plane_width, resolved_plane_height)
 	obj = bpy.data.objects.new(unique_name(f"Cab87VideoPlane_{stem}", bpy.data.objects), mesh)
 	obj.data.materials.append(create_video_material(unique_name(f"Cab87Video_{stem}_Material", bpy.data.materials), image, settings))
 
-	collection = ensure_video_collection(context)
+	if collection is None:
+		collection = ensure_video_collection(context)
 	collection.objects.link(obj)
-	position_video_plane(context, obj, settings)
-	write_video_properties(obj, image, absolute_path, source_width, source_height, plane_width, plane_height)
+	if position is None:
+		position_video_plane(context, obj, settings)
+	else:
+		obj.location = position
+		obj.rotation_euler = rotation_euler if rotation_euler is not None else (math.radians(90.0), 0.0, 0.0)
+	write_video_properties(obj, image, absolute_path, source_width, source_height, plane_width, resolved_plane_height)
+	obj["cab87_video_opacity"] = clamp_opacity(settings.opacity)
+	if metadata is not None:
+		write_xml_clip_properties(obj, metadata)
 
-	context.view_layer.objects.active = obj
-	obj.select_set(True)
-	for other in context.selected_objects:
-		if other != obj:
-			other.select_set(False)
+	if select_object:
+		context.view_layer.objects.active = obj
+		obj.select_set(True)
+		for other in context.selected_objects:
+			if other != obj:
+				other.select_set(False)
 
-	duration = configure_movie_timing(context.scene, image, obj.active_material, settings)
+	if timing is None:
+		duration = configure_movie_timing(context.scene, image, obj.active_material, settings)
+	else:
+		duration = configure_clip_movie_timing(context.scene, image, obj.active_material, settings, timing)
 
 	return {
 		"object": obj,
@@ -203,6 +962,8 @@ def create_video_plane(context, settings: CAB87_VideoPlaneSettings, filepath: st
 		"source_width": source_width,
 		"source_height": source_height,
 		"used_fallback": used_fallback,
+		"plane_width": plane_width,
+		"plane_height": resolved_plane_height,
 		"duration": duration,
 	}
 
@@ -223,7 +984,11 @@ def load_movie_image(filepath: str, settings: CAB87_VideoPlaneSettings):
 	return image
 
 
-def resolve_image_dimensions(image, settings: CAB87_VideoPlaneSettings) -> tuple[int, int, bool]:
+def resolve_image_dimensions(
+	image,
+	settings: CAB87_VideoPlaneSettings,
+	fallback_dimensions: tuple[int, int] | None = None,
+) -> tuple[int, int, bool]:
 	width = 0
 	height = 0
 	if getattr(image, "size", None) and len(image.size) >= 2:
@@ -232,6 +997,9 @@ def resolve_image_dimensions(image, settings: CAB87_VideoPlaneSettings) -> tuple
 
 	if width > 0 and height > 0:
 		return width, height, False
+
+	if fallback_dimensions is not None and fallback_dimensions[0] > 0 and fallback_dimensions[1] > 0:
+		return int(fallback_dimensions[0]), int(fallback_dimensions[1]), True
 
 	return int(settings.fallback_width), int(settings.fallback_height), True
 
@@ -318,6 +1086,7 @@ def create_video_material(name: str, image, settings: CAB87_VideoPlaneSettings):
 	elif shader_output is not None:
 		links.new(shader_output, output.inputs["Surface"])
 
+	set_video_plane_material_opacity(material, settings.opacity, keyframe=False)
 	return material
 
 
@@ -330,6 +1099,27 @@ def configure_movie_timing(scene, image, material, settings: CAB87_VideoPlaneSet
 	if settings.sync_timeline and duration > 0:
 		scene.frame_start = settings.frame_start
 		scene.frame_end = settings.frame_start + duration - 1
+	return duration
+
+
+def configure_clip_movie_timing(scene, image, material, settings: CAB87_VideoPlaneSettings, timing: dict) -> int:
+	duration = max(1, int(timing.get("movie_duration", timing.get("duration", 1))))
+	source_start = int(round(float(timing.get("movie_source_start", timing.get("source_start", 0.0)))))
+	frame_start = int(timing.get("movie_frame_start", timing.get("frame_start", settings.frame_start)))
+	offset_keyframes = timing.get("offset_keyframes", [])
+
+	for node in material.node_tree.nodes:
+		if node.bl_idname != "ShaderNodeTexImage" or node.image != image:
+			continue
+
+		configure_image_user(node.image_user, image, settings, duration)
+		assign_if_available(node.image_user, "frame_start", frame_start)
+		assign_if_available(node.image_user, "frame_duration", duration)
+		assign_if_available(node.image_user, "frame_offset", source_start)
+
+		if len(offset_keyframes) > 1 and has_offset_animation(offset_keyframes):
+			keyframe_image_offsets(node.image_user, offset_keyframes)
+
 	return duration
 
 
@@ -355,6 +1145,306 @@ def get_movie_duration(image) -> int:
 		if value > 0:
 			return value
 	return 0
+
+
+def keyframe_image_offsets(image_user, offset_keyframes: list[tuple[int, float]]) -> None:
+	if image_user is None or not hasattr(image_user, "frame_offset"):
+		return
+	try:
+		for frame, frame_offset in offset_keyframes:
+			image_user.frame_offset = int(round(frame_offset))
+			image_user.keyframe_insert(data_path="frame_offset", frame=frame)
+	except Exception:
+		return
+
+	try:
+		action = image_user.id_data.animation_data.action
+	except AttributeError:
+		return
+	if action is None:
+		return
+	target_frames = {frame for frame, _offset in offset_keyframes}
+	for fcurve in iter_action_fcurves(action):
+		if "frame_offset" not in fcurve.data_path:
+			continue
+		for keyframe in fcurve.keyframe_points:
+			if int(round(keyframe.co.x)) in target_frames:
+				keyframe.interpolation = "LINEAR"
+
+
+def has_offset_animation(offset_keyframes: list[tuple[int, float]]) -> bool:
+	first_offset = offset_keyframes[0][1]
+	return any(abs(frame_offset - first_offset) > 0.001 for _frame, frame_offset in offset_keyframes[1:])
+
+
+def apply_video_plane_opacity(context, opacity: float, keyframe: bool = False) -> dict:
+	opacity = clamp_opacity(opacity)
+	target_info = get_video_plane_opacity_target(context)
+	target = target_info["object"]
+	material_count = 0
+	frame = context.scene.frame_current if keyframe else None
+
+	if target is not None:
+		target["cab87_video_opacity"] = opacity
+		for material in iter_object_materials(target):
+			if set_video_plane_material_opacity(material, opacity, keyframe=keyframe, frame=frame):
+				material_count += 1
+
+	return {
+		"objects": 1 if target is not None else 0,
+		"materials": material_count,
+		"ambiguous": target_info["ambiguous"],
+		"target_name": target.name if target is not None else "",
+	}
+
+
+def load_selected_video_plane_opacity_target(context) -> dict:
+	settings = context.scene.cab87_video_plane_settings
+	target_info = get_single_selected_video_plane(context)
+	target = target_info["object"]
+	if target is None:
+		return {"opacity": None, "ambiguous": target_info["ambiguous"], "target_name": ""}
+
+	settings.opacity_target = target
+	return {
+		"opacity": read_video_plane_object_opacity(target),
+		"ambiguous": False,
+		"target_name": target.name,
+	}
+
+
+def get_video_plane_opacity_target(context) -> dict:
+	settings = context.scene.cab87_video_plane_settings
+	target = getattr(settings, "opacity_target", None)
+	if is_video_plane_object(target):
+		return {"object": target, "ambiguous": False}
+	return get_single_selected_video_plane(context)
+
+
+def get_single_selected_video_plane(context) -> dict:
+	selected = getattr(context, "selected_objects", ()) or ()
+	targets = [obj for obj in selected if is_video_plane_object(obj)]
+	if len(targets) > 1:
+		return {"object": None, "ambiguous": True}
+	if len(targets) == 1:
+		return {"object": targets[0], "ambiguous": False}
+	return {"object": None, "ambiguous": False}
+
+
+def read_video_plane_object_opacity(obj) -> float | None:
+	for material in iter_object_materials(obj):
+		opacity = read_video_plane_material_opacity(material)
+		if opacity is not None:
+			return opacity
+	try:
+		return clamp_opacity(obj.get("cab87_video_opacity", 1.0))
+	except Exception:
+		return 1.0
+
+
+def is_video_plane_object(obj) -> bool:
+	if obj is None or getattr(obj, "type", None) != "MESH" or not hasattr(obj, "get"):
+		return False
+	return bool(obj.get("cab87_video_plane"))
+
+
+def iter_object_materials(obj):
+	materials = getattr(getattr(obj, "data", None), "materials", None)
+	if materials is not None:
+		for material in materials:
+			if material is not None:
+				yield material
+		return
+
+	material = getattr(obj, "active_material", None)
+	if material is not None:
+		yield material
+
+
+def set_video_plane_material_opacity(material, opacity: float, keyframe: bool = False, frame: int | None = None) -> bool:
+	opacity = clamp_opacity(opacity)
+	value_node = ensure_video_material_opacity_controls(material)
+	if value_node is None or not value_node.outputs:
+		return False
+
+	enable_opacity_rendering = keyframe or opacity < 1.0
+	if enable_opacity_rendering:
+		enable_material_opacity_rendering(material)
+
+	socket = value_node.outputs[0]
+	socket.default_value = opacity
+	set_material_diffuse_alpha(material, opacity)
+	material["cab87_video_opacity"] = opacity
+
+	if not keyframe:
+		return True
+
+	try:
+		socket.keyframe_insert(data_path="default_value", frame=frame)
+	except Exception:
+		return False
+	set_material_opacity_key_interpolation(material, value_node, "LINEAR")
+	return True
+
+
+def read_video_plane_material_opacity(material) -> float | None:
+	value_node = find_material_opacity_node(material)
+	if value_node is not None and value_node.outputs:
+		return clamp_opacity(value_node.outputs[0].default_value)
+	if material is not None and hasattr(material, "get"):
+		stored_opacity = material.get("cab87_video_opacity")
+		if stored_opacity is not None:
+			return clamp_opacity(stored_opacity)
+	if material is not None and hasattr(material, "diffuse_color") and len(material.diffuse_color) >= 4:
+		return clamp_opacity(material.diffuse_color[3])
+	return None
+
+
+def ensure_video_material_opacity_controls(material):
+	if material is None:
+		return None
+	material.use_nodes = True
+	if material.node_tree is None:
+		return None
+
+	nodes = material.node_tree.nodes
+	links = material.node_tree.links
+	output = find_material_output_node(material)
+	if output is None:
+		return None
+
+	surface_input = output.inputs.get("Surface")
+	if surface_input is None:
+		return None
+
+	value_node = find_material_opacity_node(material)
+	if value_node is None:
+		value_node = nodes.new("ShaderNodeValue")
+		value_node.name = OPACITY_VALUE_NODE_NAME
+		value_node.label = OPACITY_VALUE_NODE_NAME
+		value_node.location = (-130.0, -360.0)
+		if value_node.outputs:
+			value_node.outputs[0].default_value = 1.0
+
+	existing_link = surface_input.links[0] if surface_input.is_linked else None
+	if existing_link is not None and existing_link.from_node.name == OPACITY_MIX_NODE_NAME:
+		ensure_opacity_mix_value_link(links, existing_link.from_node, value_node)
+		return value_node
+
+	source_socket = existing_link.from_socket if existing_link is not None else None
+	if source_socket is None:
+		return None
+
+	mix_node = find_named_node(nodes, OPACITY_MIX_NODE_NAME)
+	if mix_node is None:
+		mix_node = nodes.new("ShaderNodeMixShader")
+		mix_node.name = OPACITY_MIX_NODE_NAME
+		mix_node.label = OPACITY_MIX_NODE_NAME
+		mix_node.location = (330.0, -220.0)
+
+	transparent_node = find_named_node(nodes, OPACITY_TRANSPARENT_NODE_NAME)
+	if transparent_node is None:
+		transparent_node = nodes.new("ShaderNodeBsdfTransparent")
+		transparent_node.name = OPACITY_TRANSPARENT_NODE_NAME
+		transparent_node.label = OPACITY_TRANSPARENT_NODE_NAME
+		transparent_node.location = (120.0, -320.0)
+
+	links.remove(existing_link)
+	clear_socket_links(links, mix_node.inputs[0])
+	clear_socket_links(links, mix_node.inputs[1])
+	clear_socket_links(links, mix_node.inputs[2])
+	links.new(value_node.outputs[0], mix_node.inputs[0])
+	links.new(transparent_node.outputs["BSDF"], mix_node.inputs[1])
+	links.new(source_socket, mix_node.inputs[2])
+	links.new(mix_node.outputs["Shader"], surface_input)
+	return value_node
+
+
+def find_material_opacity_node(material):
+	if material is None or material.node_tree is None:
+		return None
+	for node in material.node_tree.nodes:
+		if node.bl_idname != "ShaderNodeValue":
+			continue
+		if node.name == OPACITY_VALUE_NODE_NAME or node.label == OPACITY_VALUE_NODE_NAME:
+			return node
+	return None
+
+
+def find_material_output_node(material):
+	for node in material.node_tree.nodes:
+		if node.bl_idname == "ShaderNodeOutputMaterial" and getattr(node, "is_active_output", False):
+			return node
+	for node in material.node_tree.nodes:
+		if node.bl_idname == "ShaderNodeOutputMaterial":
+			return node
+	return None
+
+
+def find_named_node(nodes, name: str):
+	node = nodes.get(name)
+	if node is not None:
+		return node
+	for candidate in nodes:
+		if candidate.label == name:
+			return candidate
+	return None
+
+
+def ensure_opacity_mix_value_link(links, mix_node, value_node) -> None:
+	if not value_node.outputs:
+		return
+	factor_input = mix_node.inputs[0]
+	for link in factor_input.links:
+		if link.from_socket == value_node.outputs[0]:
+			return
+	clear_socket_links(links, factor_input)
+	links.new(value_node.outputs[0], factor_input)
+
+
+def clear_socket_links(links, socket) -> None:
+	for link in list(socket.links):
+		links.remove(link)
+
+
+def enable_material_opacity_rendering(material) -> None:
+	set_first_supported_enum(material, "surface_render_method", ("BLENDED", "DITHERED"))
+	set_first_supported_enum(material, "blend_method", ("BLEND", "HASHED", "CLIP"))
+	assign_if_available(material, "show_transparent_back", True)
+	assign_if_available(material, "use_transparency_overlap", True)
+	assign_if_available(material, "use_tranparency_overlap", True)
+
+
+def set_material_diffuse_alpha(material, opacity: float) -> None:
+	if material is None or not hasattr(material, "diffuse_color") or len(material.diffuse_color) < 4:
+		return
+	material.diffuse_color = (
+		material.diffuse_color[0],
+		material.diffuse_color[1],
+		material.diffuse_color[2],
+		opacity,
+	)
+
+
+def set_material_opacity_key_interpolation(material, value_node, interpolation: str) -> None:
+	try:
+		action = material.node_tree.animation_data.action
+	except AttributeError:
+		return
+	if action is None:
+		return
+	for fcurve in iter_action_fcurves(action):
+		if value_node.name not in fcurve.data_path or "default_value" not in fcurve.data_path:
+			continue
+		for keyframe in fcurve.keyframe_points:
+			keyframe.interpolation = interpolation
+
+
+def clamp_opacity(value) -> float:
+	try:
+		return min(1.0, max(0.0, float(value)))
+	except (TypeError, ValueError):
+		return 1.0
 
 
 def position_video_plane(context, obj, settings: CAB87_VideoPlaneSettings) -> None:
@@ -384,6 +1474,155 @@ def ensure_video_collection(context):
 	return collection
 
 
+def clear_previous_xml_import(scene=None) -> None:
+	for obj in list(bpy.data.objects):
+		if obj.get("cab87_xml_import"):
+			bpy.data.objects.remove(obj, do_unlink=True)
+	for collection in list(bpy.data.collections):
+		if collection.name.startswith(XML_COLLECTION_PREFIX) and not collection.objects and not collection.children:
+			bpy.data.collections.remove(collection)
+	if scene is not None:
+		for marker in list(scene.timeline_markers):
+			if marker.name.startswith("Cab87 XML "):
+				scene.timeline_markers.remove(marker)
+
+
+def add_xml_cut_markers(scene, imported_clips: list[dict]) -> None:
+	for item in imported_clips:
+		clip = item["clip"]
+		timing = item["timing"]
+		marker_name = f"Cab87 XML {clip.timeline_start:05d} {clip.name}"
+		scene.timeline_markers.new(marker_name[:63], frame=timing["frame_start"])
+
+
+def animate_xml_camera(context, settings: CAB87_VideoPlaneSettings, collection, imported_clips: list[dict]):
+	camera = bpy.data.objects.get(settings.xml_camera_name)
+	if camera is None or camera.type != "CAMERA":
+		camera_data = bpy.data.cameras.new(unique_name(f"{settings.xml_camera_name}_Data", bpy.data.cameras))
+		camera = bpy.data.objects.new(settings.xml_camera_name, camera_data)
+		collection.objects.link(camera)
+	elif camera.name not in {obj.name for obj in collection.objects}:
+		collection.objects.link(camera)
+
+	pivot_name = f"{settings.xml_camera_name} Pivot"
+	pivot = bpy.data.objects.get(pivot_name)
+	if pivot is None or pivot.type != "EMPTY":
+		pivot = bpy.data.objects.new(unique_name(pivot_name, bpy.data.objects), None)
+		pivot.empty_display_type = "PLAIN_AXES"
+		pivot.empty_display_size = 0.75
+		collection.objects.link(pivot)
+	elif pivot.name not in {obj.name for obj in collection.objects}:
+		collection.objects.link(pivot)
+
+	panner_name = f"{settings.xml_camera_name} Panner"
+	panner = bpy.data.objects.get(panner_name)
+	if panner is None or panner.type != "EMPTY":
+		panner = bpy.data.objects.new(unique_name(panner_name, bpy.data.objects), None)
+		panner.empty_display_type = "ARROWS"
+		panner.empty_display_size = 0.5
+		collection.objects.link(panner)
+	elif panner.name not in {obj.name for obj in collection.objects}:
+		collection.objects.link(panner)
+
+	camera["cab87_xml_import"] = True
+	camera["cab87_xml_import_camera"] = True
+	camera["cab87_xml_camera_pivot"] = pivot.name
+	camera["cab87_xml_camera_panner"] = panner.name
+	pivot["cab87_xml_import"] = True
+	pivot["cab87_xml_camera_pivot"] = True
+	panner["cab87_xml_import"] = True
+	panner["cab87_xml_camera_panner"] = True
+	panner["cab87_xml_camera_pivot"] = pivot.name
+	camera.data.lens = settings.xml_camera_lens
+	panner.parent = pivot
+	panner.matrix_parent_inverse.identity()
+	panner.location = (0.0, 0.0, 0.0)
+	panner.rotation_euler = (0.0, 0.0, 0.0)
+	panner.scale = (1.0, 1.0, 1.0)
+	camera.parent = panner
+	camera.matrix_parent_inverse.identity()
+	camera.location = (0.0, -settings.xml_camera_distance, 0.0)
+	camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+	camera.animation_data_clear()
+	panner.animation_data_clear()
+	pivot.animation_data_clear()
+
+	for item in imported_clips:
+		frame = item["timing"]["frame_start"]
+		pivot.location = item["object"].location
+		pivot.rotation_euler = (0.0, 0.0, 0.0)
+		pivot.keyframe_insert(data_path="location", frame=frame)
+
+	set_object_keyframe_interpolation(pivot, settings.xml_camera_interpolation)
+	context.scene.camera = camera
+	return camera
+
+
+def camera_pose_for_plane(obj, distance: float) -> tuple[Vector, object]:
+	target = obj.location.copy()
+	normal = obj.matrix_world.to_quaternion() @ Vector((0.0, 0.0, 1.0))
+	if normal.length == 0.0:
+		normal = Vector((0.0, -1.0, 0.0))
+	else:
+		normal.normalize()
+	location = target + normal * distance
+	direction = target - location
+	rotation = direction.to_track_quat("-Z", "Y").to_euler()
+	return location, rotation
+
+
+def set_object_keyframe_interpolation(obj, interpolation: str) -> None:
+	if obj.animation_data is None or obj.animation_data.action is None:
+		return
+	for fcurve in iter_action_fcurves(obj.animation_data.action):
+		for keyframe in fcurve.keyframe_points:
+			keyframe.interpolation = interpolation
+
+
+def iter_action_fcurves(action):
+	seen = set()
+	for fcurve in safe_iter_collection(getattr(action, "fcurves", None)):
+		identifier = id(fcurve)
+		if identifier not in seen:
+			seen.add(identifier)
+			yield fcurve
+
+	layers = getattr(action, "layers", None)
+	for layer in safe_iter_collection(layers):
+		for strip in safe_iter_collection(getattr(layer, "strips", None)):
+			for channelbag in safe_iter_collection(getattr(strip, "channelbags", None)):
+				for fcurve in safe_iter_collection(getattr(channelbag, "fcurves", None)):
+					identifier = id(fcurve)
+					if identifier not in seen:
+						seen.add(identifier)
+						yield fcurve
+
+			channelbag_for_slot = getattr(strip, "channelbag", None)
+			if not callable(channelbag_for_slot):
+				continue
+			for slot in safe_iter_collection(getattr(action, "slots", None)):
+				try:
+					channelbag = channelbag_for_slot(slot)
+				except Exception:
+					continue
+				for fcurve in safe_iter_collection(getattr(channelbag, "fcurves", None)):
+					identifier = id(fcurve)
+					if identifier not in seen:
+						seen.add(identifier)
+						yield fcurve
+
+
+def safe_iter_collection(collection):
+	if collection is None:
+		return ()
+	try:
+		return tuple(collection)
+	except TypeError:
+		return ()
+	except ReferenceError:
+		return ()
+
+
 def write_video_properties(obj, image, filepath: str, source_width: int, source_height: int, plane_width: float, plane_height: float) -> None:
 	obj["cab87_video_plane"] = True
 	obj["cab87_video_path"] = filepath
@@ -393,6 +1632,12 @@ def write_video_properties(obj, image, filepath: str, source_width: int, source_
 	obj["cab87_plane_width"] = plane_width
 	obj["cab87_plane_height"] = plane_height
 	obj["cab87_aspect_ratio"] = source_width / source_height
+
+
+def write_xml_clip_properties(obj, metadata: dict) -> None:
+	obj["cab87_xml_import"] = True
+	for key, value in metadata.items():
+		obj[f"cab87_{key}"] = value
 
 
 def link_if_present(links, outputs, output_name: str, inputs, input_name: str) -> None:
@@ -443,7 +1688,14 @@ classes = (
 	CAB87_VideoPlaneSettings,
 	CAB87_OT_pick_video_plane,
 	CAB87_OT_create_video_plane_from_path,
+	CAB87_OT_apply_video_plane_opacity,
+	CAB87_OT_key_video_plane_opacity,
+	CAB87_OT_read_video_plane_opacity,
+	CAB87_OT_pick_xml_video_grid,
+	CAB87_OT_import_xml_video_grid_from_path,
 	CAB87_PT_video_plane_panel,
+	CAB87_PT_video_plane_create_panel,
+	CAB87_PT_video_plane_edit_panel,
 )
 
 

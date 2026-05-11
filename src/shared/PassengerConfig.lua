@@ -33,8 +33,8 @@ local PassengerConfig = {
 	passengerDiveArcHeight = 5,
 	passengerDiveLeanDegrees = 62,
 	passengerDiveRollDegrees = 26,
-	passengerSurfaceRaycastHeight = 18,
-	passengerSurfaceRaycastDepth = 60,
+	passengerSurfaceRaycastHeight = 260,
+	passengerSurfaceRaycastDepth = 620,
 	passengerMarkerSegments = 28,
 	passengerMarkerThickness = 0.4,
 	passengerMarkerHeightOffset = 1.4,
@@ -52,8 +52,8 @@ local PassengerConfig = {
 	passengerRouteUpdateInterval = 0.15,
 	passengerRouteSegmentLength = 32,
 	passengerRouteTurnKeepDegrees = 12,
-	passengerRouteRaycastHeight = 18,
-	passengerRouteRaycastDepth = 60,
+	passengerRouteRaycastHeight = 260,
+	passengerRouteRaycastDepth = 620,
 	passengerRouteGraphNodeMergeDistance = 5,
 	passengerRouteGraphMaxMergeHeight = 7,
 	passengerRouteJunctionExtraRadius = 10,
@@ -64,6 +64,9 @@ local PassengerConfig = {
 	passengerDeliveryArrowBounceHeight = 3.5,
 	passengerDeliveryArrowBounceSpeed = 2.4,
 	passengerWaitingCountAttribute = "Cab87WaitingPassengers",
+	passengerDebugLogging = true,
+	passengerDebugLogInterval = 2,
+	passengerDebugSampleCount = 6,
 }
 
 return PassengerConfig

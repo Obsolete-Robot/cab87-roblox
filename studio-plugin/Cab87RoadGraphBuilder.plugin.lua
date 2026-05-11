@@ -39,6 +39,9 @@ local IMPORT_PLANE_Y_SETTING = "cab87_road_graph_import_plane_y"
 local IMPORT_POINT_SCALE_SETTING = "cab87_road_graph_import_point_scale"
 local IMPORT_WIDTH_SCALE_SETTING = "cab87_road_graph_import_width_scale"
 local MAP_ID_SETTING = "cab87_road_graph_map_id"
+local GRAPH_COORDINATE_TRANSFORM_APPLIED_ATTR = "ImportedGlbCoordinateTransformApplied"
+local GRAPH_COORDINATE_TRANSFORM_NAME_ATTR = "ImportedGlbCoordinateTransform"
+local GRAPH_COORDINATE_TRANSFORM_MARKER_ATTR = "GraphCoordinateTransformApplied"
 local DEFAULT_MAP_ID = "cab87_map"
 local DEFAULT_IMPORT_PLANE_Y = 0.52
 local DEFAULT_IMPORT_SCALE = 1
@@ -48,6 +51,7 @@ local IMPORT_SCALE_STEP = 0.01
 local BAKE_CHUNK_SIZE_STUDS = 768
 local BAKE_MAX_SURFACE_TRIANGLES = 6000
 local BAKE_MAX_COLLISION_INPUT_TRIANGLES = 900
+local COLLISION_VERTICAL_CHUNK_SIZE_ATTR = "CollisionVerticalChunkSize"
 local AUTO_RELOAD_DELAY_SECONDS = 1.5
 local AUTO_RELOAD_RETRY_SECONDS = 1
 local AUTO_RELOAD_MAX_ATTEMPTS = 20
@@ -57,6 +61,17 @@ local MARKER_DESCRIPTIONS = {
 	CabRefuel = "Free refuel marker",
 	CabService = "Cab recover and garage/shop marker",
 	PlayerSpawn = "Player spawn marker",
+}
+
+local COORDINATE_TRANSFORM_CANDIDATES = {
+	{ name = "identity", xx = 1, xz = 0, zx = 0, zz = 1 },
+	{ name = "rotate_90_clockwise", xx = 0, xz = 1, zx = -1, zz = 0 },
+	{ name = "rotate_90_counterclockwise", xx = 0, xz = -1, zx = 1, zz = 0 },
+	{ name = "rotate_180", xx = -1, xz = 0, zx = 0, zz = -1 },
+	{ name = "mirror_x", xx = -1, xz = 0, zx = 0, zz = 1 },
+	{ name = "mirror_z", xx = 1, xz = 0, zx = 0, zz = -1 },
+	{ name = "swap_xz", xx = 0, xz = 1, zx = 1, zz = 0 },
+	{ name = "swap_xz_mirror", xx = 0, xz = -1, zx = -1, zz = 0 },
 }
 
 local toolbar = plugin:CreateToolbar("Cab87")
@@ -770,12 +785,43 @@ local function collectMeshParts(instance, target)
 	end
 end
 
+local function getImportOriginModel(instance)
+	if not instance then
+		return nil
+	end
+	if instance:IsA("Model") and instance.Name ~= ROOT_NAME then
+		return instance
+	end
+
+	local current = instance.Parent
+	local candidate = nil
+	while current and current ~= Workspace do
+		if current:IsA("Model") and current.Name ~= ROOT_NAME then
+			candidate = current
+		end
+		current = current.Parent
+	end
+	return candidate
+end
+
 local function selectedImportedMeshParts()
 	local selected = Selection:Get()
 	local parts = {}
 	local seen = {}
+	local rootModels = {}
+	local firstRootModel = nil
+	local rootModelCount = 0
 
 	for _, instance in ipairs(selected) do
+		local rootModel = getImportOriginModel(instance)
+		if rootModel and not rootModels[rootModel] then
+			rootModels[rootModel] = true
+			rootModelCount += 1
+			if not firstRootModel then
+				firstRootModel = rootModel
+			end
+		end
+
 		local collected = {}
 		collectMeshParts(instance, collected)
 		for _, part in ipairs(collected) do
@@ -786,7 +832,16 @@ local function selectedImportedMeshParts()
 		end
 	end
 
-	return parts
+	local importOriginCFrame = CFrame.new()
+	local importOriginName = "world origin"
+	if rootModelCount == 1 and firstRootModel then
+		importOriginCFrame = firstRootModel:GetPivot()
+		importOriginName = firstRootModel:GetFullName()
+	elseif rootModelCount > 1 then
+		importOriginName = "multiple selected roots"
+	end
+
+	return parts, importOriginCFrame, importOriginName, rootModelCount
 end
 
 local function indexMeshPartsByName(parts)
@@ -870,6 +925,117 @@ local function manifestSetting(manifest, key)
 	return settings[key]
 end
 
+local function finiteNumber(value)
+	local number = tonumber(value)
+	if number and number == number and number ~= math.huge and number ~= -math.huge then
+		return number
+	end
+	return nil
+end
+
+local function manifestBoundsCenter(chunk)
+	local bounds = type(chunk) == "table" and chunk.bounds
+	if type(bounds) ~= "table" then
+		return nil
+	end
+
+	local min = bounds.min
+	local max = bounds.max
+	if type(min) ~= "table" or type(max) ~= "table" then
+		return nil
+	end
+
+	local minX = finiteNumber(min.x)
+	local minY = finiteNumber(min.y)
+	local minZ = finiteNumber(min.z)
+	local maxX = finiteNumber(max.x)
+	local maxY = finiteNumber(max.y)
+	local maxZ = finiteNumber(max.z)
+	if not (minX and minY and minZ and maxX and maxY and maxZ) then
+		return nil
+	end
+
+	return Vector3.new((minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5)
+end
+
+local function coordinateTransformPosition(position, transform)
+	if typeof(position) ~= "Vector3" or not transform then
+		return position
+	end
+
+	local x = transform.xx * position.X + transform.xz * position.Z + transform.offsetX
+	local z = transform.zx * position.X + transform.zz * position.Z + transform.offsetZ
+	return Vector3.new(x, position.Y, z)
+end
+
+local function coordinateTransformDirection(direction, transform)
+	if typeof(direction) ~= "Vector3" or not transform then
+		return direction
+	end
+
+	local transformed = Vector3.new(
+		transform.xx * direction.X + transform.xz * direction.Z,
+		0,
+		transform.zx * direction.X + transform.zz * direction.Z
+	)
+	if transformed.Magnitude <= 0.001 then
+		return Vector3.new(0, 0, 1)
+	end
+	return transformed.Unit
+end
+
+local function coordinateTransformCFrame(cframe, transform)
+	if typeof(cframe) ~= "CFrame" or not transform then
+		return cframe
+	end
+
+	local position = coordinateTransformPosition(cframe.Position, transform)
+	local look = coordinateTransformDirection(cframe.LookVector, transform)
+	return CFrame.lookAt(position, position + look)
+end
+
+local function isCoordinateTransformNoop(transform)
+	if not transform then
+		return true
+	end
+	return transform.xx == 1
+		and transform.xz == 0
+		and transform.zx == 0
+		and transform.zz == 1
+		and math.abs(transform.offsetX or 0) <= 0.01
+		and math.abs(transform.offsetZ or 0) <= 0.01
+end
+
+local function setCoordinateTransformAttributes(instance, transform)
+	if not (instance and transform) then
+		return
+	end
+
+	instance:SetAttribute(GRAPH_COORDINATE_TRANSFORM_NAME_ATTR, tostring(transform.name or "unknown"))
+	instance:SetAttribute("ImportedGlbCoordinateTransformError", finiteNumber(transform.error) or 0)
+	instance:SetAttribute("ImportedGlbCoordinateTransformSamples", finiteNumber(transform.sampleCount) or 0)
+	instance:SetAttribute("ImportedGlbCoordinateOffsetX", finiteNumber(transform.offsetX) or 0)
+	instance:SetAttribute("ImportedGlbCoordinateOffsetZ", finiteNumber(transform.offsetZ) or 0)
+	instance:SetAttribute("ImportedGlbCoordinateXX", finiteNumber(transform.xx) or 1)
+	instance:SetAttribute("ImportedGlbCoordinateXZ", finiteNumber(transform.xz) or 0)
+	instance:SetAttribute("ImportedGlbCoordinateZX", finiteNumber(transform.zx) or 0)
+	instance:SetAttribute("ImportedGlbCoordinateZZ", finiteNumber(transform.zz) or 1)
+end
+
+local function coordinateTransformSummary(transform)
+	if not transform then
+		return "unknown coordinate transform"
+	end
+	return string.format(
+		"%s offset=(%.2f, %.2f), error=%.3f, samples=%d",
+		tostring(transform.name or "unknown"),
+		finiteNumber(transform.offsetX) or 0,
+		finiteNumber(transform.offsetZ) or 0,
+		finiteNumber(transform.error) or 0,
+		math.floor(finiteNumber(transform.sampleCount) or 0)
+	)
+end
+
 local function firstListValues(values, maxCount)
 	local result = {}
 	for index = 1, math.min(#values, maxCount) do
@@ -896,9 +1062,10 @@ local function promptMeshManifest()
 	return decodeMeshManifest(contents)
 end
 
-local function applyManifestPartOptions(part, chunk, mapIdValue)
+local function applyManifestPartOptions(part, chunk, mapIdValue, manifest)
 	local kind = tostring(chunk.kind or "surface")
 	local isCollision = kind == "collision"
+	local collisionVerticalChunkSize = tonumber(manifestSetting(manifest, "collisionVerticalChunkSize"))
 
 	part.Name = tostring(chunk.name or part.Name)
 	part.Anchored = true
@@ -932,34 +1099,273 @@ local function applyManifestPartOptions(part, chunk, mapIdValue)
 	part:SetAttribute("TriangleCount", tonumber(chunk.triangleCount) or nil)
 	part:SetAttribute("InputTriangleCount", tonumber(chunk.inputTriangleCount) or nil)
 	part:SetAttribute("MeshChunkKey", tostring(chunk.chunkKey or ""))
+	part:SetAttribute("MeshChunkY", tonumber(chunk.chunkY) or nil)
 	part:SetAttribute("MeshBatchIndex", tonumber(chunk.batchIndex) or nil)
 
 	if isCollision or chunk.driveSurface == true then
 		part:SetAttribute("DriveSurface", true)
+	end
+	if isCollision and collisionVerticalChunkSize and collisionVerticalChunkSize > 0 then
+		part:SetAttribute(COLLISION_VERTICAL_CHUNK_SIZE_ATTR, collisionVerticalChunkSize)
 	end
 	if tostring(chunk.surfaceType or "") == "polygonFill" then
 		part:SetAttribute("BakedPolygonFillMesh", true)
 	end
 end
 
-local function applyImportedMeshTransform(part)
-	if part:GetAttribute("ImportTransformApplied") == true then
-		return
-	end
-
+local function normalizeImportedCFrame(cframe, importOriginCFrame)
 	local pointScale = importPointScale
 	local planeY = importPlaneY
-	local position = part.Position
-	local rotation = part.CFrame - position
-	part.Size *= pointScale
-	part.CFrame = CFrame.new(
+	local localCFrame = if importOriginCFrame then importOriginCFrame:ToObjectSpace(cframe) else cframe
+	local position = localCFrame.Position
+	local rotation = localCFrame - position
+	return CFrame.new(
 		position.X * pointScale,
 		planeY + position.Y * pointScale,
 		position.Z * pointScale
 	) * rotation
+end
+
+local function setImportOriginAttributes(instance, importOriginCFrame)
+	if not importOriginCFrame then
+		return
+	end
+	instance:SetAttribute("ImportOriginX", importOriginCFrame.Position.X)
+	instance:SetAttribute("ImportOriginY", importOriginCFrame.Position.Y)
+	instance:SetAttribute("ImportOriginZ", importOriginCFrame.Position.Z)
+end
+
+local function importedLocalPosition(part, importOriginCFrame)
+	local cframe = if importOriginCFrame then importOriginCFrame:ToObjectSpace(part.CFrame) else part.CFrame
+	return cframe.Position
+end
+
+local function inferImportedCoordinateTransform(matches, importOriginCFrame)
+	local samples = {}
+	for _, match in ipairs(matches or {}) do
+		local part = match.part
+		local manifestCenter = manifestBoundsCenter(match.chunk)
+		if part and part:IsA("BasePart") and manifestCenter then
+			table.insert(samples, {
+				expected = manifestCenter,
+				imported = importedLocalPosition(part, importOriginCFrame),
+			})
+		end
+	end
+
+	if #samples < 2 then
+		local identity = table.clone(COORDINATE_TRANSFORM_CANDIDATES[1])
+		local sample = samples[1]
+		identity.offsetX = if sample then sample.imported.X - sample.expected.X else 0
+		identity.offsetZ = if sample then sample.imported.Z - sample.expected.Z else 0
+		identity.error = 0
+		identity.sampleCount = #samples
+		return identity
+	end
+
+	local best = nil
+	local evaluated = {}
+	for _, candidate in ipairs(COORDINATE_TRANSFORM_CANDIDATES) do
+		local sumOffsetX = 0
+		local sumOffsetZ = 0
+		for _, sample in ipairs(samples) do
+			local expected = sample.expected
+			local transformedX = candidate.xx * expected.X + candidate.xz * expected.Z
+			local transformedZ = candidate.zx * expected.X + candidate.zz * expected.Z
+			sumOffsetX += sample.imported.X - transformedX
+			sumOffsetZ += sample.imported.Z - transformedZ
+		end
+
+		local offsetX = sumOffsetX / #samples
+		local offsetZ = sumOffsetZ / #samples
+		local squaredError = 0
+		for _, sample in ipairs(samples) do
+			local expected = sample.expected
+			local transformedX = candidate.xx * expected.X + candidate.xz * expected.Z + offsetX
+			local transformedZ = candidate.zx * expected.X + candidate.zz * expected.Z + offsetZ
+			local dx = sample.imported.X - transformedX
+			local dz = sample.imported.Z - transformedZ
+			squaredError += dx * dx + dz * dz
+		end
+
+		local transform = {
+			name = candidate.name,
+			xx = candidate.xx,
+			xz = candidate.xz,
+			zx = candidate.zx,
+			zz = candidate.zz,
+			offsetX = offsetX,
+			offsetZ = offsetZ,
+			error = math.sqrt(squaredError / #samples),
+			sampleCount = #samples,
+		}
+		table.insert(evaluated, transform)
+
+		if not best or transform.error < best.error - 0.001 then
+			best = transform
+		end
+	end
+	table.sort(evaluated, function(a, b)
+		return a.error < b.error
+	end)
+	for index = 1, math.min(#evaluated, 8) do
+		local transform = evaluated[index]
+		print("[cab87 road graph builder] coordinate transform candidate " .. tostring(index) .. ": " .. coordinateTransformSummary(transform))
+	end
+
+	return best
+end
+
+local function applyImportedMeshTransform(part, importOriginCFrame)
+	if part:GetAttribute("ImportTransformApplied") == true then
+		return
+	end
+
+	part.Size *= importPointScale
+	part.CFrame = normalizeImportedCFrame(part.CFrame, importOriginCFrame)
 	part:SetAttribute("ImportTransformApplied", true)
-	part:SetAttribute("ImportPlaneY", planeY)
-	part:SetAttribute("ImportPointScale", pointScale)
+	part:SetAttribute("ImportPlaneY", importPlaneY)
+	part:SetAttribute("ImportPointScale", importPointScale)
+	setImportOriginAttributes(part, importOriginCFrame)
+end
+
+local function getSelectedPartsBounds(parts)
+	local min = Vector3.new(math.huge, math.huge, math.huge)
+	local max = Vector3.new(-math.huge, -math.huge, -math.huge)
+	local hasPart = false
+
+	for _, part in ipairs(parts or {}) do
+		if part and part:IsA("BasePart") then
+			hasPart = true
+			local radius = part.Size.Magnitude * 0.5
+			local position = part.Position
+			min = Vector3.new(
+				math.min(min.X, position.X - radius),
+				math.min(min.Y, position.Y - radius),
+				math.min(min.Z, position.Z - radius)
+			)
+			max = Vector3.new(
+				math.max(max.X, position.X + radius),
+				math.max(max.Y, position.Y + radius),
+				math.max(max.Z, position.Z + radius)
+			)
+		end
+	end
+
+	if not hasPart then
+		return nil
+	end
+
+	return {
+		min = min,
+		max = max,
+	}
+end
+
+local function boundsContainsPosition(bounds, position, padding)
+	if not bounds or typeof(position) ~= "Vector3" then
+		return false
+	end
+	padding = tonumber(padding) or 0
+	return position.X >= bounds.min.X - padding
+		and position.X <= bounds.max.X + padding
+		and position.Y >= bounds.min.Y - padding
+		and position.Y <= bounds.max.Y + padding
+		and position.Z >= bounds.min.Z - padding
+		and position.Z <= bounds.max.Z + padding
+end
+
+local function normalizeMarkersInImportedBounds(root, importOriginCFrame, sourceBounds)
+	local markersFolder = root and root:FindFirstChild(MARKERS_NAME)
+	if not (markersFolder and markersFolder:IsA("Folder")) then
+		return 0
+	end
+
+	local transformed = 0
+	local markerPadding = 250
+	for _, descendant in ipairs(markersFolder:GetDescendants()) do
+		if descendant:IsA("BasePart")
+			and descendant:GetAttribute("ImportTransformApplied") ~= true
+			and boundsContainsPosition(sourceBounds, descendant.Position, markerPadding)
+		then
+			descendant.CFrame = normalizeImportedCFrame(descendant.CFrame, importOriginCFrame)
+			descendant:SetAttribute("ImportTransformApplied", true)
+			descendant:SetAttribute("ImportPlaneY", importPlaneY)
+			descendant:SetAttribute("ImportPointScale", importPointScale)
+			setImportOriginAttributes(descendant, importOriginCFrame)
+			transformed += 1
+		end
+	end
+
+	return transformed
+end
+
+local function transformGraphCoordinateMarkers(root, transform)
+	if isCoordinateTransformNoop(transform) then
+		return 0
+	end
+
+	local markersFolder = root and root:FindFirstChild(MARKERS_NAME)
+	if not (markersFolder and markersFolder:IsA("Folder")) then
+		return 0
+	end
+
+	local transformed = 0
+	for _, descendant in ipairs(markersFolder:GetDescendants()) do
+		if descendant:IsA("BasePart")
+			and descendant:GetAttribute("ImportTransformApplied") ~= true
+			and descendant:GetAttribute(GRAPH_COORDINATE_TRANSFORM_MARKER_ATTR) ~= true
+		then
+			descendant.CFrame = coordinateTransformCFrame(descendant.CFrame, transform)
+			descendant:SetAttribute(GRAPH_COORDINATE_TRANSFORM_MARKER_ATTR, true)
+			setCoordinateTransformAttributes(descendant, transform)
+			transformed += 1
+		end
+	end
+
+	return transformed
+end
+
+local function transformGraphToImportedCoordinates(root, RoadGraphData, transform)
+	local graphFolder = root and root:FindFirstChild(ROAD_GRAPH_NAME)
+	if not (graphFolder and graphFolder:IsA("Folder")) then
+		return 0, "missing"
+	end
+	if graphFolder:GetAttribute(GRAPH_COORDINATE_TRANSFORM_APPLIED_ATTR) == true then
+		return 0, "already"
+	end
+
+	if isCoordinateTransformNoop(transform) then
+		graphFolder:SetAttribute(GRAPH_COORDINATE_TRANSFORM_APPLIED_ATTR, true)
+		setCoordinateTransformAttributes(graphFolder, transform)
+		return 0, "identity"
+	end
+
+	local graph = RoadGraphData.collectGraph(root)
+	if not graph then
+		return 0, "missing"
+	end
+
+	local transformedPoints = 0
+	for _, node in ipairs(graph.nodes or {}) do
+		if typeof(node.point) == "Vector3" then
+			node.point = coordinateTransformPosition(node.point, transform)
+			transformedPoints += 1
+		end
+	end
+	for _, edge in ipairs(graph.edges or {}) do
+		for index, point in ipairs(edge.points or {}) do
+			if typeof(point) == "Vector3" then
+				edge.points[index] = coordinateTransformPosition(point, transform)
+				transformedPoints += 1
+			end
+		end
+	end
+
+	graphFolder = RoadGraphData.writeGraph(root, graph)
+	graphFolder:SetAttribute(GRAPH_COORDINATE_TRANSFORM_APPLIED_ATTR, true)
+	setCoordinateTransformAttributes(graphFolder, transform)
+	return transformedPoints, "applied"
 end
 
 local function cloneMinimapPart(sourcePart, parent, mapIdValue)
@@ -995,9 +1401,28 @@ local function adoptImportedMeshFromManifest()
 	end
 	refreshImportScales()
 
-	local selectedParts = selectedImportedMeshParts()
+	local root = Workspace:FindFirstChild(ROOT_NAME)
+	if not (root and root:IsA("Model")) then
+		setStatus("Adopt skipped: import the road graph JSON first so Cab87RoadEditor/RoadGraph exists.")
+		return nil
+	end
+	local RoadGraphData, graphDataErr = getGraphDataModule()
+	if graphDataErr then
+		setStatus("Adopt skipped: " .. tostring(graphDataErr))
+		return nil
+	end
+	if not RoadGraphData.hasGraph(root) then
+		setStatus("Adopt skipped: import the matching road graph JSON before adopting the GLB mesh.")
+		return nil
+	end
+
+	local selectedParts, importOriginCFrame, importOriginName, rootModelCount = selectedImportedMeshParts()
 	if #selectedParts == 0 then
 		setStatus("Select the imported GLB model or its MeshParts before adopting.")
+		return nil
+	end
+	if rootModelCount ~= 1 then
+		setStatus("Adopt skipped: select the single imported GLB model so the map can be zeroed from its import pivot.")
 		return nil
 	end
 
@@ -1031,8 +1456,16 @@ local function adoptImportedMeshFromManifest()
 		return nil
 	end
 
+	local coordinateTransform = inferImportedCoordinateTransform(matches, importOriginCFrame)
+
 	ChangeHistoryService:SetWaypoint("cab87 road graph before imported mesh adopt")
-	local root = getOrCreateRoot()
+	local transformedGraphPoints, graphTransformStatus = transformGraphToImportedCoordinates(root, RoadGraphData, coordinateTransform)
+	local importedMarkerBounds = getSelectedPartsBounds(selectedParts)
+	local transformedImportedMarkers = normalizeMarkersInImportedBounds(root, importOriginCFrame, importedMarkerBounds)
+	local transformedGraphMarkers = if graphTransformStatus == "applied"
+		then transformGraphCoordinateMarkers(root, coordinateTransform)
+		else 0
+	local transformedMarkers = transformedImportedMarkers + transformedGraphMarkers
 	clearChild(root, BAKED_RUNTIME_BUILDING_NAME)
 
 	local bakedRoot = Instance.new("Model")
@@ -1043,6 +1476,7 @@ local function adoptImportedMeshFromManifest()
 	bakedRoot:SetAttribute("MeshManifestSchema", manifest.schema)
 	bakedRoot:SetAttribute("MeshManifestVersion", manifest.version)
 	setBakeScaleAttributes(bakedRoot)
+	setCoordinateTransformAttributes(bakedRoot, coordinateTransform)
 	bakedRoot.Parent = root
 
 	local surfacesFolder = createFolder(bakedRoot, BAKED_SURFACES_NAME)
@@ -1054,6 +1488,10 @@ local function adoptImportedMeshFromManifest()
 	collisionFolder:SetAttribute("MapId", mapId)
 	collisionFolder:SetAttribute("GeneratedBy", BAKED_MESH_GENERATOR_NAME)
 	collisionFolder:SetAttribute("MeshMode", "importedGlbManifest")
+	collisionFolder:SetAttribute(
+		COLLISION_VERTICAL_CHUNK_SIZE_ATTR,
+		tonumber(manifestSetting(manifest, "collisionVerticalChunkSize")) or nil
+	)
 
 	local minimapFolder = createFolder(bakedRoot, MINIMAP_ROAD_MESH_NAME)
 	minimapFolder:SetAttribute("MapId", mapId)
@@ -1076,8 +1514,8 @@ local function adoptImportedMeshFromManifest()
 		local chunk = match.chunk
 		local part = match.part
 		local isCollision = tostring(chunk.kind or "surface") == "collision"
-		applyImportedMeshTransform(part)
-		applyManifestPartOptions(part, chunk, mapId)
+		applyImportedMeshTransform(part, importOriginCFrame)
+		applyManifestPartOptions(part, chunk, mapId, manifest)
 		part.Parent = if isCollision then collisionFolder else surfacesFolder
 
 		local triangleCount = tonumber(chunk.triangleCount) or 0
@@ -1136,6 +1574,22 @@ local function adoptImportedMeshFromManifest()
 	assets:SetAttribute("ChunkSize", tonumber(manifestSetting(manifest, "chunkSize")) or nil)
 	assets:SetAttribute("MaxSurfaceTriangles", tonumber(manifestSetting(manifest, "maxSurfaceTriangles")) or nil)
 	assets:SetAttribute("MaxCollisionInputTriangles", tonumber(manifestSetting(manifest, "maxCollisionInputTriangles")) or nil)
+	assets:SetAttribute(
+		COLLISION_VERTICAL_CHUNK_SIZE_ATTR,
+		tonumber(manifestSetting(manifest, "collisionVerticalChunkSize")) or nil
+	)
+	assets:SetAttribute("ImportOriginModel", tostring(importOriginName or ""))
+	assets:SetAttribute("TransformedMarkerCount", transformedMarkers)
+	assets:SetAttribute("TransformedImportedMarkerCount", transformedImportedMarkers)
+	assets:SetAttribute("TransformedGraphMarkerCount", transformedGraphMarkers)
+	assets:SetAttribute("TransformedGraphPointCount", transformedGraphPoints)
+	assets:SetAttribute("GraphCoordinateTransformStatus", tostring(graphTransformStatus or ""))
+	setCoordinateTransformAttributes(assets, coordinateTransform)
+	if importOriginCFrame then
+		assets:SetAttribute("ImportOriginX", importOriginCFrame.Position.X)
+		assets:SetAttribute("ImportOriginY", importOriginCFrame.Position.Y)
+		assets:SetAttribute("ImportOriginZ", importOriginCFrame.Position.Z)
+	end
 
 	surfacesFolder:SetAttribute("SurfacePartCount", surfaceParts)
 	collisionFolder:SetAttribute("CollisionPartCount", collisionParts)
@@ -1144,17 +1598,23 @@ local function adoptImportedMeshFromManifest()
 	Selection:Set({ bakedRoot })
 	ChangeHistoryService:SetWaypoint("cab87 road graph after imported mesh adopt")
 	setStatus(string.format(
-		"Adopted imported GLB mesh for map %s: %d surface parts, %d collision parts, %d minimap parts.",
+		"Adopted imported GLB mesh for map %s: %d surface parts, %d collision parts, %d minimap parts, %d transformed markers. Graph transform: %s (%s, %d graph points).",
 		mapId,
 		surfaceParts,
 		collisionParts,
-		minimapParts
+		minimapParts,
+		transformedMarkers,
+		coordinateTransformSummary(coordinateTransform),
+		tostring(graphTransformStatus or "unknown"),
+		transformedGraphPoints
 	))
 
 	return {
 		surfaceParts = surfaceParts,
 		collisionParts = collisionParts,
 		minimapParts = minimapParts,
+		graphTransformStatus = graphTransformStatus,
+		transformedGraphPoints = transformedGraphPoints,
 	}
 end
 

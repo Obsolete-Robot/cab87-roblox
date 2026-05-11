@@ -13,6 +13,7 @@ local RoadConfig = {
 	roadGraphDefaultCrosswalkWidth = 14,
 	roadGraphDefaultSidewalkWidth = 12,
 	roadGraphMeshResolution = 20,
+	roadGraphCollisionVerticalChunkSize = 12,
 }
 
 return RoadConfig

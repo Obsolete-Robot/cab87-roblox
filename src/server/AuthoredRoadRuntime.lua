@@ -25,10 +25,23 @@ local ROAD_GRAPH_RUNTIME_MAX_COLLISION_INPUT_TRIANGLES = 900
 local MINIMAP_ROAD_MESH_NAME = "MinimapRoadMesh"
 local MINIMAP_ROAD_MESH_GENERATOR = "Cab87MinimapRoadMesh"
 local MINIMAP_ROAD_MESH_VERSION = 3
+local COLLISION_VERTICAL_CHUNK_SIZE_ATTR = "CollisionVerticalChunkSize"
 local MARKER_TYPE_ATTR = "Cab87MarkerType"
 local ROAD_SOURCE_AUTO = "Auto"
 local ROAD_SOURCE_ROAD_GRAPH = "RoadGraph"
 local ROAD_SOURCE_LEGACY_CURVE = "LegacyCurve"
+local GRAPH_COORDINATE_DEBUG_ATTRIBUTES = {
+	"ImportedGlbCoordinateTransform",
+	"ImportedGlbCoordinateTransformApplied",
+	"ImportedGlbCoordinateTransformError",
+	"ImportedGlbCoordinateTransformSamples",
+	"ImportedGlbCoordinateOffsetX",
+	"ImportedGlbCoordinateOffsetZ",
+	"ImportedGlbCoordinateXX",
+	"ImportedGlbCoordinateXZ",
+	"ImportedGlbCoordinateZX",
+	"ImportedGlbCoordinateZZ",
+}
 
 local RoadGraphMesher = nil
 local RoadMeshBuilder = nil
@@ -67,6 +80,24 @@ local function safeProperty(instance, propertyName)
 		return value
 	end
 	return nil
+end
+
+local function copyGraphCoordinateDebugAttributes(sourceRoot, targetRoot, world)
+	local sourceGraph = sourceRoot and sourceRoot:FindFirstChild(RoadGraphData.ROAD_GRAPH_NAME)
+	local targetGraph = targetRoot and targetRoot:FindFirstChild(RoadGraphData.RUNTIME_DATA_NAME)
+	if not (sourceGraph and targetGraph) then
+		return
+	end
+
+	for _, attributeName in ipairs(GRAPH_COORDINATE_DEBUG_ATTRIBUTES) do
+		local value = sourceGraph:GetAttribute(attributeName)
+		if value ~= nil then
+			targetGraph:SetAttribute(attributeName, value)
+			if world then
+				world:SetAttribute(attributeName, value)
+			end
+		end
+	end
 end
 
 local function describeMinimapPart(part)
@@ -463,6 +494,7 @@ local function createRuntimeGraphMeshes(world, meshData)
 		generatedBy = ROAD_GRAPH_RUNTIME_MESH_GENERATOR,
 		chunkSize = ROAD_GRAPH_RUNTIME_CHUNK_STUDS,
 		maxCollisionInputTriangles = ROAD_GRAPH_RUNTIME_MAX_COLLISION_INPUT_TRIANGLES,
+		collisionVerticalChunkSize = Config.roadGraphCollisionVerticalChunkSize,
 		collisionThickness = 0.2,
 		collisionSurfaceOffset = 0,
 		debugBudgetLogging = Config.roadGraphMeshBudgetDebugLogging == true,
@@ -507,6 +539,9 @@ local function configureBakedCollisionClone(part)
 	part.CanQuery = true
 	part.Transparency = 1
 	part.CastShadow = false
+	pcall(function()
+		part.CollisionFidelity = Enum.CollisionFidelity.PreciseConvexDecomposition
+	end)
 	part:SetAttribute("DriveSurface", true)
 	part:SetAttribute("RuntimeClone", true)
 end
@@ -557,7 +592,42 @@ local function canUseImportedBakedRuntime(root)
 	return bakedContainer:GetAttribute("BakeMode") == "importedGlbManifest"
 end
 
-local function useImportedBakedGraphMeshes(root, world)
+local function meshChunkKeyHasVerticalBand(value)
+	if type(value) ~= "string" then
+		return false
+	end
+
+	local componentCount = 0
+	for _ in string.gmatch(value, "[^:]+") do
+		componentCount += 1
+	end
+	return componentCount >= 3
+end
+
+local function getImportedCollisionVerticalChunkSize(root, sourceCollision)
+	local assets = root and root:FindFirstChild(ASSETS_NAME)
+	local value = sourceCollision and sourceCollision:GetAttribute(COLLISION_VERTICAL_CHUNK_SIZE_ATTR)
+		or assets and assets:GetAttribute(COLLISION_VERTICAL_CHUNK_SIZE_ATTR)
+	local number = tonumber(value)
+	if number and number > 0 then
+		return number
+	end
+
+	for _, descendant in ipairs(sourceCollision and sourceCollision:GetDescendants() or {}) do
+		if descendant:IsA("BasePart") then
+			number = tonumber(descendant:GetAttribute(COLLISION_VERTICAL_CHUNK_SIZE_ATTR))
+			if number and number > 0 then
+				return number
+			end
+			if meshChunkKeyHasVerticalBand(descendant:GetAttribute("MeshChunkKey")) then
+				return tonumber(Config.roadGraphCollisionVerticalChunkSize) or 12
+			end
+		end
+	end
+	return nil
+end
+
+local function useImportedBakedGraphMeshes(root, world, graph)
 	if not canUseImportedBakedRuntime(root) then
 		return nil
 	end
@@ -570,7 +640,40 @@ local function useImportedBakedGraphMeshes(root, world)
 	end
 
 	local meshFolder, visibleParts = cloneBakedPartFolder(sourceSurfaces, world, BAKED_SURFACES_NAME, configureBakedSurfaceClone)
-	local collisionFolder, collisionParts = cloneBakedPartFolder(sourceCollision, world, BAKED_COLLISION_NAME, configureBakedCollisionClone)
+	local collisionFolder = nil
+	local collisionParts = {}
+	local errors = {}
+	local source = "imported-glb-manifest"
+	local meshData = nil
+	local collisionVerticalChunkSize = getImportedCollisionVerticalChunkSize(root, sourceCollision)
+	if collisionVerticalChunkSize then
+		collisionFolder, collisionParts = cloneBakedPartFolder(sourceCollision, world, BAKED_COLLISION_NAME, configureBakedCollisionClone)
+	else
+		if not graph then
+			if meshFolder then
+				meshFolder:Destroy()
+			end
+			return nil, { "imported GLB collision is legacy and no graph was available for runtime collision" }
+		end
+
+		roadDebugWarn(
+			"imported GLB collision lacks vertical chunk metadata; using runtime graph collision under imported visuals"
+		)
+		meshData = getRoadGraphMesher().buildNetworkMesh(graph, graph.settings)
+		local runtimeCollisionBuild = createRuntimeGraphMeshes(world, meshData)
+		collisionFolder = runtimeCollisionBuild.collisionFolder
+		collisionParts = runtimeCollisionBuild.collisionParts
+		errors = runtimeCollisionBuild.errors or {}
+		source = "imported-glb-surfaces-runtime-collision"
+		if collisionFolder then
+			collisionFolder:SetAttribute("CollisionSource", source)
+			collisionFolder:SetAttribute(
+				COLLISION_VERTICAL_CHUNK_SIZE_ATTR,
+				tonumber(Config.roadGraphCollisionVerticalChunkSize) or nil
+			)
+		end
+	end
+
 	if #collisionParts == 0 then
 		if meshFolder then
 			meshFolder:Destroy()
@@ -587,9 +690,9 @@ local function useImportedBakedGraphMeshes(root, world)
 		visibleParts = visibleParts,
 		collisionParts = collisionParts,
 		driveSurfaces = collisionParts,
-		errors = {},
-		source = "imported-glb-manifest",
-	}
+		errors = errors,
+		source = source,
+	}, nil, meshData
 end
 
 local function buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles, source)
@@ -974,12 +1077,14 @@ local function createGraphWorld(root, graph)
 	world.Parent = Workspace
 
 	RoadGraphData.writeGraph(world, graph, RoadGraphData.RUNTIME_DATA_NAME)
+	copyGraphCoordinateDebugAttributes(root, world, world)
 
 	local meshData = nil
-	local meshBuild, importedMeshErrors = useImportedBakedGraphMeshes(root, world)
+	local meshBuild, importedMeshErrors, importedCollisionMeshData = useImportedBakedGraphMeshes(root, world, graph)
 	local importedMeshBuild = nil
 	if meshBuild then
 		importedMeshBuild = meshBuild
+		meshData = importedCollisionMeshData
 		world:SetAttribute("NeedsClientRoadMesh", false)
 		roadDebugLog("using imported GLB road graph meshes: visibleParts=%d collisionParts=%d", #meshBuild.visibleParts, #meshBuild.collisionParts)
 	else
@@ -1046,7 +1151,7 @@ local function createGraphWorld(root, graph)
 	world:SetAttribute("MinimapRoadMeshDedicated", minimapMesh ~= nil)
 
 	roadDebugLog(
-		"road graph world built: nodes=%d edges=%d roadTris=%d roadEdgeTris=%d roadHubTris=%d sidewalkTris=%d crosswalkTris=%d polygonFillTris=%d driveSurfaces=%d spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
+		"road graph world built: nodes=%d edges=%d roadTris=%d roadEdgeTris=%d roadHubTris=%d sidewalkTris=%d crosswalkTris=%d polygonFillTris=%d driveSurfaces=%d meshSource=%s transform=%s error=%s offset=(%s,%s) spawn=(%.1f, %.1f, %.1f) forward=(%.2f, %.2f, %.2f)",
 		#(graph.nodes or {}),
 		#(graph.edges or {}),
 		roadTriangleCount,
@@ -1056,6 +1161,11 @@ local function createGraphWorld(root, graph)
 		crosswalkTriangleCount,
 		polygonFillTriangleCount,
 		#driveSurfaces,
+		tostring(meshBuild.source or "runtime"),
+		tostring(world:GetAttribute("ImportedGlbCoordinateTransform")),
+		tostring(world:GetAttribute("ImportedGlbCoordinateTransformError")),
+		tostring(world:GetAttribute("ImportedGlbCoordinateOffsetX")),
+		tostring(world:GetAttribute("ImportedGlbCoordinateOffsetZ")),
 		spawnPose.position.X,
 		spawnPose.position.Y,
 		spawnPose.position.Z,
