@@ -7,11 +7,10 @@ This application procedurally generates and visualizes complex road intersection
 Run locally:
 
 ```sh
-npm ci
-npm run dev
+./run.sh
 ```
 
-Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for distance-based mesh density, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. You can also export the current generated mesh as OBJ or GLB from the header; GLB keeps material colors, while OBJ is mostly geometry/object names. Use **Roblox** export for the large-map workflow: it downloads a chunked GLB plus `cab87-road-mesh.manifest.json`, with visual and collision objects split by tile, elevation band, and triangle budget. In Studio, import the JSON, import the GLB with the 3D Importer, select the imported model, then click **Adopt Imported GLB Mesh** in the plugin and choose the manifest.
+Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for distance-based mesh density, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. You can also export the current generated mesh as OBJ or GLB from the header; GLB keeps material colors, while OBJ is mostly geometry/object names. Use **Roblox** export for the large-map workflow: it downloads `cab87-road-mesh.zip`, containing a chunked GLB plus `cab87-road-mesh.manifest.json`, with visual and collision objects split by tile, elevation band, and triangle budget. The Roblox dropdown can also download the chunked GLB and manifest as individual files. In Studio, import the JSON, unzip and import the GLB with the 3D Importer, select the imported model, then click **Adopt Imported GLB Mesh** in the plugin and choose the manifest.
 
 Mesher changes must stay in parity with Roblox's Luau port in `src/shared/RoadGraphMesher.lua`.
 See [`../../docs/ROAD_MAKER_SYNC.md`](../../docs/ROAD_MAKER_SYNC.md) before changing

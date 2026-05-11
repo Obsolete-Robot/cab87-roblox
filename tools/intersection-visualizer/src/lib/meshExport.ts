@@ -44,6 +44,9 @@ const ROBLOX_MAX_SURFACE_TRIANGLES = 6000;
 const ROBLOX_MAX_COLLISION_INPUT_TRIANGLES = 900;
 const ROBLOX_COLLISION_THICKNESS = 0.2;
 const ROBLOX_COLLISION_VERTICAL_CHUNK_SIZE = 12;
+const ROBLOX_PACKAGE_BASENAME = 'cab87-road-mesh';
+
+export type RobloxRoadMeshExportMode = 'zip' | 'glb' | 'manifest' | 'files';
 
 export function createTriangleGeometry(triangles: Point[][], yOffset = 0, defaultY = 4): THREE.BufferGeometry {
   const positions: number[] = [];
@@ -444,6 +447,125 @@ function downloadBlob(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+function createCrc32Table() {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < table.length; index++) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+}
+
+const CRC32_TABLE = createCrc32Table();
+
+function crc32(bytes: Uint8Array) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function toDosDateTime(date = new Date()) {
+  const year = Math.max(date.getFullYear(), 1980);
+  return {
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+  };
+}
+
+function writeUint16(view: DataView, offset: number, value: number) {
+  view.setUint16(offset, value, true);
+}
+
+function writeUint32(view: DataView, offset: number, value: number) {
+  view.setUint32(offset, value >>> 0, true);
+}
+
+function createZipBlob(files: { name: string; data: Uint8Array }[]) {
+  const encoder = new TextEncoder();
+  const dosDateTime = toDosDateTime();
+  const entries = files.map((file) => ({
+    ...file,
+    nameBytes: encoder.encode(file.name),
+    crc: crc32(file.data),
+    localHeaderOffset: 0,
+  }));
+
+  let localSize = 0;
+  for (const entry of entries) {
+    entry.localHeaderOffset = localSize;
+    localSize += 30 + entry.nameBytes.length + entry.data.length;
+  }
+
+  let centralDirectorySize = 0;
+  for (const entry of entries) {
+    centralDirectorySize += 46 + entry.nameBytes.length;
+  }
+
+  const endOfCentralDirectorySize = 22;
+  const zipBytes = new Uint8Array(localSize + centralDirectorySize + endOfCentralDirectorySize);
+  const view = new DataView(zipBytes.buffer);
+  let offset = 0;
+
+  for (const entry of entries) {
+    writeUint32(view, offset, 0x04034b50);
+    writeUint16(view, offset + 4, 20);
+    writeUint16(view, offset + 6, 0);
+    writeUint16(view, offset + 8, 0);
+    writeUint16(view, offset + 10, dosDateTime.time);
+    writeUint16(view, offset + 12, dosDateTime.date);
+    writeUint32(view, offset + 14, entry.crc);
+    writeUint32(view, offset + 18, entry.data.length);
+    writeUint32(view, offset + 22, entry.data.length);
+    writeUint16(view, offset + 26, entry.nameBytes.length);
+    writeUint16(view, offset + 28, 0);
+    offset += 30;
+    zipBytes.set(entry.nameBytes, offset);
+    offset += entry.nameBytes.length;
+    zipBytes.set(entry.data, offset);
+    offset += entry.data.length;
+  }
+
+  const centralDirectoryOffset = offset;
+  for (const entry of entries) {
+    writeUint32(view, offset, 0x02014b50);
+    writeUint16(view, offset + 4, 20);
+    writeUint16(view, offset + 6, 20);
+    writeUint16(view, offset + 8, 0);
+    writeUint16(view, offset + 10, 0);
+    writeUint16(view, offset + 12, dosDateTime.time);
+    writeUint16(view, offset + 14, dosDateTime.date);
+    writeUint32(view, offset + 16, entry.crc);
+    writeUint32(view, offset + 20, entry.data.length);
+    writeUint32(view, offset + 24, entry.data.length);
+    writeUint16(view, offset + 28, entry.nameBytes.length);
+    writeUint16(view, offset + 30, 0);
+    writeUint16(view, offset + 32, 0);
+    writeUint16(view, offset + 34, 0);
+    writeUint16(view, offset + 36, 0);
+    writeUint32(view, offset + 38, 0);
+    writeUint32(view, offset + 42, entry.localHeaderOffset);
+    offset += 46;
+    zipBytes.set(entry.nameBytes, offset);
+    offset += entry.nameBytes.length;
+  }
+
+  writeUint32(view, offset, 0x06054b50);
+  writeUint16(view, offset + 4, 0);
+  writeUint16(view, offset + 6, 0);
+  writeUint16(view, offset + 8, entries.length);
+  writeUint16(view, offset + 10, entries.length);
+  writeUint32(view, offset + 12, centralDirectorySize);
+  writeUint32(view, offset + 16, centralDirectoryOffset);
+  writeUint16(view, offset + 20, 0);
+
+  return new Blob([zipBytes], { type: 'application/zip' });
+}
+
 function disposeObject(root: THREE.Object3D) {
   root.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
@@ -478,26 +600,65 @@ export async function exportRoadMeshGlb(meshData: MeshData, filename = 'cab87-ro
   disposeObject(group);
 }
 
+async function createRobloxRoadMeshPayload(meshData: MeshData) {
+  const { group, manifest } = createRobloxRoadMeshExport(meshData);
+  try {
+    const result = await new GLTFExporter().parseAsync(group, {
+      binary: true,
+      onlyVisible: true,
+      trs: false,
+      forceIndices: true,
+    });
+
+    if (!(result instanceof ArrayBuffer)) {
+      throw new Error('Roblox GLB export did not produce binary output.');
+    }
+
+    return { glb: result, manifest };
+  } finally {
+    disposeObject(group);
+  }
+}
+
+function manifestJson(manifest: unknown) {
+  return JSON.stringify(manifest, null, 2);
+}
+
 export async function exportRoadMeshRobloxPackage(
   meshData: MeshData,
-  basename = 'cab87-road-mesh'
+  mode: RobloxRoadMeshExportMode = 'zip',
+  basename = ROBLOX_PACKAGE_BASENAME
 ) {
-  const { group, manifest } = createRobloxRoadMeshExport(meshData);
-  const result = await new GLTFExporter().parseAsync(group, {
-    binary: true,
-    onlyVisible: true,
-    trs: false,
-    forceIndices: true,
-  });
-
-  if (!(result instanceof ArrayBuffer)) {
-    throw new Error('Roblox GLB export did not produce binary output.');
+  if (mode === 'manifest') {
+    const { group, manifest } = createRobloxRoadMeshExport(meshData);
+    downloadBlob(
+      new Blob([manifestJson(manifest)], { type: 'application/json' }),
+      `${basename}.manifest.json`
+    );
+    disposeObject(group);
+    return;
   }
 
-  downloadBlob(new Blob([result], { type: 'model/gltf-binary' }), `${basename}.glb`);
-  downloadBlob(
-    new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }),
-    `${basename}.manifest.json`
-  );
-  disposeObject(group);
+  const { glb, manifest } = await createRobloxRoadMeshPayload(meshData);
+  const manifestText = manifestJson(manifest);
+
+  if (mode === 'zip') {
+    downloadBlob(
+      createZipBlob([
+        { name: `${basename}.glb`, data: new Uint8Array(glb) },
+        { name: `${basename}.manifest.json`, data: new TextEncoder().encode(manifestText) },
+      ]),
+      `${basename}.zip`
+    );
+    return;
+  }
+
+  downloadBlob(new Blob([glb], { type: 'model/gltf-binary' }), `${basename}.glb`);
+
+  if (mode === 'files') {
+    downloadBlob(
+      new Blob([manifestText], { type: 'application/json' }),
+      `${basename}.manifest.json`
+    );
+  }
 }

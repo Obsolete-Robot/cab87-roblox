@@ -8,7 +8,7 @@ import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import { drawNetwork2D } from './lib/render2d';
 import { buildNetworkMesh } from './lib/meshing';
-import { exportRoadMeshGlb, exportRoadMeshObj, exportRoadMeshRobloxPackage } from './lib/meshExport';
+import { exportRoadMeshGlb, exportRoadMeshObj, exportRoadMeshRobloxPackage, type RobloxRoadMeshExportMode } from './lib/meshExport';
 import {
   COLORS, ROAD_NETWORK_SCHEMA, ROAD_NETWORK_VERSION,
   sanitizeMeshResolution, DEFAULTS
@@ -316,9 +316,9 @@ export default function App() {
     }
   };
 
-  const handleExportRoblox = async () => {
+  const handleExportRoblox = async (mode: RobloxRoadMeshExportMode = 'zip') => {
     try {
-      await exportRoadMeshRobloxPackage(buildCurrentMesh());
+      await exportRoadMeshRobloxPackage(buildCurrentMesh(), mode);
     } catch (err) {
       console.error(err);
       alert('Failed to export Roblox mesh package. Check the browser console for details.');

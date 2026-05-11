@@ -1,5 +1,6 @@
-import React, { useRef } from 'react';
-import { Menu, X, Layers, Upload, Download, Box } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Menu, X, Layers, Upload, Download, Box, ChevronDown, FileArchive, FileJson } from 'lucide-react';
+import type { RobloxRoadMeshExportMode } from '../lib/meshExport';
 
 interface HeaderProps {
   isSidebarOpen: boolean;
@@ -8,7 +9,7 @@ interface HeaderProps {
   handleExport: () => void;
   handleExportObj: () => void;
   handleExportGlb: () => void;
-  handleExportRoblox: () => void;
+  handleExportRoblox: (mode?: RobloxRoadMeshExportMode) => void;
   showControlPoints: boolean;
   setShowControlPoints: (v: boolean) => void;
   is3DMode: boolean;
@@ -33,6 +34,12 @@ export default function Header({
   setShowMesh
 }: HeaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isRobloxMenuOpen, setIsRobloxMenuOpen] = useState(false);
+
+  const chooseRobloxExport = (mode: RobloxRoadMeshExportMode) => {
+    setIsRobloxMenuOpen(false);
+    handleExportRoblox(mode);
+  };
 
   return (
     <header className="h-14 lg:h-16 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-4 lg:px-6 shrink-0 relative z-30">
@@ -91,14 +98,72 @@ export default function Header({
           <Download className="w-4 h-4" />
           <span className="hidden lg:inline">GLB</span>
         </button>
-        <button
-          onClick={handleExportRoblox}
-          className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
-          title="Export Roblox GLB and Manifest"
+        <div
+          className="relative flex"
+          onBlur={(event) => {
+            const nextTarget = event.relatedTarget;
+            if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+              setIsRobloxMenuOpen(false);
+            }
+          }}
         >
-          <Download className="w-4 h-4" />
-          <span className="hidden lg:inline">Roblox</span>
-        </button>
+          <button
+            onClick={() => handleExportRoblox('zip')}
+            className="p-2 lg:px-3 lg:py-1.5 border rounded-l rounded-r-none text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
+            title="Export Roblox ZIP Package"
+          >
+            <FileArchive className="w-4 h-4" />
+            <span className="hidden lg:inline">Roblox</span>
+          </button>
+          <button
+            onClick={() => setIsRobloxMenuOpen((isOpen) => !isOpen)}
+            className="p-2 border rounded-r rounded-l-none text-sm font-semibold flex items-center transition-colors border-slate-700 border-l-0 hover:bg-slate-800 text-slate-300"
+            title="Roblox Export Options"
+            aria-haspopup="menu"
+            aria-expanded={isRobloxMenuOpen}
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
+          {isRobloxMenuOpen && (
+            <div
+              className="absolute right-0 top-full mt-2 w-56 rounded border border-slate-700 bg-slate-900 shadow-xl shadow-black/30 py-1 z-40"
+              role="menu"
+            >
+              <button
+                onClick={() => chooseRobloxExport('zip')}
+                className="w-full px-3 py-2 text-left text-sm font-medium text-slate-200 hover:bg-slate-800 flex items-center gap-2"
+                role="menuitem"
+              >
+                <FileArchive className="w-4 h-4 text-slate-400" />
+                ZIP package
+              </button>
+              <button
+                onClick={() => chooseRobloxExport('glb')}
+                className="w-full px-3 py-2 text-left text-sm font-medium text-slate-200 hover:bg-slate-800 flex items-center gap-2"
+                role="menuitem"
+              >
+                <Box className="w-4 h-4 text-slate-400" />
+                Chunked GLB
+              </button>
+              <button
+                onClick={() => chooseRobloxExport('manifest')}
+                className="w-full px-3 py-2 text-left text-sm font-medium text-slate-200 hover:bg-slate-800 flex items-center gap-2"
+                role="menuitem"
+              >
+                <FileJson className="w-4 h-4 text-slate-400" />
+                Manifest JSON
+              </button>
+              <button
+                onClick={() => chooseRobloxExport('files')}
+                className="w-full px-3 py-2 text-left text-sm font-medium text-slate-200 hover:bg-slate-800 flex items-center gap-2"
+                role="menuitem"
+              >
+                <Download className="w-4 h-4 text-slate-400" />
+                Separate files
+              </button>
+            </div>
+          )}
+        </div>
         <div className="w-px h-6 bg-slate-700 hidden sm:block mx-1"></div>
         <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300 font-medium hover:text-white sm:mr-2">
           <input

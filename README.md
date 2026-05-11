@@ -62,7 +62,7 @@ Fast install on macOS:
 
 Manual install (if needed):
 - Windows: copy the plugin files to `%LOCALAPPDATA%\\Roblox\\Plugins`.
-- macOS: copy the plugin files to `~/Library/Application Support/Roblox/Plugins`.
+- macOS: copy the plugin files to `~/Documents/Roblox/Plugins`.
 
 Then restart Studio. You will get these tools:
 
@@ -72,7 +72,7 @@ Then restart Studio. You will get these tools:
 - **Cab87** toolbar
   - **Add Manager**
   - **Add Cab Spawn**, **Add Refuel**, **Add Service**, **Add Player Spawn**
-- **cab87 roads** toolbar
+- **Cab87** toolbar
   - **Road Graph Builder** (supported graph JSON importer/mesh builder)
 
 Road Graph Builder panel actions:
@@ -99,18 +99,18 @@ When you click **Generate Map**, check Studio Output for seed + generator versio
 
 1. Run the graph visualizer:
    - `cd tools/intersection-visualizer`
-   - `npm ci`
-   - `npm run dev`
+   - `./run.sh`
 2. Open `http://localhost:3000`, author the road graph, then export both:
    - **Export JSON** for lightweight graph/gameplay data.
-   - **Roblox** for `cab87-road-mesh.glb` plus `cab87-road-mesh.manifest.json`.
+   - **Roblox** for `cab87-road-mesh.zip`, which contains the chunked GLB plus `cab87-road-mesh.manifest.json`.
+   - Use the Roblox dropdown if you need the chunked GLB or manifest as individual files.
 3. In Studio, open **Road Graph Builder**.
 4. Set **Import Y** for the Roblox plane height.
 5. Set **Map ID** to a stable level id such as `downtown_v1`.
 6. Click **Import Graph JSON**.
    - The plugin imports to `Cab87RoadEditor/RoadGraph`.
    - It does not run the Luau mesher automatically.
-7. Import `cab87-road-mesh.glb` with Studio's 3D Importer.
+7. Unzip `cab87-road-mesh.zip`, then import `cab87-road-mesh.glb` with Studio's 3D Importer.
 8. Select the imported model or imported MeshParts.
 9. Click **Adopt Imported GLB Mesh** and choose `cab87-road-mesh.manifest.json`.
    - The plugin moves the imported chunks into `Cab87RoadEditor/RoadGraphBakedRuntime`.

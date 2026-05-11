@@ -3,7 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_SRC_DIR="$SCRIPT_DIR/studio-plugin"
-TARGET_DIR="${ROBLOX_PLUGIN_DIR:-$HOME/Library/Application Support/Roblox/Plugins}"
+
+if [[ -n "${ROBLOX_PLUGIN_DIR:-}" ]]; then
+  TARGET_DIR="$ROBLOX_PLUGIN_DIR"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+  TARGET_DIR="$HOME/Documents/Roblox/Plugins"
+else
+  TARGET_DIR="$HOME/Roblox/Plugins"
+fi
 
 if [[ ! -d "$PLUGIN_SRC_DIR" ]]; then
   echo "[cab87] ERROR: plugin source folder not found:"
