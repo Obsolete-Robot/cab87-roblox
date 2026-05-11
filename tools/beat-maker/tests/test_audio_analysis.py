@@ -1,4 +1,5 @@
 import math
+import builtins
 import importlib.util
 from pathlib import Path
 import sys
@@ -31,6 +32,27 @@ def synth_kicks(sample_rate: int, duration: float, beat_times: list[float]) -> l
 
 
 class BeatDetectionTests(unittest.TestCase):
+	def test_module_import_does_not_require_aifc(self):
+		blocked_spec = importlib.util.spec_from_file_location("cab87_beat_maker_audio_analysis_no_aifc", MODULE_PATH)
+		blocked_module = importlib.util.module_from_spec(blocked_spec)
+		assert blocked_spec.loader is not None
+		original_import = builtins.__import__
+
+		def import_without_aifc(name, globals=None, locals=None, fromlist=(), level=0):
+			if name == "aifc":
+				raise ModuleNotFoundError("No module named 'aifc'")
+			return original_import(name, globals, locals, fromlist, level)
+
+		try:
+			builtins.__import__ = import_without_aifc
+			sys.modules[blocked_spec.name] = blocked_module
+			blocked_spec.loader.exec_module(blocked_module)
+		finally:
+			builtins.__import__ = original_import
+			sys.modules.pop(blocked_spec.name, None)
+
+		self.assertEqual(blocked_module.SUPPORTED_EXTENSIONS, audio_analysis.SUPPORTED_EXTENSIONS)
+
 	def test_detects_major_synthetic_kicks(self):
 		sample_rate = 4000
 		beat_times = [0.5, 1.0, 1.5, 2.0]

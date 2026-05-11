@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import aifc
 import math
 from pathlib import Path
 import wave
@@ -120,6 +119,11 @@ def _load_wave_mono(path: Path) -> AudioData:
 
 
 def _load_aiff_mono(path: Path) -> AudioData:
+	try:
+		import aifc
+	except ModuleNotFoundError as error:
+		raise AudioDecodeError("AIFF analysis requires Python 3.12 or older. Convert the stem to PCM WAV.") from error
+
 	try:
 		with aifc.open(str(path), "rb") as reader:
 			channel_count = reader.getnchannels()
