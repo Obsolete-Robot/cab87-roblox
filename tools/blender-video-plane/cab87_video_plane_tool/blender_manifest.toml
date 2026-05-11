@@ -2,8 +2,8 @@ schema_version = "1.0.0"
 
 id = "cab87_video_plane_tool"
 name = "Cab87 Video Plane Tool"
-version = "0.3.2"
-tagline = "Create video planes and Resolve XML cut grids"
+version = "0.5.2"
+tagline = "Create, arrange, and fade video planes"
 maintainer = "Cab87"
 type = "add-on"
 

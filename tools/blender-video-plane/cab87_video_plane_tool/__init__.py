@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Video Plane Tool",
 	"author": "Cab87",
-	"version": (0, 3, 2),
+	"version": (0, 5, 2),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Video Plane",
 	"description": "Create aspect-ratio movie planes and Resolve/FCP XML cut grids.",
@@ -27,6 +27,9 @@ COLLECTION_NAME = "Cab87VideoPlanes"
 XML_COLLECTION_PREFIX = "Cab87XmlSequence"
 VIDEO_FILTER = "*.mp4;*.mov;*.m4v;*.avi;*.mkv;*.webm;*.mpg;*.mpeg"
 XML_FILTER = "*.xml;*.fcpxml"
+OPACITY_VALUE_NODE_NAME = "Cab87 Video Opacity"
+OPACITY_MIX_NODE_NAME = "Cab87 Video Opacity Mix"
+OPACITY_TRANSPARENT_NODE_NAME = "Cab87 Video Opacity Transparent"
 
 
 @dataclass
@@ -59,6 +62,15 @@ class XmlSequence:
 	width: int
 	height: int
 	clips: list[XmlVideoClip]
+
+
+def update_video_plane_opacity(settings, context) -> None:
+	if context is None or not settings.opacity_live_update:
+		return
+	try:
+		apply_video_plane_opacity(context, settings.opacity, keyframe=False)
+	except Exception:
+		return
 
 
 class CAB87_VideoPlaneSettings(PropertyGroup):
@@ -108,6 +120,25 @@ class CAB87_VideoPlaneSettings(PropertyGroup):
 	sync_timeline: BoolProperty(name="Set Scene Frame Range", default=True)
 	frame_start: IntProperty(name="Frame Start", default=1, min=1)
 	use_cyclic: BoolProperty(name="Loop Movie", default=False)
+	opacity: FloatProperty(
+		name="Opacity",
+		description="Opacity for the selected Cab87 video plane. Key this to fade the video plane in or out.",
+		default=1.0,
+		min=0.0,
+		max=1.0,
+		subtype="FACTOR",
+		update=update_video_plane_opacity,
+	)
+	opacity_live_update: BoolProperty(
+		name="Live Slider",
+		description="Apply opacity changes immediately to the loaded target plane.",
+		default=True,
+	)
+	opacity_target: PointerProperty(
+		name="Target Plane",
+		description="Loaded Cab87 video plane edited by the opacity controls.",
+		type=bpy.types.Object,
+	)
 	xml_path: StringProperty(
 		name="XML File",
 		subtype="FILE_PATH",
@@ -188,6 +219,77 @@ class CAB87_OT_create_video_plane_from_path(Operator):
 		return create_and_report(self, context, settings, settings.video_path)
 
 
+class CAB87_OT_apply_video_plane_opacity(Operator):
+	bl_idname = "cab87.apply_video_plane_opacity"
+	bl_label = "Apply Opacity"
+	bl_description = "Apply the opacity slider to the loaded or selected Cab87 video plane."
+	bl_options = {"REGISTER", "UNDO"}
+
+	def execute(self, context):
+		settings = context.scene.cab87_video_plane_settings
+		result = apply_video_plane_opacity(context, settings.opacity, keyframe=False)
+		if result["ambiguous"]:
+			self.report({"ERROR"}, "Select exactly one Cab87 video plane.")
+			return {"CANCELLED"}
+		if result["objects"] == 0:
+			self.report({"ERROR"}, "Select one Cab87 video plane first.")
+			return {"CANCELLED"}
+		if result["materials"] == 0:
+			self.report({"ERROR"}, "Selected Cab87 video plane has no editable material.")
+			return {"CANCELLED"}
+
+		self.report({"INFO"}, f"Applied opacity to {result['target_name']}.")
+		return {"FINISHED"}
+
+
+class CAB87_OT_key_video_plane_opacity(Operator):
+	bl_idname = "cab87.key_video_plane_opacity"
+	bl_label = "Key Opacity"
+	bl_description = "Apply and keyframe the opacity slider on the loaded or selected Cab87 video plane."
+	bl_options = {"REGISTER", "UNDO"}
+
+	def execute(self, context):
+		settings = context.scene.cab87_video_plane_settings
+		result = apply_video_plane_opacity(context, settings.opacity, keyframe=True)
+		if result["ambiguous"]:
+			self.report({"ERROR"}, "Select exactly one Cab87 video plane.")
+			return {"CANCELLED"}
+		if result["objects"] == 0:
+			self.report({"ERROR"}, "Select one Cab87 video plane first.")
+			return {"CANCELLED"}
+		if result["materials"] == 0:
+			self.report({"ERROR"}, "Selected Cab87 video plane has no editable material.")
+			return {"CANCELLED"}
+
+		self.report({"INFO"}, f"Keyed opacity on {result['target_name']} at frame {context.scene.frame_current}.")
+		return {"FINISHED"}
+
+
+class CAB87_OT_read_video_plane_opacity(Operator):
+	bl_idname = "cab87.read_video_plane_opacity"
+	bl_label = "Load Selected Plane"
+	bl_description = "Load the single selected Cab87 video plane into the opacity controls."
+	bl_options = {"REGISTER", "UNDO"}
+
+	def execute(self, context):
+		settings = context.scene.cab87_video_plane_settings
+		result = load_selected_video_plane_opacity_target(context)
+		if result["ambiguous"]:
+			self.report({"ERROR"}, "Select exactly one Cab87 video plane.")
+			return {"CANCELLED"}
+		opacity = result["opacity"]
+		if opacity is None:
+			self.report({"ERROR"}, "Select a Cab87 video plane first.")
+			return {"CANCELLED"}
+
+		live_update = settings.opacity_live_update
+		settings.opacity_live_update = False
+		settings.opacity = opacity
+		settings.opacity_live_update = live_update
+		self.report({"INFO"}, f"Loaded {result['target_name']} at opacity {opacity:.2f}.")
+		return {"FINISHED"}
+
+
 class CAB87_OT_pick_xml_video_grid(Operator, ImportHelper):
 	bl_idname = "cab87.pick_xml_video_grid"
 	bl_label = "Import XML Video Grid"
@@ -229,6 +331,19 @@ class CAB87_PT_video_plane_panel(Panel):
 	bl_space_type = "VIEW_3D"
 	bl_region_type = "UI"
 	bl_category = "Cab87"
+
+	def draw(self, context):
+		pass
+
+
+class CAB87_PT_video_plane_create_panel(Panel):
+	bl_label = "Create"
+	bl_idname = "CAB87_PT_video_plane_create_panel"
+	bl_space_type = "VIEW_3D"
+	bl_region_type = "UI"
+	bl_category = "Cab87"
+	bl_parent_id = "CAB87_PT_video_plane_panel"
+	bl_order = 0
 
 	def draw(self, context):
 		layout = self.layout
@@ -289,6 +404,30 @@ class CAB87_PT_video_plane_panel(Panel):
 			box.prop(settings, "xml_camera_interpolation")
 
 
+class CAB87_PT_video_plane_edit_panel(Panel):
+	bl_label = "Edit"
+	bl_idname = "CAB87_PT_video_plane_edit_panel"
+	bl_space_type = "VIEW_3D"
+	bl_region_type = "UI"
+	bl_category = "Cab87"
+	bl_parent_id = "CAB87_PT_video_plane_panel"
+	bl_order = 1
+
+	def draw(self, context):
+		layout = self.layout
+		settings = context.scene.cab87_video_plane_settings
+
+		box = layout.box()
+		box.label(text="Opacity")
+		box.prop(settings, "opacity_target", text="Target")
+		box.operator(CAB87_OT_read_video_plane_opacity.bl_idname, icon="EYEDROPPER")
+		box.prop(settings, "opacity", slider=True)
+		row = box.row(align=True)
+		row.operator(CAB87_OT_apply_video_plane_opacity.bl_idname, icon="CHECKMARK")
+		row.operator(CAB87_OT_key_video_plane_opacity.bl_idname, icon="KEY_HLT")
+		box.prop(settings, "opacity_live_update")
+
+
 def create_and_report(operator, context, settings: CAB87_VideoPlaneSettings, filepath: str):
 	try:
 		result = create_video_plane(context, settings, filepath)
@@ -302,6 +441,7 @@ def create_and_report(operator, context, settings: CAB87_VideoPlaneSettings, fil
 	message = f"Created {object_name} from {source_width}x{source_height} video."
 	if result["used_fallback"]:
 		message = f"{message} Used fallback dimensions."
+	settings.opacity_target = result["object"]
 	operator.report({"INFO"}, message)
 	return {"FINISHED"}
 
@@ -800,6 +940,7 @@ def create_video_plane(
 		obj.location = position
 		obj.rotation_euler = rotation_euler if rotation_euler is not None else (math.radians(90.0), 0.0, 0.0)
 	write_video_properties(obj, image, absolute_path, source_width, source_height, plane_width, resolved_plane_height)
+	obj["cab87_video_opacity"] = clamp_opacity(settings.opacity)
 	if metadata is not None:
 		write_xml_clip_properties(obj, metadata)
 
@@ -945,6 +1086,7 @@ def create_video_material(name: str, image, settings: CAB87_VideoPlaneSettings):
 	elif shader_output is not None:
 		links.new(shader_output, output.inputs["Surface"])
 
+	set_video_plane_material_opacity(material, settings.opacity, keyframe=False)
 	return material
 
 
@@ -1035,6 +1177,276 @@ def has_offset_animation(offset_keyframes: list[tuple[int, float]]) -> bool:
 	return any(abs(frame_offset - first_offset) > 0.001 for _frame, frame_offset in offset_keyframes[1:])
 
 
+def apply_video_plane_opacity(context, opacity: float, keyframe: bool = False) -> dict:
+	opacity = clamp_opacity(opacity)
+	target_info = get_video_plane_opacity_target(context)
+	target = target_info["object"]
+	material_count = 0
+	frame = context.scene.frame_current if keyframe else None
+
+	if target is not None:
+		target["cab87_video_opacity"] = opacity
+		for material in iter_object_materials(target):
+			if set_video_plane_material_opacity(material, opacity, keyframe=keyframe, frame=frame):
+				material_count += 1
+
+	return {
+		"objects": 1 if target is not None else 0,
+		"materials": material_count,
+		"ambiguous": target_info["ambiguous"],
+		"target_name": target.name if target is not None else "",
+	}
+
+
+def load_selected_video_plane_opacity_target(context) -> dict:
+	settings = context.scene.cab87_video_plane_settings
+	target_info = get_single_selected_video_plane(context)
+	target = target_info["object"]
+	if target is None:
+		return {"opacity": None, "ambiguous": target_info["ambiguous"], "target_name": ""}
+
+	settings.opacity_target = target
+	return {
+		"opacity": read_video_plane_object_opacity(target),
+		"ambiguous": False,
+		"target_name": target.name,
+	}
+
+
+def get_video_plane_opacity_target(context) -> dict:
+	settings = context.scene.cab87_video_plane_settings
+	target = getattr(settings, "opacity_target", None)
+	if is_video_plane_object(target):
+		return {"object": target, "ambiguous": False}
+	return get_single_selected_video_plane(context)
+
+
+def get_single_selected_video_plane(context) -> dict:
+	selected = getattr(context, "selected_objects", ()) or ()
+	targets = [obj for obj in selected if is_video_plane_object(obj)]
+	if len(targets) > 1:
+		return {"object": None, "ambiguous": True}
+	if len(targets) == 1:
+		return {"object": targets[0], "ambiguous": False}
+	return {"object": None, "ambiguous": False}
+
+
+def read_video_plane_object_opacity(obj) -> float | None:
+	for material in iter_object_materials(obj):
+		opacity = read_video_plane_material_opacity(material)
+		if opacity is not None:
+			return opacity
+	try:
+		return clamp_opacity(obj.get("cab87_video_opacity", 1.0))
+	except Exception:
+		return 1.0
+
+
+def is_video_plane_object(obj) -> bool:
+	if obj is None or getattr(obj, "type", None) != "MESH" or not hasattr(obj, "get"):
+		return False
+	return bool(obj.get("cab87_video_plane"))
+
+
+def iter_object_materials(obj):
+	materials = getattr(getattr(obj, "data", None), "materials", None)
+	if materials is not None:
+		for material in materials:
+			if material is not None:
+				yield material
+		return
+
+	material = getattr(obj, "active_material", None)
+	if material is not None:
+		yield material
+
+
+def set_video_plane_material_opacity(material, opacity: float, keyframe: bool = False, frame: int | None = None) -> bool:
+	opacity = clamp_opacity(opacity)
+	value_node = ensure_video_material_opacity_controls(material)
+	if value_node is None or not value_node.outputs:
+		return False
+
+	enable_opacity_rendering = keyframe or opacity < 1.0
+	if enable_opacity_rendering:
+		enable_material_opacity_rendering(material)
+
+	socket = value_node.outputs[0]
+	socket.default_value = opacity
+	set_material_diffuse_alpha(material, opacity)
+	material["cab87_video_opacity"] = opacity
+
+	if not keyframe:
+		return True
+
+	try:
+		socket.keyframe_insert(data_path="default_value", frame=frame)
+	except Exception:
+		return False
+	set_material_opacity_key_interpolation(material, value_node, "LINEAR")
+	return True
+
+
+def read_video_plane_material_opacity(material) -> float | None:
+	value_node = find_material_opacity_node(material)
+	if value_node is not None and value_node.outputs:
+		return clamp_opacity(value_node.outputs[0].default_value)
+	if material is not None and hasattr(material, "get"):
+		stored_opacity = material.get("cab87_video_opacity")
+		if stored_opacity is not None:
+			return clamp_opacity(stored_opacity)
+	if material is not None and hasattr(material, "diffuse_color") and len(material.diffuse_color) >= 4:
+		return clamp_opacity(material.diffuse_color[3])
+	return None
+
+
+def ensure_video_material_opacity_controls(material):
+	if material is None:
+		return None
+	material.use_nodes = True
+	if material.node_tree is None:
+		return None
+
+	nodes = material.node_tree.nodes
+	links = material.node_tree.links
+	output = find_material_output_node(material)
+	if output is None:
+		return None
+
+	surface_input = output.inputs.get("Surface")
+	if surface_input is None:
+		return None
+
+	value_node = find_material_opacity_node(material)
+	if value_node is None:
+		value_node = nodes.new("ShaderNodeValue")
+		value_node.name = OPACITY_VALUE_NODE_NAME
+		value_node.label = OPACITY_VALUE_NODE_NAME
+		value_node.location = (-130.0, -360.0)
+		if value_node.outputs:
+			value_node.outputs[0].default_value = 1.0
+
+	existing_link = surface_input.links[0] if surface_input.is_linked else None
+	if existing_link is not None and existing_link.from_node.name == OPACITY_MIX_NODE_NAME:
+		ensure_opacity_mix_value_link(links, existing_link.from_node, value_node)
+		return value_node
+
+	source_socket = existing_link.from_socket if existing_link is not None else None
+	if source_socket is None:
+		return None
+
+	mix_node = find_named_node(nodes, OPACITY_MIX_NODE_NAME)
+	if mix_node is None:
+		mix_node = nodes.new("ShaderNodeMixShader")
+		mix_node.name = OPACITY_MIX_NODE_NAME
+		mix_node.label = OPACITY_MIX_NODE_NAME
+		mix_node.location = (330.0, -220.0)
+
+	transparent_node = find_named_node(nodes, OPACITY_TRANSPARENT_NODE_NAME)
+	if transparent_node is None:
+		transparent_node = nodes.new("ShaderNodeBsdfTransparent")
+		transparent_node.name = OPACITY_TRANSPARENT_NODE_NAME
+		transparent_node.label = OPACITY_TRANSPARENT_NODE_NAME
+		transparent_node.location = (120.0, -320.0)
+
+	links.remove(existing_link)
+	clear_socket_links(links, mix_node.inputs[0])
+	clear_socket_links(links, mix_node.inputs[1])
+	clear_socket_links(links, mix_node.inputs[2])
+	links.new(value_node.outputs[0], mix_node.inputs[0])
+	links.new(transparent_node.outputs["BSDF"], mix_node.inputs[1])
+	links.new(source_socket, mix_node.inputs[2])
+	links.new(mix_node.outputs["Shader"], surface_input)
+	return value_node
+
+
+def find_material_opacity_node(material):
+	if material is None or material.node_tree is None:
+		return None
+	for node in material.node_tree.nodes:
+		if node.bl_idname != "ShaderNodeValue":
+			continue
+		if node.name == OPACITY_VALUE_NODE_NAME or node.label == OPACITY_VALUE_NODE_NAME:
+			return node
+	return None
+
+
+def find_material_output_node(material):
+	for node in material.node_tree.nodes:
+		if node.bl_idname == "ShaderNodeOutputMaterial" and getattr(node, "is_active_output", False):
+			return node
+	for node in material.node_tree.nodes:
+		if node.bl_idname == "ShaderNodeOutputMaterial":
+			return node
+	return None
+
+
+def find_named_node(nodes, name: str):
+	node = nodes.get(name)
+	if node is not None:
+		return node
+	for candidate in nodes:
+		if candidate.label == name:
+			return candidate
+	return None
+
+
+def ensure_opacity_mix_value_link(links, mix_node, value_node) -> None:
+	if not value_node.outputs:
+		return
+	factor_input = mix_node.inputs[0]
+	for link in factor_input.links:
+		if link.from_socket == value_node.outputs[0]:
+			return
+	clear_socket_links(links, factor_input)
+	links.new(value_node.outputs[0], factor_input)
+
+
+def clear_socket_links(links, socket) -> None:
+	for link in list(socket.links):
+		links.remove(link)
+
+
+def enable_material_opacity_rendering(material) -> None:
+	set_first_supported_enum(material, "surface_render_method", ("BLENDED", "DITHERED"))
+	set_first_supported_enum(material, "blend_method", ("BLEND", "HASHED", "CLIP"))
+	assign_if_available(material, "show_transparent_back", True)
+	assign_if_available(material, "use_transparency_overlap", True)
+	assign_if_available(material, "use_tranparency_overlap", True)
+
+
+def set_material_diffuse_alpha(material, opacity: float) -> None:
+	if material is None or not hasattr(material, "diffuse_color") or len(material.diffuse_color) < 4:
+		return
+	material.diffuse_color = (
+		material.diffuse_color[0],
+		material.diffuse_color[1],
+		material.diffuse_color[2],
+		opacity,
+	)
+
+
+def set_material_opacity_key_interpolation(material, value_node, interpolation: str) -> None:
+	try:
+		action = material.node_tree.animation_data.action
+	except AttributeError:
+		return
+	if action is None:
+		return
+	for fcurve in iter_action_fcurves(action):
+		if value_node.name not in fcurve.data_path or "default_value" not in fcurve.data_path:
+			continue
+		for keyframe in fcurve.keyframe_points:
+			keyframe.interpolation = interpolation
+
+
+def clamp_opacity(value) -> float:
+	try:
+		return min(1.0, max(0.0, float(value)))
+	except (TypeError, ValueError):
+		return 1.0
+
+
 def position_video_plane(context, obj, settings: CAB87_VideoPlaneSettings) -> None:
 	if settings.placement == "CAMERA":
 		camera = context.scene.camera
@@ -1102,17 +1514,37 @@ def animate_xml_camera(context, settings: CAB87_VideoPlaneSettings, collection, 
 	elif pivot.name not in {obj.name for obj in collection.objects}:
 		collection.objects.link(pivot)
 
+	panner_name = f"{settings.xml_camera_name} Panner"
+	panner = bpy.data.objects.get(panner_name)
+	if panner is None or panner.type != "EMPTY":
+		panner = bpy.data.objects.new(unique_name(panner_name, bpy.data.objects), None)
+		panner.empty_display_type = "ARROWS"
+		panner.empty_display_size = 0.5
+		collection.objects.link(panner)
+	elif panner.name not in {obj.name for obj in collection.objects}:
+		collection.objects.link(panner)
+
 	camera["cab87_xml_import"] = True
 	camera["cab87_xml_import_camera"] = True
 	camera["cab87_xml_camera_pivot"] = pivot.name
+	camera["cab87_xml_camera_panner"] = panner.name
 	pivot["cab87_xml_import"] = True
 	pivot["cab87_xml_camera_pivot"] = True
+	panner["cab87_xml_import"] = True
+	panner["cab87_xml_camera_panner"] = True
+	panner["cab87_xml_camera_pivot"] = pivot.name
 	camera.data.lens = settings.xml_camera_lens
-	camera.parent = pivot
+	panner.parent = pivot
+	panner.matrix_parent_inverse.identity()
+	panner.location = (0.0, 0.0, 0.0)
+	panner.rotation_euler = (0.0, 0.0, 0.0)
+	panner.scale = (1.0, 1.0, 1.0)
+	camera.parent = panner
 	camera.matrix_parent_inverse.identity()
 	camera.location = (0.0, -settings.xml_camera_distance, 0.0)
 	camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
 	camera.animation_data_clear()
+	panner.animation_data_clear()
 	pivot.animation_data_clear()
 
 	for item in imported_clips:
@@ -1256,9 +1688,14 @@ classes = (
 	CAB87_VideoPlaneSettings,
 	CAB87_OT_pick_video_plane,
 	CAB87_OT_create_video_plane_from_path,
+	CAB87_OT_apply_video_plane_opacity,
+	CAB87_OT_key_video_plane_opacity,
+	CAB87_OT_read_video_plane_opacity,
 	CAB87_OT_pick_xml_video_grid,
 	CAB87_OT_import_xml_video_grid_from_path,
 	CAB87_PT_video_plane_panel,
+	CAB87_PT_video_plane_create_panel,
+	CAB87_PT_video_plane_edit_panel,
 )
 
 
