@@ -57,8 +57,12 @@ This repo includes a plugin file at:
 Fast install on Windows:
 - Run `install-studio-plugin.bat` from repo root.
 
+Fast install on macOS:
+- Run `./install-studio-plugin.sh` from repo root.
+
 Manual install (if needed):
-- Copy the plugin files to `%LOCALAPPDATA%\\Roblox\\Plugins`.
+- Windows: copy the plugin files to `%LOCALAPPDATA%\\Roblox\\Plugins`.
+- macOS: copy the plugin files to `~/Library/Application Support/Roblox/Plugins`.
 
 Then restart Studio. You will get these tools:
 
