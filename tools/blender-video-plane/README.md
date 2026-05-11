@@ -33,7 +33,8 @@ By default, the plane is created at the 3D cursor, sized by width, and uses an E
 4. The add-on creates one plane per enabled video clip, laid out in a grid in timeline order.
 5. Each plane stores the clip metadata as custom properties and sets the movie texture to start at the clip's source in-frame on the clip's timeline start frame.
 6. Resolve Time Remap speed/keyframe data is converted into Blender movie texture offset keyframes so sped-up clips advance through the source video at the imported speed.
-7. When `Animate Camera` is enabled, the add-on creates or reuses `Cab87 XML Cut Camera`, keyframes it at each cut, and makes it the active scene camera.
+7. `Handle Frames` runs each movie texture before and after the cut so edits can be adjusted in Blender with source handles available.
+8. When `Animate Camera` is enabled, the add-on creates or reuses `Cab87 XML Cut Camera`, parents it to a cut-animated pivot at the active grid cell, and makes it the active scene camera.
 
 If the XML points to media paths that do not exist on the current machine, set `Media Root Override` to the folder containing the video files. The importer resolves those clips by filename.
 
@@ -48,6 +49,7 @@ If the XML points to media paths that do not exist on the current machine, set `
 - `Grid Columns` controls XML grid layout. Use `0` for automatic columns.
 - `Clear Previous XML Import` removes objects previously created by the XML importer before importing again.
 - `Add Cut Markers` creates timeline markers at each imported clip start.
+- `Handle Frames` adds pre/post roll to each imported movie texture without moving the actual camera cut frames.
 - `Camera Interpolation` defaults to hard cuts so the camera matches the edit, with linear and smooth move options for animatic passes.
 
 ## Validation

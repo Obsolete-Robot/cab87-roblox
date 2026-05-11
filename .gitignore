@@ -15,6 +15,9 @@ build/
 dist/
 coverage/
 
+# Generated Blender addon packages
+tools/**/*.zip
+
 # OS/editor
 .DS_Store
 .vscode/

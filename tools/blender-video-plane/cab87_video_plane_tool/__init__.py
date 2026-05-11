@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Video Plane Tool",
 	"author": "Cab87",
-	"version": (0, 2, 0),
+	"version": (0, 3, 2),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Video Plane",
 	"description": "Create aspect-ratio movie planes and Resolve/FCP XML cut grids.",
@@ -125,6 +125,13 @@ class CAB87_VideoPlaneSettings(PropertyGroup):
 		soft_max=24,
 	)
 	xml_grid_gap: FloatProperty(name="Grid Gap", default=0.6, min=0.0, soft_max=20.0)
+	xml_handle_frames: IntProperty(
+		name="Handle Frames",
+		description="Extra movie frames to run before and after each XML cut for edit handles in Blender.",
+		default=0,
+		min=0,
+		soft_max=240,
+	)
 	xml_clear_previous: BoolProperty(
 		name="Clear Previous XML Import",
 		description="Delete objects previously created by this XML importer before importing.",
@@ -268,6 +275,7 @@ class CAB87_PT_video_plane_panel(Panel):
 		box.prop(settings, "xml_media_root")
 		box.prop(settings, "xml_grid_columns")
 		box.prop(settings, "xml_grid_gap")
+		box.prop(settings, "xml_handle_frames")
 		box.prop(settings, "xml_clear_previous")
 		box.prop(settings, "xml_add_markers")
 
@@ -342,26 +350,18 @@ def import_xml_video_grid(context, settings: CAB87_VideoPlaneSettings, filepath:
 	columns = int(settings.xml_grid_columns)
 	if columns <= 0:
 		columns = max(1, math.ceil(math.sqrt(len(sequence.clips))))
-	rows = math.ceil(len(sequence.clips) / columns)
 
-	plane_sizes = [resolve_plane_dimensions(max(1, clip.source_width), max(1, clip.source_height), settings) for clip in sequence.clips]
-	cell_width = max(width for width, _height in plane_sizes) + settings.xml_grid_gap
-	cell_height = max(height for _width, height in plane_sizes) + settings.xml_grid_gap
+	grid_height = resolve_xml_grid_row_height(sequence, settings)
 
 	imported_clips = []
 	missing_media = []
-	for index, clip in enumerate(sequence.clips):
+	for clip in sequence.clips:
 		media_path = resolve_xml_media_path(clip.filepath, settings.xml_media_root)
 		if not Path(bpy.path.abspath(media_path)).is_file():
 			missing_media.append(media_path)
 			continue
 
-		column = index % columns
-		row = index // columns
-		x = (column - (columns - 1) * 0.5) * cell_width
-		z = ((rows - 1) * 0.5 - row) * cell_height
-		position = Vector((x, 0.0, z))
-		timing = build_clip_timing(clip, settings.frame_start)
+		timing = build_clip_timing(clip, settings.frame_start, settings.xml_handle_frames)
 		metadata = {
 			"xml_clip_id": clip.clip_id,
 			"xml_clip_name": clip.name,
@@ -372,6 +372,9 @@ def import_xml_video_grid(context, settings: CAB87_VideoPlaneSettings, filepath:
 			"xml_source_out": clip.source_out,
 			"xml_source_start": timing["source_start"],
 			"xml_source_end": timing["source_end"],
+			"xml_handle_frames": timing["handle_frames"],
+			"xml_movie_frame_start": timing["movie_frame_start"],
+			"xml_movie_source_start": timing["movie_source_start"],
 			"xml_speed_multiplier": timing["speed_multiplier"],
 		}
 		result = create_video_plane(
@@ -379,21 +382,24 @@ def import_xml_video_grid(context, settings: CAB87_VideoPlaneSettings, filepath:
 			settings,
 			media_path,
 			collection=xml_collection,
-			position=position,
+			position=Vector((0.0, 0.0, 0.0)),
 			rotation_euler=(math.radians(90.0), 0.0, 0.0),
 			fallback_dimensions=(clip.source_width, clip.source_height),
+			plane_height=grid_height,
 			timing=timing,
 			metadata=metadata,
 			select_object=False,
 		)
 
 		obj = result["object"]
-		obj.name = unique_name(f"Cab87XmlClip_{index + 1:03d}_{slug(clip.name) or 'Clip'}", bpy.data.objects)
-		imported_clips.append({"clip": clip, "object": obj, "timing": timing})
+		obj.name = unique_name(f"Cab87XmlClip_{len(imported_clips) + 1:03d}_{slug(clip.name) or 'Clip'}", bpy.data.objects)
+		imported_clips.append({"clip": clip, "object": obj, "timing": timing, "plane_width": result["plane_width"]})
+
+	position_imported_xml_clips(imported_clips, columns, grid_height, settings.xml_grid_gap)
 
 	if settings.sync_timeline and sequence.duration > 0:
-		context.scene.frame_start = settings.frame_start
-		context.scene.frame_end = settings.frame_start + sequence.duration - 1
+		context.scene.frame_start = settings.frame_start - settings.xml_handle_frames
+		context.scene.frame_end = settings.frame_start + sequence.duration - 1 + settings.xml_handle_frames
 
 	if settings.xml_add_markers:
 		add_xml_cut_markers(context.scene, imported_clips)
@@ -545,7 +551,8 @@ def read_time_remap_keyframes(parameter) -> list[tuple[float, float]]:
 	return keyframes
 
 
-def build_clip_timing(clip: XmlVideoClip, scene_frame_start: int) -> dict:
+def build_clip_timing(clip: XmlVideoClip, scene_frame_start: int, handle_frames: int = 0) -> dict:
+	handle_frames = max(0, int(handle_frames))
 	duration = max(1, clip.timeline_end - clip.timeline_start)
 	source_start = resolve_displayed_source_at_relative_frame(clip, 0.0, duration)
 	source_end = resolve_displayed_source_at_relative_frame(clip, float(duration), duration)
@@ -553,14 +560,21 @@ def build_clip_timing(clip: XmlVideoClip, scene_frame_start: int) -> dict:
 
 	frame_start = scene_frame_start + clip.timeline_start
 	frame_end = scene_frame_start + clip.timeline_end - 1
+	movie_frame_start = frame_start - handle_frames
+	movie_duration = duration + handle_frames * 2
+	movie_source_start = resolve_displayed_source_at_relative_frame(clip, -float(handle_frames), duration)
 	return {
 		"frame_start": frame_start,
 		"frame_end": frame_end,
 		"duration": duration,
+		"movie_frame_start": movie_frame_start,
+		"movie_duration": movie_duration,
 		"source_start": source_start,
 		"source_end": source_end,
+		"movie_source_start": movie_source_start,
 		"speed_multiplier": speed_multiplier,
-		"offset_keyframes": build_clip_offset_keyframes(clip, frame_start, duration),
+		"handle_frames": handle_frames,
+		"offset_keyframes": build_clip_offset_keyframes(clip, frame_start, duration, handle_frames),
 	}
 
 
@@ -594,29 +608,34 @@ def resolve_displayed_source_at_relative_frame(clip: XmlVideoClip, relative_fram
 	return source_frame
 
 
-def build_clip_offset_keyframes(clip: XmlVideoClip, frame_start: int, timeline_duration: int) -> list[tuple[int, float]]:
+def build_clip_offset_keyframes(clip: XmlVideoClip, frame_start: int, timeline_duration: int, handle_frames: int = 0) -> list[tuple[int, float]]:
 	time_remap = clip.time_remap
 	source_span = resolve_source_span(clip, timeline_duration)
 	implicit_speed = source_span / max(1, timeline_duration)
 	if time_remap is None and abs(implicit_speed - 1.0) <= 0.001:
 		return []
 
-	samples: list[float] = [0.0]
+	handle_frames = max(0, int(handle_frames))
+	start_relative = -float(handle_frames)
+	end_relative = float(timeline_duration + handle_frames - 1)
+	movie_frame_start = frame_start - handle_frames
+
+	samples: list[float] = [start_relative]
 	if time_remap is not None and time_remap.keyframes:
 		for when, _value in time_remap.keyframes:
-			if when <= clip.source_in or when >= clip.source_out:
-				continue
 			relative_frame = ((when - clip.source_in) / source_span) * timeline_duration
-			if 0.0 < relative_frame < timeline_duration - 1:
-				samples.append(relative_frame)
-	if timeline_duration > 1:
-		samples.append(float(timeline_duration - 1))
+			if relative_frame <= start_relative or relative_frame >= end_relative:
+				continue
+			samples.append(relative_frame)
+	if timeline_duration + handle_frames * 2 > 1:
+		samples.append(end_relative)
 
 	keyframes_by_frame: dict[int, float] = {}
 	for relative_frame in sorted(samples):
 		scene_frame = frame_start + int(round(relative_frame))
+		movie_relative_frame = scene_frame - movie_frame_start
 		displayed_source = resolve_displayed_source_at_relative_frame(clip, relative_frame, timeline_duration)
-		keyframes_by_frame[scene_frame] = displayed_source - relative_frame
+		keyframes_by_frame[scene_frame] = displayed_source - movie_relative_frame
 	return sorted(keyframes_by_frame.items())
 
 
@@ -676,6 +695,37 @@ def path_leaf(filepath: str) -> str:
 	return Path(normalized).name
 
 
+def resolve_xml_grid_row_height(sequence: XmlSequence, settings: CAB87_VideoPlaneSettings) -> float:
+	_sequence_width, sequence_height = resolve_plane_dimensions(max(1, sequence.width), max(1, sequence.height), settings)
+	return sequence_height
+
+
+def resolve_xml_clip_grid_dimensions(clip: XmlVideoClip, row_height: float) -> tuple[float, float]:
+	aspect = max(1, clip.source_width) / max(1, clip.source_height)
+	return row_height * aspect, row_height
+
+
+def resolve_dimensions_from_height(source_width: int, source_height: int, height: float) -> tuple[float, float]:
+	aspect = source_width / source_height
+	return height * aspect, height
+
+
+def position_imported_xml_clips(imported_clips: list[dict], columns: int, grid_height: float, grid_gap: float) -> None:
+	if not imported_clips:
+		return
+	grid_width = max(item["plane_width"] for item in imported_clips)
+	cell_width = grid_width + grid_gap
+	cell_height = grid_height + grid_gap
+	rows = math.ceil(len(imported_clips) / columns)
+
+	for index, item in enumerate(imported_clips):
+		column = index % columns
+		row = index // columns
+		x = (column - (columns - 1) * 0.5) * cell_width
+		z = ((rows - 1) * 0.5 - row) * cell_height
+		item["object"].location = Vector((x, 0.0, z))
+
+
 def read_text(element, path: str, default: str = "") -> str:
 	if element is None:
 		return default
@@ -716,6 +766,8 @@ def create_video_plane(
 	position: Vector | None = None,
 	rotation_euler=None,
 	fallback_dimensions: tuple[int, int] | None = None,
+	plane_dimensions: tuple[float, float] | None = None,
+	plane_height: float | None = None,
 	timing: dict | None = None,
 	metadata: dict | None = None,
 	select_object: bool = True,
@@ -726,10 +778,16 @@ def create_video_plane(
 
 	image = load_movie_image(absolute_path, settings)
 	source_width, source_height, used_fallback = resolve_image_dimensions(image, settings, fallback_dimensions)
-	plane_width, plane_height = resolve_plane_dimensions(source_width, source_height, settings)
+	if plane_dimensions is None:
+		if plane_height is None:
+			plane_width, resolved_plane_height = resolve_plane_dimensions(source_width, source_height, settings)
+		else:
+			plane_width, resolved_plane_height = resolve_dimensions_from_height(source_width, source_height, plane_height)
+	else:
+		plane_width, resolved_plane_height = plane_dimensions
 
 	stem = slug(Path(absolute_path).stem) or "Video"
-	mesh = create_plane_mesh(unique_name(f"Cab87VideoPlane_{stem}_Mesh", bpy.data.meshes), plane_width, plane_height)
+	mesh = create_plane_mesh(unique_name(f"Cab87VideoPlane_{stem}_Mesh", bpy.data.meshes), plane_width, resolved_plane_height)
 	obj = bpy.data.objects.new(unique_name(f"Cab87VideoPlane_{stem}", bpy.data.objects), mesh)
 	obj.data.materials.append(create_video_material(unique_name(f"Cab87Video_{stem}_Material", bpy.data.materials), image, settings))
 
@@ -741,7 +799,7 @@ def create_video_plane(
 	else:
 		obj.location = position
 		obj.rotation_euler = rotation_euler if rotation_euler is not None else (math.radians(90.0), 0.0, 0.0)
-	write_video_properties(obj, image, absolute_path, source_width, source_height, plane_width, plane_height)
+	write_video_properties(obj, image, absolute_path, source_width, source_height, plane_width, resolved_plane_height)
 	if metadata is not None:
 		write_xml_clip_properties(obj, metadata)
 
@@ -763,6 +821,8 @@ def create_video_plane(
 		"source_width": source_width,
 		"source_height": source_height,
 		"used_fallback": used_fallback,
+		"plane_width": plane_width,
+		"plane_height": resolved_plane_height,
 		"duration": duration,
 	}
 
@@ -901,9 +961,9 @@ def configure_movie_timing(scene, image, material, settings: CAB87_VideoPlaneSet
 
 
 def configure_clip_movie_timing(scene, image, material, settings: CAB87_VideoPlaneSettings, timing: dict) -> int:
-	duration = max(1, int(timing.get("duration", 1)))
-	source_start = int(round(float(timing.get("source_start", 0.0))))
-	frame_start = int(timing.get("frame_start", settings.frame_start))
+	duration = max(1, int(timing.get("movie_duration", timing.get("duration", 1))))
+	source_start = int(round(float(timing.get("movie_source_start", timing.get("source_start", 0.0)))))
+	frame_start = int(timing.get("movie_frame_start", timing.get("frame_start", settings.frame_start)))
 	offset_keyframes = timing.get("offset_keyframes", [])
 
 	for node in material.node_tree.nodes:
@@ -1032,20 +1092,36 @@ def animate_xml_camera(context, settings: CAB87_VideoPlaneSettings, collection, 
 	elif camera.name not in {obj.name for obj in collection.objects}:
 		collection.objects.link(camera)
 
+	pivot_name = f"{settings.xml_camera_name} Pivot"
+	pivot = bpy.data.objects.get(pivot_name)
+	if pivot is None or pivot.type != "EMPTY":
+		pivot = bpy.data.objects.new(unique_name(pivot_name, bpy.data.objects), None)
+		pivot.empty_display_type = "PLAIN_AXES"
+		pivot.empty_display_size = 0.75
+		collection.objects.link(pivot)
+	elif pivot.name not in {obj.name for obj in collection.objects}:
+		collection.objects.link(pivot)
+
 	camera["cab87_xml_import"] = True
 	camera["cab87_xml_import_camera"] = True
+	camera["cab87_xml_camera_pivot"] = pivot.name
+	pivot["cab87_xml_import"] = True
+	pivot["cab87_xml_camera_pivot"] = True
 	camera.data.lens = settings.xml_camera_lens
+	camera.parent = pivot
+	camera.matrix_parent_inverse.identity()
+	camera.location = (0.0, -settings.xml_camera_distance, 0.0)
+	camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
 	camera.animation_data_clear()
+	pivot.animation_data_clear()
 
 	for item in imported_clips:
 		frame = item["timing"]["frame_start"]
-		location, rotation = camera_pose_for_plane(item["object"], settings.xml_camera_distance)
-		camera.location = location
-		camera.rotation_euler = rotation
-		camera.keyframe_insert(data_path="location", frame=frame)
-		camera.keyframe_insert(data_path="rotation_euler", frame=frame)
+		pivot.location = item["object"].location
+		pivot.rotation_euler = (0.0, 0.0, 0.0)
+		pivot.keyframe_insert(data_path="location", frame=frame)
 
-	set_object_keyframe_interpolation(camera, settings.xml_camera_interpolation)
+	set_object_keyframe_interpolation(pivot, settings.xml_camera_interpolation)
 	context.scene.camera = camera
 	return camera
 
