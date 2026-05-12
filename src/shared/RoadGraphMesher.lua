@@ -14,6 +14,16 @@ local function horizontalDistance(a, b)
 	return math.sqrt(dx * dx + dz * dz)
 end
 
+local function lowestY(points)
+	local lowest = nil
+	for _, point in ipairs(points or {}) do
+		if typeof(point) == "Vector3" then
+			lowest = if lowest == nil then point.Y else math.min(lowest, point.Y)
+		end
+	end
+	return lowest
+end
+
 local function getDir(fromPoint, toPoint)
 	local dx = toPoint.X - fromPoint.X
 	local dz = toPoint.Z - fromPoint.Z
@@ -667,6 +677,97 @@ local function buildPolygonFillTriangles(mesh, graph, edgeSplines)
 	end
 end
 
+local function buildBuildingMeshes(mesh, graph)
+	for index, building in ipairs(graph.buildings or {}) do
+		if type(building) ~= "table" or type(building.vertices) ~= "table" or #(building.vertices or {}) < 3 then
+			continue
+		end
+
+		local height = tonumber(building.height) or 80
+		if height <= EPSILON then
+			continue
+		end
+
+		local baseVertices = {}
+		for _, vertex in ipairs(building.vertices) do
+			if typeof(vertex) == "Vector3" then
+				table.insert(baseVertices, vertex)
+			end
+		end
+		if #baseVertices < 3 then
+			continue
+		end
+
+		local baseY = lowestY(baseVertices)
+		if baseY == nil then
+			continue
+		end
+		for vertexIndex, vertex in ipairs(baseVertices) do
+			baseVertices[vertexIndex] = Vector3.new(vertex.X, baseY, vertex.Z)
+		end
+
+		if horizontalDistance(baseVertices[1], baseVertices[#baseVertices]) <= 0.01 then
+			table.remove(baseVertices)
+		end
+		if #baseVertices < 3 then
+			continue
+		end
+
+		local topVertices = {}
+		for _, vertex in ipairs(baseVertices) do
+			table.insert(topVertices, Vector3.new(vertex.X, vertex.Y + height, vertex.Z))
+		end
+
+		local topTriangles = buildGridMesh(topVertices)
+		local bottomSourceTriangles = buildGridMesh(baseVertices)
+		local bottomTriangles = {}
+		for _, triangle in ipairs(bottomSourceTriangles) do
+			addTriangle(bottomTriangles, triangle[1], triangle[3], triangle[2])
+		end
+
+		local wallTriangles = {}
+		for vertexIndex = 1, #baseVertices do
+			local nextIndex = (vertexIndex % #baseVertices) + 1
+			local baseA = baseVertices[vertexIndex]
+			local baseB = baseVertices[nextIndex]
+			local topB = topVertices[nextIndex]
+			local topA = topVertices[vertexIndex]
+			addTriangle(wallTriangles, baseA, baseB, topB)
+			addTriangle(wallTriangles, baseA, topB, topA)
+		end
+
+		local triangles = {}
+		for _, triangle in ipairs(topTriangles) do
+			table.insert(triangles, triangle)
+			table.insert(mesh.buildingTriangles, triangle)
+		end
+		for _, triangle in ipairs(bottomTriangles) do
+			table.insert(triangles, triangle)
+			table.insert(mesh.buildingTriangles, triangle)
+		end
+		for _, triangle in ipairs(wallTriangles) do
+			table.insert(triangles, triangle)
+			table.insert(mesh.buildingTriangles, triangle)
+		end
+
+		if #triangles > 0 then
+			table.insert(mesh.buildingMeshes, {
+				id = building.id or ("b" .. tostring(index)),
+				name = building.name,
+				vertices = baseVertices,
+				baseZ = baseY - (tonumber(graph.planeY) or 0),
+				height = height,
+				color = building.color or "#64748b",
+				material = building.material or "Concrete",
+				triangles = triangles,
+				topTriangles = topTriangles,
+				bottomTriangles = bottomTriangles,
+				wallTriangles = wallTriangles,
+			})
+		end
+	end
+end
+
 local function cubicBezier(p0, p1, p2, p3, t)
 	local t2 = t * t
 	local t3 = t2 * t
@@ -1278,6 +1379,8 @@ local function makeMeshData()
 		roadPolygons = {},
 		polygonFills = {},
 		polygonTriangles = {},
+		buildingMeshes = {},
+		buildingTriangles = {},
 		sidewalkPolygons = {},
 		crosswalks = {},
 		centerLines = {},
@@ -1701,10 +1804,12 @@ function RoadGraphMesher.buildNetworkMesh(graph, options)
 	end
 
 	buildPolygonFillTriangles(mesh, graph, edgeSplines)
+	buildBuildingMeshes(mesh, graph)
 
 	addTrianglesToBounds(mesh.bounds, mesh.roadTriangles)
 	addTrianglesToBounds(mesh.bounds, mesh.sidewalkTriangles)
 	addTrianglesToBounds(mesh.bounds, mesh.crosswalkTriangles)
+	addTrianglesToBounds(mesh.bounds, mesh.buildingTriangles)
 	for _, fill in ipairs(mesh.polygonFills) do
 		addTrianglesToBounds(mesh.bounds, fill.triangles)
 	end

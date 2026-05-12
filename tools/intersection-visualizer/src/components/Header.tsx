@@ -10,8 +10,6 @@ interface HeaderProps {
   handleExportObj: () => void;
   handleExportGlb: () => void;
   handleExportRoblox: (mode?: RobloxRoadMeshExportMode) => void;
-  showControlPoints: boolean;
-  setShowControlPoints: (v: boolean) => void;
   is3DMode: boolean;
   setIs3DMode: (v: boolean) => void;
   showMesh: boolean;
@@ -26,8 +24,6 @@ export default function Header({
   handleExportObj,
   handleExportGlb,
   handleExportRoblox,
-  showControlPoints,
-  setShowControlPoints,
   is3DMode,
   setIs3DMode,
   showMesh,
@@ -165,16 +161,6 @@ export default function Header({
           )}
         </div>
         <div className="w-px h-6 bg-slate-700 hidden sm:block mx-1"></div>
-        <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300 font-medium hover:text-white sm:mr-2">
-          <input
-            type="checkbox"
-            className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 w-4 h-4 cursor-pointer"
-            checked={showControlPoints}
-            onChange={(e) => setShowControlPoints(e.target.checked)}
-          />
-          <span className="hidden md:inline">Show Control Points</span>
-          <span className="md:hidden">Points</span>
-        </label>
         <button
           onClick={() => setIs3DMode(!is3DMode)}
           className={`p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors ${

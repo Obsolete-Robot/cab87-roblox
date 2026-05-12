@@ -1,5 +1,6 @@
 import { DEFAULTS } from './constants';
-import { Point, Node, Edge, PolygonFill, MeshData, Triangle } from "./types";
+import { Point, Node, Edge, PolygonFill, MeshData, Triangle, BuildingPolygon } from "./types";
+import { cleanBuildingVertices, getBuildingBaseZ } from './buildings';
 import { getDir, intersectSegmentPolygon, segmentIntersect } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
@@ -262,7 +263,15 @@ function buildIgnoredRoadPolygon(edge: Edge, centerLine: Point[], hubs: MeshData
   };
 }
 
-export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: number, meshResolution: number = DEFAULTS.meshResolution, laneWidth: number = DEFAULTS.laneWidth, polygonFills: PolygonFill[] = []): MeshData {
+export function buildNetworkMesh(
+  nodes: Node[],
+  edges: Edge[],
+  chamferAngleDeg: number,
+  meshResolution: number = DEFAULTS.meshResolution,
+  laneWidth: number = DEFAULTS.laneWidth,
+  polygonFills: PolygonFill[] = [],
+  buildings: BuildingPolygon[] = []
+): MeshData {
   const mesh: MeshData = {
     vertices: [],
     triangles: [],
@@ -279,7 +288,9 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     dashedLineTriangles: [],
     solidLineTriangles: [],
     laneArrows: [],
-    polygonTriangles: []
+    polygonTriangles: [],
+    buildingMeshes: [],
+    buildingTriangles: []
   };
 
   const nodeClearances = new Map<string, Map<string, number>>();
@@ -1069,7 +1080,60 @@ export function buildNetworkMesh(nodes: Node[], edges: Edge[], chamferAngleDeg: 
     mesh.polygonTriangles.push({ triangles: fillTriangles, color: poly.color });
   }
 
+  const buildingMeshes = buildBuildingMeshes(buildings);
+  mesh.buildingMeshes.push(...buildingMeshes);
+  buildingMeshes.forEach((buildingMesh) => {
+    mesh.buildingTriangles.push(...buildingMesh.triangles);
+  });
+
   return mesh;
+}
+
+function buildBuildingMeshes(buildings: BuildingPolygon[]): MeshData['buildingMeshes'] {
+  const meshes: MeshData['buildingMeshes'] = [];
+
+  for (const building of buildings) {
+    const vertices = cleanBuildingVertices(building.vertices || []);
+    if (vertices.length < 3) continue;
+
+    const baseZ = getBuildingBaseZ(building);
+    const height = Math.max(1, building.height || DEFAULTS.buildingHeight);
+    const topZ = baseZ + height;
+    const baseBoundary = vertices.map((vertex) => ({ x: vertex.x, y: vertex.y, z: baseZ }));
+    const topBoundary = vertices.map((vertex) => ({ x: vertex.x, y: vertex.y, z: topZ }));
+
+    const topTriangles = buildGridMesh(topBoundary);
+    const bottomTriangles = buildGridMesh(baseBoundary).map((triangle): Triangle => [triangle[0], triangle[2], triangle[1]]);
+    const wallTriangles: Triangle[] = [];
+
+    for (let index = 0; index < vertices.length; index++) {
+      const nextIndex = (index + 1) % vertices.length;
+      const baseA = baseBoundary[index];
+      const baseB = baseBoundary[nextIndex];
+      const topB = topBoundary[nextIndex];
+      const topA = topBoundary[index];
+      wallTriangles.push([baseA, baseB, topB], [baseA, topB, topA]);
+    }
+
+    const triangles = [...topTriangles, ...bottomTriangles, ...wallTriangles];
+    if (triangles.length === 0) continue;
+
+    meshes.push({
+      id: building.id,
+      name: building.name,
+      vertices: baseBoundary,
+      baseZ,
+      height,
+      color: building.color || DEFAULTS.buildingColor,
+      material: building.material || DEFAULTS.buildingMaterial,
+      triangles,
+      topTriangles,
+      bottomTriangles,
+      wallTriangles,
+    });
+  }
+
+  return meshes;
 }
 
 function buildGridMesh(boundaryPoints: Point[]): Triangle[] {

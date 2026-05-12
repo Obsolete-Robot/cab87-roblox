@@ -43,6 +43,15 @@ export function ActualMesh({ mesh, showMesh, debugOptions }: { mesh: any, showMe
     }));
   }, [mesh.polygonTriangles]);
 
+  const buildingGeos = useMemo(() => {
+    if (!mesh.buildingMeshes) return [];
+    return mesh.buildingMeshes.map((building: { triangles: Point[][], color: string, id: string }) => ({
+      id: building.id,
+      geo: createGeo(building.triangles),
+      color: building.color
+    }));
+  }, [mesh.buildingMeshes]);
+
   const wireColor = showMesh ? "#22d3ee" : undefined;
 
   const showRoads = debugOptions?.roads !== false;
@@ -51,9 +60,15 @@ export function ActualMesh({ mesh, showMesh, debugOptions }: { mesh: any, showMe
   const showCrossroads = debugOptions?.crossroads !== false;
   const showLines = debugOptions?.lines !== false;
   const showPolyFills = debugOptions?.polyFills !== false;
+  const showBuildings = debugOptions?.buildings !== false;
 
   return (
     <group>
+      {showBuildings && buildingGeos.map((building: any) => (
+        <mesh key={`building-mesh-${building.id}`} geometry={building.geo} position={[0, 0, 0]}>
+          <meshStandardMaterial color={wireColor || building.color} side={THREE.DoubleSide} wireframe={showMesh} roughness={0.7} />
+        </mesh>
+      ))}
       {showPolyFills && polygonGeos.map((pg: any, i: number) => (
         <mesh key={`poly-${i}`} geometry={pg.geo} position={[0, -1.5, 0]}>
           <meshStandardMaterial color={wireColor || pg.color} side={THREE.DoubleSide} wireframe={showMesh} transparent={true} opacity={0.7} />

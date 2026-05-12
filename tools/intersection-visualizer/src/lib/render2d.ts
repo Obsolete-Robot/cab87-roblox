@@ -1,6 +1,7 @@
-import { Point, Node, Edge } from './types';
+import { Point, Node, Edge, BuildingPolygon, VisibilitySettings } from './types';
 import { getExtendedEdgeControlPoints } from './network';
 import { buildNetworkMesh } from './meshing';
+import { getBuildingBaseZ, getBuildingCenter, getBuildingHeight } from './buildings';
 
 export const drawNetwork2D = (
   ctx: CanvasRenderingContext2D,
@@ -11,13 +12,17 @@ export const drawNetwork2D = (
   selectedNodes: string[],
   selectedNode: string | null,
   showMesh: boolean,
-  showControlPoints: boolean,
+  visibilitySettings: VisibilitySettings,
   isConnectMode: boolean,
   isMergeMode: boolean,
   chamferAngle: number,
   meshResolution: number,
   laneWidth: number,
   polygonFills: any[],
+  buildings: BuildingPolygon[],
+  selectedBuildingId: string | null,
+  selectedBuildingVertex: { buildingId: string; vertexIndex: number } | null,
+  buildingDraft: Point[],
   softSelectionEnabled: boolean,
   softSelectionRadius: number,
   draggingPoint: Point | null,
@@ -76,9 +81,9 @@ export const drawNetwork2D = (
     ctx.stroke();
   }
 
-  if (nodes.length === 0) return;
+  if (nodes.length === 0 && buildings.length === 0 && buildingDraft.length === 0) return;
 
-  const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth, polygonFills);
+  const mesh = buildNetworkMesh(nodes, edges, chamferAngle, meshResolution, laneWidth, polygonFills, buildings);
 
   if (showMesh) {
     mesh.triangles.forEach((tri, idx) => {
@@ -109,6 +114,23 @@ export const drawNetwork2D = (
       ctx.fill();
       ctx.strokeStyle = pg.color;
       ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  }
+
+  if (showMesh && mesh.buildingMeshes) {
+    mesh.buildingMeshes.forEach(building => {
+      ctx.beginPath();
+      building.triangles.forEach(tri => {
+        ctx.moveTo(tri[0].x, tri[0].y);
+        ctx.lineTo(tri[1].x, tri[1].y);
+        ctx.lineTo(tri[2].x, tri[2].y);
+        ctx.lineTo(tri[0].x, tri[0].y);
+      });
+      ctx.fillStyle = building.color + '44';
+      ctx.strokeStyle = building.color;
+      ctx.lineWidth = 1;
+      ctx.fill();
       ctx.stroke();
     });
   }
@@ -181,7 +203,7 @@ export const drawNetwork2D = (
                 }
             });
 
-            if (count > 0 && fillDef) {
+            if (visibilitySettings.showPolyFillHandles && count > 0 && fillDef) {
                 renderables.push({
                     z: 9999,
                     priority: 100, // On top of everything
@@ -474,6 +496,83 @@ export const drawNetwork2D = (
 
   }
 
+  buildings.forEach((building) => {
+    if (building.vertices.length < 2) return;
+    const isSelected = selectedBuildingId === building.id;
+    const center = getBuildingCenter(building);
+    const baseZ = getBuildingBaseZ(building);
+    const height = getBuildingHeight(building);
+
+    ctx.save();
+    ctx.shadowColor = 'transparent';
+    ctx.beginPath();
+    ctx.moveTo(building.vertices[0].x, building.vertices[0].y);
+    building.vertices.slice(1).forEach((vertex) => ctx.lineTo(vertex.x, vertex.y));
+    ctx.closePath();
+    ctx.fillStyle = (building.color || '#64748b') + (isSelected ? '77' : '44');
+    ctx.strokeStyle = isSelected ? '#f97316' : building.color || '#64748b';
+    ctx.lineWidth = isSelected ? 3 : 1.5;
+    ctx.fill();
+    ctx.stroke();
+
+    if (visibilitySettings.showBuildingControlPoints) {
+      building.vertices.forEach((vertex, vertexIndex) => {
+        const isVertexSelected = selectedBuildingVertex?.buildingId === building.id && selectedBuildingVertex.vertexIndex === vertexIndex;
+        ctx.beginPath();
+        ctx.rect(vertex.x - 7, vertex.y - 7, 14, 14);
+        ctx.fillStyle = isVertexSelected ? '#ffffff' : isSelected ? '#fdba74' : '#fb923c';
+        ctx.strokeStyle = '#111827';
+        ctx.lineWidth = 2;
+        ctx.fill();
+        ctx.stroke();
+      });
+    }
+
+    if (visibilitySettings.showBuildingHandles) {
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, isSelected && !selectedBuildingVertex ? 9 : 7, 0, Math.PI * 2);
+      ctx.fillStyle = isSelected && !selectedBuildingVertex ? '#ffffff' : '#f97316';
+      ctx.strokeStyle = '#111827';
+      ctx.lineWidth = 2;
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    if (isSelected && visibilitySettings.showBuildingHandles) {
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${Math.round(height)}h @ ${Math.round(baseZ)}`, center.x, center.y - 14);
+    }
+    ctx.restore();
+  });
+
+  if (buildingDraft.length > 0) {
+    ctx.save();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = '#f97316';
+    ctx.fillStyle = 'rgba(249, 115, 22, 0.18)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(buildingDraft[0].x, buildingDraft[0].y);
+    buildingDraft.slice(1).forEach((vertex) => ctx.lineTo(vertex.x, vertex.y));
+    if (buildingDraft.length >= 3) ctx.closePath();
+    ctx.stroke();
+    if (buildingDraft.length >= 3) ctx.fill();
+    ctx.setLineDash([]);
+    buildingDraft.forEach((vertex, index) => {
+      ctx.beginPath();
+      ctx.arc(vertex.x, vertex.y, index === 0 ? 8 : 6, 0, Math.PI * 2);
+      ctx.fillStyle = index === 0 ? '#ffffff' : '#f97316';
+      ctx.strokeStyle = '#111827';
+      ctx.lineWidth = 2;
+      ctx.fill();
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
   // Soft selection radius
   if (softSelectionEnabled && draggingPoint) {
     ctx.beginPath();
@@ -486,7 +585,7 @@ export const drawNetwork2D = (
   }
 
   // Nodes and control points
-  nodes.forEach(n => {
+  if (visibilitySettings.showNodeHandles) nodes.forEach(n => {
       const isActive = selectedNode === n.id;
       const isSelected = selectedNodes.includes(n.id) || isActive;
 
@@ -514,7 +613,7 @@ export const drawNetwork2D = (
   });
 
   edges.forEach((e) => {
-      if (showControlPoints) {
+      if (visibilitySettings.showNodeControlPoints) {
           const controlPts = getExtendedEdgeControlPoints(e, nodes, edges, chamferAngle);
           if (controlPts.length > 0) {
               const cubicPts = controlPts;
@@ -543,7 +642,7 @@ export const drawNetwork2D = (
 
       e.points.forEach((pt, j) => {
           const isAnchor = (j % 3 === 2);
-          if (!showControlPoints && !isAnchor) return;
+          if (!visibilitySettings.showNodeControlPoints) return;
 
           ctx.beginPath();
           const isSelectedPoint = selectedPoints?.some(p => p.edgeId === e.id && p.pointIndex === j) || false;

@@ -2,10 +2,11 @@ import React, { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import { getBuildingBaseZ, getBuildingCenter, getBuildingHeight } from '../../lib/buildings';
 
 export function PointerInterceptor({
    onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel,
-   isDragging, initialCameraParams, controlsRef, draggingPoint, nodes, edges, selectedNode
+   isDragging, initialCameraParams, controlsRef, draggingPoint, nodes, edges, buildings, selectedNode, visibilitySettings
 }: any) {
    const { camera, raycaster, gl } = useThree();
 
@@ -59,9 +60,24 @@ export function PointerInterceptor({
                   }
                };
 
-               nodes.forEach((n: any) => checkPt(n.point));
-               edges.forEach((e: any) => {
-                  e.points.forEach((p: any) => checkPt(p));
+               if (visibilitySettings.showNodeHandles) {
+                  nodes.forEach((n: any) => checkPt(n.point));
+               }
+               if (visibilitySettings.showNodeControlPoints) {
+                  edges.forEach((e: any) => {
+                     e.points.forEach((p: any) => checkPt(p));
+                  });
+               }
+               (buildings || []).forEach((building: any) => {
+                  const baseZ = getBuildingBaseZ(building);
+                  const height = getBuildingHeight(building);
+                  if (visibilitySettings.showBuildingControlPoints) {
+                     building.vertices.forEach((vertex: any) => checkPt({ x: vertex.x, y: vertex.y, z: baseZ }));
+                  }
+                  if (visibilitySettings.showBuildingHandles) {
+                     const center = getBuildingCenter(building);
+                     checkPt({ x: center.x, y: center.y, z: baseZ + height });
+                  }
                });
 
                if (closestPt) currentY = closestPt.y;
@@ -116,7 +132,7 @@ export function PointerInterceptor({
          gl.domElement.removeEventListener('contextmenu', ctx);
          gl.domElement.removeEventListener('pointercancel', cancel);
       };
-   }, [camera, raycaster, gl, onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, isDragging, draggingPoint, nodes, edges, selectedNode]);
+   }, [camera, raycaster, gl, onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, isDragging, draggingPoint, nodes, edges, buildings, selectedNode, visibilitySettings]);
 
    return <OrbitControls
       ref={controlsRef}

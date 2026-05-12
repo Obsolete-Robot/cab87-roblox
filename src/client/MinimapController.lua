@@ -80,6 +80,8 @@ local function getMinimapSurfaceStyle(part)
 		return MINIMAP_SIDEWALK_COLOR, Enum.Material.SmoothPlastic
 	elseif surfaceType == "crosswalk" then
 		return MINIMAP_CROSSWALK_COLOR, Enum.Material.SmoothPlastic
+	elseif surfaceType == "building" then
+		return Color3.fromRGB(76, 85, 99), Enum.Material.SmoothPlastic
 	end
 
 	return MINIMAP_ROAD_COLOR, Enum.Material.SmoothPlastic
@@ -197,7 +199,7 @@ end
 
 local function shouldUsePartForMinimapRoadMesh(part)
 	local surfaceType = part and part:GetAttribute("SurfaceType")
-	return surfaceType == "road" or surfaceType == "crosswalk"
+	return surfaceType == "road" or surfaceType == "crosswalk" or surfaceType == "building"
 end
 
 local function describeSource(source)

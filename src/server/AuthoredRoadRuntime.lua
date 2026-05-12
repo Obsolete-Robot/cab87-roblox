@@ -144,7 +144,7 @@ end
 
 local function shouldUsePartForMinimapRoadMesh(part)
 	local surfaceType = part and part:GetAttribute("SurfaceType")
-	return surfaceType == "road" or surfaceType == "crosswalk"
+	return surfaceType == "road" or surfaceType == "crosswalk" or surfaceType == "building"
 end
 
 local function normalizeRoadSource(value)
@@ -509,7 +509,19 @@ local function createRuntimeGraphMeshes(world, meshData)
 	for _, part in ipairs(result.collisionParts) do
 		part:SetAttribute("BakedRoadGraphMesh", true)
 		part:SetAttribute("BakeMode", "runtimeEditableMeshCollision")
-		part:SetAttribute("DriveSurface", true)
+		if part:GetAttribute("SurfaceType") == "building" then
+			part:SetAttribute("CrashObstacle", true)
+			part:SetAttribute("DriveSurface", nil)
+		else
+			part:SetAttribute("DriveSurface", true)
+		end
+	end
+
+	local crashObstacles = {}
+	for _, part in ipairs(result.collisionParts) do
+		if part:GetAttribute("CrashObstacle") == true then
+			table.insert(crashObstacles, part)
+		end
 	end
 
 	return {
@@ -518,6 +530,7 @@ local function createRuntimeGraphMeshes(world, meshData)
 		visibleParts = {},
 		collisionParts = result.collisionParts,
 		driveSurfaces = result.driveSurfaces,
+		crashObstacles = crashObstacles,
 		errors = result.errors,
 		source = "runtime-editable-collision",
 	}
@@ -684,12 +697,24 @@ local function useImportedBakedGraphMeshes(root, world, graph)
 		return nil, { "imported GLB bake had no collision MeshParts" }
 	end
 
+	local driveSurfaces = {}
+	local crashObstacles = {}
+	for _, part in ipairs(collisionParts) do
+		if part:GetAttribute("CrashObstacle") == true or part:GetAttribute("SurfaceType") == "building" then
+			part:SetAttribute("CrashObstacle", true)
+			table.insert(crashObstacles, part)
+		elseif part:GetAttribute("DriveSurface") == true or part:GetAttribute("SurfaceType") ~= "building" then
+			table.insert(driveSurfaces, part)
+		end
+	end
+
 	return {
 		meshFolder = meshFolder,
 		collisionFolder = collisionFolder,
 		visibleParts = visibleParts,
 		collisionParts = collisionParts,
-		driveSurfaces = collisionParts,
+		driveSurfaces = driveSurfaces,
+		crashObstacles = crashObstacles,
 		errors = errors,
 		source = source,
 	}, nil, meshData
@@ -1032,6 +1057,7 @@ local function createLegacyCurveWorld(root)
 	local driveSurfaces = {}
 	local crashObstacles = {}
 	appendAll(driveSurfaces, meshBuild.driveSurfaces)
+	appendAll(crashObstacles, meshBuild.crashObstacles)
 
 	local spawnPose = getLegacyCurveSpawnPose(root)
 	local cabCompanySpawnPose = buildAuthoredCabCompany(root, world, driveSurfaces, crashObstacles, "AuthoredCurveRoad")
@@ -1061,6 +1087,35 @@ local function createLegacyCurveWorld(root)
 
 	hideEditorRootForPlay(root, { preserveBakedGraph = false })
 	return world, driveSurfaces, crashObstacles, spawnPose
+end
+
+local function appendGraphBuildingCrashObstacles(target, graph)
+	for _, building in ipairs(graph.buildings or {}) do
+		local vertices = {}
+		local baseY = nil
+		for _, vertex in ipairs(building.vertices or {}) do
+			if typeof(vertex) == "Vector3" then
+				baseY = if baseY == nil then vertex.Y else math.min(baseY, vertex.Y)
+				table.insert(vertices, vertex)
+			end
+		end
+
+		if #vertices >= 3 then
+			for index, vertex in ipairs(vertices) do
+				vertices[index] = Vector3.new(vertex.X, baseY, vertex.Z)
+			end
+			local height = math.max(tonumber(building.height) or 80, 1)
+			table.insert(target, {
+				kind = "AuthoredBuildingPolygon",
+				id = building.id,
+				name = building.name,
+				vertices = vertices,
+				baseY = baseY,
+				topY = baseY + height,
+				height = height,
+			})
+		end
+	end
 end
 
 local function createGraphWorld(root, graph)
@@ -1097,6 +1152,7 @@ local function createGraphWorld(root, graph)
 	local driveSurfaces = {}
 	local crashObstacles = {}
 	appendAll(driveSurfaces, meshBuild.driveSurfaces)
+	appendGraphBuildingCrashObstacles(crashObstacles, graph)
 
 	local spawnPose = getGraphSpawnPose(graph)
 	local authoredCabCompanyMarker = findAuthoredCabCompanyMarker(root)

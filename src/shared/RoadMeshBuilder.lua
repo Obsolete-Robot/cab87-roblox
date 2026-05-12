@@ -22,6 +22,12 @@ local DEFAULT_SURFACES = {
 		color = Color3.fromRGB(231, 226, 204),
 		material = Enum.Material.SmoothPlastic,
 	},
+	buildings = {
+		name = "BuildingSurface",
+		collisionName = "BuildingCollision",
+		color = Color3.fromRGB(100, 116, 139),
+		material = Enum.Material.Concrete,
+	},
 }
 
 local DEFAULT_CHUNK_SIZE = 1024
@@ -610,7 +616,7 @@ function RoadMeshBuilder.createCollisionMesh(parent, name, triangles, options)
 	collisionOptions.canTouch = false
 	collisionOptions.transparency = 1
 	collisionOptions.castShadow = false
-	collisionOptions.driveSurface = true
+	collisionOptions.driveSurface = if collisionOptions.driveSurface == false then false else true
 	collisionOptions.collisionFidelity = collisionOptions.collisionFidelity
 		or Enum.CollisionFidelity.PreciseConvexDecomposition
 	return createMeshPartFromState(state, parent, name, collisionOptions)
@@ -655,10 +661,14 @@ local function buildSurfacePair(meshParent, collisionParent, key, triangles, opt
 		generatedBy = options.generatedBy,
 		thickness = options.collisionThickness,
 		surfaceOffset = options.collisionSurfaceOffset,
+		driveSurface = key ~= "buildings",
 	})
 	if not collisionPart then
 		visiblePart:Destroy()
 		return nil, nil, collisionErr
+	end
+	if key == "buildings" then
+		collisionPart:SetAttribute("CrashObstacle", true)
 	end
 
 	return visiblePart, collisionPart, nil
@@ -879,9 +889,13 @@ local function buildChunkedCollision(collisionParent, key, triangles, options)
 					generatedBy = options.generatedBy,
 					thickness = options.collisionThickness,
 					surfaceOffset = options.collisionSurfaceOffset,
+					driveSurface = key ~= "buildings",
 				}
 			)
 			if collisionPart then
+				if key == "buildings" then
+					collisionPart:SetAttribute("CrashObstacle", true)
+				end
 				collisionPart:SetAttribute("MeshChunkKey", bucketKey)
 				collisionPart:SetAttribute("MeshChunkSize", chunkSize)
 				collisionPart:SetAttribute("MeshChunkY", bucket.chunkY)
@@ -1048,6 +1062,7 @@ function RoadMeshBuilder.createClassifiedMeshes(parent, meshData, options)
 		roads = meshData.roadTriangles,
 		sidewalks = meshData.sidewalkTriangles,
 		crosswalks = meshData.crosswalkTriangles,
+		buildings = meshData.buildingTriangles,
 	}
 
 	for key, triangles in pairs(surfaceSets) do
@@ -1055,7 +1070,11 @@ function RoadMeshBuilder.createClassifiedMeshes(parent, meshData, options)
 		if visiblePart and collisionPart then
 			table.insert(result.visibleParts, visiblePart)
 			table.insert(result.collisionParts, collisionPart)
-			table.insert(result.driveSurfaces, collisionPart)
+			if key == "buildings" then
+				collisionPart:SetAttribute("CrashObstacle", true)
+			else
+				table.insert(result.driveSurfaces, collisionPart)
+			end
 		elseif err then
 			table.insert(result.errors, string.format("%s: %s", key, tostring(err)))
 		end
@@ -1108,6 +1127,7 @@ function RoadMeshBuilder.createClassifiedCompactSurfaceMeshes(parent, meshData, 
 		{ key = "roads", triangles = meshData.roadTriangles, surfaceType = "road" },
 		{ key = "sidewalks", triangles = meshData.sidewalkTriangles },
 		{ key = "crosswalks", triangles = meshData.crosswalkTriangles },
+		{ key = "buildings", triangles = meshData.buildingTriangles },
 	}
 
 	for _, set in ipairs(surfaceSets) do
@@ -1187,8 +1207,9 @@ function RoadMeshBuilder.createClassifiedChunkedMeshes(parent, meshData, options
 		roads = meshData.roadTriangles,
 		sidewalks = meshData.sidewalkTriangles,
 		crosswalks = meshData.crosswalkTriangles,
+		buildings = meshData.buildingTriangles,
 	}
-	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks" }
+	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks", "buildings" }
 
 	for _, key in ipairs(surfaceKeys) do
 		local visibleParts, visibleErr = buildChunkedSurface(meshFolder, key, trianglesByKey[key], options)
@@ -1205,7 +1226,11 @@ function RoadMeshBuilder.createClassifiedChunkedMeshes(parent, meshData, options
 		end
 		for _, part in ipairs(collisionParts) do
 			table.insert(result.collisionParts, part)
-			table.insert(result.driveSurfaces, part)
+			if key == "buildings" then
+				part:SetAttribute("CrashObstacle", true)
+			else
+				table.insert(result.driveSurfaces, part)
+			end
 		end
 	end
 
@@ -1258,8 +1283,9 @@ function RoadMeshBuilder.createClassifiedChunkedSurfaceMeshes(parent, meshData, 
 		roads = meshData.roadTriangles,
 		sidewalks = meshData.sidewalkTriangles,
 		crosswalks = meshData.crosswalkTriangles,
+		buildings = meshData.buildingTriangles,
 	}
-	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks" }
+	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks", "buildings" }
 
 	for _, key in ipairs(surfaceKeys) do
 		local visibleParts, err = buildChunkedSurface(meshFolder, key, trianglesByKey[key], options)
@@ -1302,8 +1328,9 @@ function RoadMeshBuilder.createClassifiedChunkedCollisionMeshes(parent, meshData
 		roads = meshData.roadTriangles,
 		sidewalks = meshData.sidewalkTriangles,
 		crosswalks = meshData.crosswalkTriangles,
+		buildings = meshData.buildingTriangles,
 	}
-	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks" }
+	local surfaceKeys = options.surfaceKeys or { "roads", "sidewalks", "crosswalks", "buildings" }
 
 	for _, key in ipairs(surfaceKeys) do
 		local collisionParts, err = buildChunkedCollision(collisionFolder, key, trianglesByKey[key], options)
@@ -1312,7 +1339,11 @@ function RoadMeshBuilder.createClassifiedChunkedCollisionMeshes(parent, meshData
 		end
 		for _, part in ipairs(collisionParts) do
 			table.insert(result.collisionParts, part)
-			table.insert(result.driveSurfaces, part)
+			if key == "buildings" then
+				part:SetAttribute("CrashObstacle", true)
+			else
+				table.insert(result.driveSurfaces, part)
+			end
 		end
 	end
 

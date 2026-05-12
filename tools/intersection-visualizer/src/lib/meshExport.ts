@@ -22,6 +22,9 @@ type RobloxChunkLayer = {
   kind?: 'surface' | 'marking';
   includeCollision?: boolean;
   collisionBaseName?: string;
+  driveSurface?: boolean;
+  crashObstacle?: boolean;
+  buildingId?: string;
 };
 
 type Bounds = {
@@ -305,6 +308,22 @@ function getRobloxLayers(meshData: MeshData): RobloxChunkLayer[] {
     });
   });
 
+  meshData.buildingMeshes.forEach((building, index) => {
+    layers.push({
+      layer: `building_${index + 1}`,
+      baseName: `BuildingSurface_${index + 1}`,
+      collisionBaseName: `BuildingCollision_${index + 1}`,
+      surfaceType: 'building',
+      triangles: building.triangles,
+      color: building.color,
+      material: building.material || 'Concrete',
+      includeCollision: true,
+      driveSurface: false,
+      crashObstacle: true,
+      buildingId: building.id,
+    });
+  });
+
   return layers;
 }
 
@@ -333,6 +352,14 @@ export function createRoadMeshExportGroup(meshData: MeshData): THREE.Group {
     });
   });
 
+  meshData.buildingMeshes.forEach((building, index) => {
+    addLayer(group, {
+      name: building.name || `Building_${index + 1}`,
+      triangles: building.triangles,
+      color: building.color,
+    });
+  });
+
   group.updateMatrixWorld(true);
   return group;
 }
@@ -352,6 +379,7 @@ export function createRobloxRoadMeshExport(meshData: MeshData) {
     const isCollision = kind === 'collision';
     const name = chunkName(isCollision ? (layer.collisionBaseName ?? `${layer.baseName}Collision`) : layer.baseName, bucket, batchIndex);
     const yOffset = layer.yOffset ?? 0;
+    const isDriveSurface = isCollision && (layer.driveSurface ?? true);
     const geometry = isCollision
       ? createCollisionGeometry(batch, yOffset, ROBLOX_COLLISION_THICKNESS, 0)
       : createTriangleGeometry(batch, yOffset, 0);
@@ -371,10 +399,12 @@ export function createRobloxRoadMeshExport(meshData: MeshData) {
       canQuery: isCollision,
       canTouch: false,
       castShadow: false,
-      driveSurface: isCollision,
+      driveSurface: isDriveSurface,
+      crashObstacle: isCollision && layer.crashObstacle === true,
       collisionFidelity: isCollision ? 'PreciseConvexDecomposition' : 'Box',
       triangleCount: actualTriangleCount,
       inputTriangleCount: batch.length,
+      buildingId: layer.buildingId,
       chunkKey: bucket.chunkY === undefined
         ? `${bucket.chunkX}:${bucket.chunkZ}`
         : `${bucket.chunkX}:${bucket.chunkY}:${bucket.chunkZ}`,

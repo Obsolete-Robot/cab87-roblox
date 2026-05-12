@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import * as THREE from 'three';
 import { Node, Edge, Point } from '../../lib/types';
+import { getBuildingBaseZ, getBuildingCenter, getBuildingHeight } from '../../lib/buildings';
 import { CameraSync } from './CameraSync';
 import { PointerInterceptor } from './PointerInterceptor';
 import { BezierPaths } from './BezierPaths';
@@ -9,9 +10,9 @@ import { LaneArrows } from './LaneArrows';
 import { Grid } from '@react-three/drei';
 
 export function SceneContent({
-  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, polygonFills, selectedPolygonFillId,
+  mesh, showMesh, visibilitySettings, nodes, edges, chamferAngle, polygonFills, buildings, selectedPolygonFillId,
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
-  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints,
+  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints, selectedBuildingId, selectedBuildingVertex,
   softSelectionEnabled, softSelectionRadius,
   setView, containerRef, marqueeStart, marqueeEnd, snapGridSize = 10, debugOptions
 }: any) {
@@ -71,12 +72,14 @@ export function SceneContent({
         initialCameraParams={initialCameraParams}
         nodes={nodes}
         edges={edges}
+        buildings={buildings}
         selectedNode={selectedNode}
+        visibilitySettings={visibilitySettings}
       />
 
       <group>
-        {showControlPoints && <BezierPaths edges={edges} nodes={nodes} chamferAngle={chamferAngle} />}
-        {polygonFills && polygonFills.map((fill: any, i: number) => {
+        {visibilitySettings.showNodeControlPoints && <BezierPaths edges={edges} nodes={nodes} chamferAngle={chamferAngle} />}
+        {visibilitySettings.showPolyFillHandles && polygonFills && polygonFills.map((fill: any, i: number) => {
           let cx = 0, cy = 0, count = 0;
           fill.points.forEach((nid: string) => {
              const n = nodes.find((nn: any) => nn.id === nid);
@@ -100,7 +103,7 @@ export function SceneContent({
           }
           return null;
         })}
-        {nodes.map((n: Node) => {
+        {visibilitySettings.showNodeHandles && nodes.map((n: Node) => {
           const isActive = selectedNode === n.id;
           const isSelected = selectedNodes?.includes(n.id) || isActive;
           const color = isActive ? (n.point.linked ? '#059669' : '#ef4444') : isSelected ? (n.point.linked ? '#6ee7b7' : '#fca5a5') : (n.point.linked ? '#10b981' : '#60a5fa');
@@ -116,10 +119,54 @@ export function SceneContent({
           );
         })}
 
+        {buildings && buildings.map((building: any) => {
+          const center = getBuildingCenter(building);
+          const baseZ = getBuildingBaseZ(building);
+          const height = getBuildingHeight(building);
+          const isSelected = selectedBuildingId === building.id;
+          return (
+            <group key={`building-handles-${building.id}`}>
+              {visibilitySettings.showBuildingControlPoints && building.vertices.map((vertex: Point, vertexIndex: number) => {
+                const isVertexSelected = selectedBuildingVertex?.buildingId === building.id && selectedBuildingVertex.vertexIndex === vertexIndex;
+                return (
+                  <mesh
+                    key={`building-${building.id}-vertex-${vertexIndex}`}
+                    position={[vertex.x, baseZ, vertex.y]}
+                    renderOrder={1000}
+                  >
+                    <boxGeometry args={[14, 14, 14]} />
+                    <meshBasicMaterial color={isVertexSelected ? '#f97316' : isSelected ? '#fdba74' : '#fb923c'} depthTest={false} depthWrite={false} transparent />
+                  </mesh>
+                );
+              })}
+              {visibilitySettings.showBuildingHandles && (
+                <mesh position={[center.x, baseZ + height, center.y]} renderOrder={1000}>
+                  <sphereGeometry args={[isSelected ? 13 : 10, 16, 16]} />
+                  <meshBasicMaterial color={isSelected && !selectedBuildingVertex ? '#ffffff' : '#f97316'} depthTest={false} depthWrite={false} transparent />
+                </mesh>
+              )}
+              {isSelected && visibilitySettings.showBuildingHandles && (
+                <lineSegments renderOrder={999}>
+                  <bufferGeometry>
+                    <bufferAttribute
+                      attach="attributes-position"
+                      args={[new Float32Array([
+                        center.x, baseZ, center.y,
+                        center.x, baseZ + height, center.y,
+                      ]), 3]}
+                    />
+                  </bufferGeometry>
+                  <lineBasicMaterial color="#f97316" transparent opacity={0.8} depthTest={false} depthWrite={false} />
+                </lineSegments>
+              )}
+            </group>
+          );
+        })}
+
         {edges.flatMap((edge: Edge) =>
           edge.points.map((pt: Point, i: number) => {
             const isAnchor = (i % 3 === 2);
-            if (!showControlPoints && !isAnchor) return null;
+            if (!visibilitySettings.showNodeControlPoints) return null;
             const isSelectedEdge = selectedEdges.includes(edge.id);
             const isSelectedPoint = selectedPoints?.some((p: any) => p.edgeId === edge.id && p.pointIndex === i) || false;
 

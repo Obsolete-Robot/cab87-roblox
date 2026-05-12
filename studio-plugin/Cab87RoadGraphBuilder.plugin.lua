@@ -1105,6 +1105,10 @@ local function applyManifestPartOptions(part, chunk, mapIdValue, manifest)
 	if isCollision or chunk.driveSurface == true then
 		part:SetAttribute("DriveSurface", true)
 	end
+	if chunk.crashObstacle == true or tostring(chunk.surfaceType or "") == "building" then
+		part:SetAttribute("CrashObstacle", true)
+		part:SetAttribute("DriveSurface", nil)
+	end
 	if isCollision and collisionVerticalChunkSize and collisionVerticalChunkSize > 0 then
 		part:SetAttribute(COLLISION_VERTICAL_CHUNK_SIZE_ATTR, collisionVerticalChunkSize)
 	end
@@ -1361,6 +1365,20 @@ local function transformGraphToImportedCoordinates(root, RoadGraphData, transfor
 			end
 		end
 	end
+	for _, building in ipairs(graph.buildings or {}) do
+		local lowestY = nil
+		for index, vertex in ipairs(building.vertices or {}) do
+			if typeof(vertex) == "Vector3" then
+				local transformed = coordinateTransformPosition(vertex, transform)
+				building.vertices[index] = transformed
+				lowestY = if lowestY == nil then transformed.Y else math.min(lowestY, transformed.Y)
+				transformedPoints += 1
+			end
+		end
+		if lowestY ~= nil then
+			building.baseZ = lowestY - (tonumber(graph.planeY) or 0)
+		end
+	end
 
 	graphFolder = RoadGraphData.writeGraph(root, graph)
 	graphFolder:SetAttribute(GRAPH_COORDINATE_TRANSFORM_APPLIED_ATTR, true)
@@ -1534,7 +1552,7 @@ local function adoptImportedMeshFromManifest()
 			elseif surfaceType == "polygonFill" then
 				polygonFillTriangles += triangleCount
 			end
-			if surfaceType == "road" or surfaceType == "crosswalk" then
+			if surfaceType == "road" or surfaceType == "crosswalk" or surfaceType == "building" then
 				cloneMinimapPart(part, minimapFolder, mapId)
 				minimapParts += 1
 			end
