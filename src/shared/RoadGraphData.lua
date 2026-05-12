@@ -88,6 +88,102 @@ local function sanitizeColor(value)
 	return nil
 end
 
+local function truthy(value)
+	if value == true then
+		return true
+	elseif type(value) == "number" then
+		return value ~= 0
+	elseif type(value) == "string" then
+		local normalized = string.lower(value)
+		return normalized == "true" or normalized == "1" or normalized == "yes" or normalized == "y"
+	end
+	return false
+end
+
+local function explicitFalse(value)
+	if value == false then
+		return true
+	elseif type(value) == "number" then
+		return value == 0
+	elseif type(value) == "string" then
+		local normalized = string.lower(value)
+		return normalized == "false" or normalized == "0" or normalized == "no" or normalized == "n"
+	end
+	return false
+end
+
+local function sanitizeOneWayDirection(value)
+	if type(value) == "number" then
+		return if value < 0 then "reverse" else "forward"
+	end
+	if type(value) ~= "string" then
+		return "forward"
+	end
+
+	local normalized = string.lower(value)
+	if normalized == "reverse"
+		or normalized == "backward"
+		or normalized == "backwards"
+		or normalized == "target"
+		or normalized == "targettosource"
+		or normalized == "target-to-source"
+		or normalized == "btoa"
+		or normalized == "b-to-a"
+		or normalized == "-1"
+	then
+		return "reverse"
+	end
+
+	return "forward"
+end
+
+local function directionImpliesOneWay(value)
+	if type(value) == "number" then
+		return value ~= 0
+	elseif type(value) ~= "string" then
+		return false
+	end
+
+	local normalized = string.lower(value)
+	if normalized == "" or normalized == "bidirectional" or normalized == "two-way" or normalized == "twoway" then
+		return false
+	end
+
+	return normalized == "forward"
+		or normalized == "reverse"
+		or normalized == "backward"
+		or normalized == "backwards"
+		or normalized == "source"
+		or normalized == "target"
+		or normalized == "sourcetotarget"
+		or normalized == "source-to-target"
+		or normalized == "targettosource"
+		or normalized == "target-to-source"
+		or normalized == "atoa"
+		or normalized == "atob"
+		or normalized == "a-to-b"
+		or normalized == "btoa"
+		or normalized == "b-to-a"
+		or normalized == "1"
+		or normalized == "-1"
+end
+
+local function sanitizeOneWay(edge)
+	if type(edge) ~= "table" then
+		return false
+	end
+
+	local oneWayValue = edge.oneWay or edge.oneway or edge.one_way
+	if truthy(oneWayValue) or directionImpliesOneWay(oneWayValue) then
+		return true
+	end
+	if explicitFalse(edge.bidirectional or edge.twoWay or edge.two_way) then
+		return true
+	end
+
+	return directionImpliesOneWay(edge.oneWayDirection or edge.travelDirection or edge.direction)
+end
+
 local function sanitizePositiveNumber(value, fallback)
 	local number = finiteNumber(value)
 	if number and number > 0 then
@@ -440,6 +536,10 @@ function RoadGraphData.normalizePayload(payload, options)
 					transitionSmoothness = finiteNumber(edge.transitionSmoothness),
 					color = sanitizeColor(edge.color),
 					name = sanitizeName(edge.name, nil),
+					oneWay = sanitizeOneWay(edge),
+					oneWayDirection = sanitizeOneWayDirection(
+						edge.oneWayDirection or edge.travelDirection or edge.direction or edge.oneWay or edge.oneway or edge.one_way
+					),
 				})
 			end
 		end
@@ -535,6 +635,8 @@ function RoadGraphData.scaleGraph(graph, options)
 				transitionSmoothness = scaleNumber(edge.transitionSmoothness, pointScale),
 				color = sanitizeColor(edge.color),
 				name = sanitizeName(edge.name, nil),
+				oneWay = edge.oneWay == true,
+				oneWayDirection = sanitizeOneWayDirection(edge.oneWayDirection),
 			})
 		end
 	end
@@ -674,6 +776,10 @@ function RoadGraphData.writeGraph(root, graph, name)
 		if edge.name then
 			edgeFolder:SetAttribute("DisplayName", edge.name)
 		end
+		if edge.oneWay == true then
+			edgeFolder:SetAttribute("OneWay", true)
+			edgeFolder:SetAttribute("OneWayDirection", sanitizeOneWayDirection(edge.oneWayDirection))
+		end
 		edgeFolder.Parent = edgesFolder
 
 		local pointsFolder = Instance.new("Folder")
@@ -811,6 +917,8 @@ function RoadGraphData.collectGraph(root, config)
 					transitionSmoothness = finiteNumber(edgeFolder:GetAttribute("TransitionSmoothness")),
 					color = sanitizeColor(edgeFolder:GetAttribute("Color")),
 					name = sanitizeName(edgeFolder:GetAttribute("DisplayName"), nil),
+					oneWay = truthy(edgeFolder:GetAttribute("OneWay")) or explicitFalse(edgeFolder:GetAttribute("Bidirectional")),
+					oneWayDirection = sanitizeOneWayDirection(edgeFolder:GetAttribute("OneWayDirection")),
 				})
 			end
 		end
@@ -922,6 +1030,8 @@ function RoadGraphData.toPayload(graph)
 			transitionSmoothness = edge.transitionSmoothness,
 			color = edge.color,
 			name = edge.name,
+			oneWay = if edge.oneWay == true then true else nil,
+			oneWayDirection = if edge.oneWay == true then sanitizeOneWayDirection(edge.oneWayDirection) else nil,
 		})
 	end
 

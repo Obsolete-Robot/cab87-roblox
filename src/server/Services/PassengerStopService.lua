@@ -420,10 +420,18 @@ end
 
 function PassengerStopService.projectToSurface(raycastParams, position, fallbackY)
 	if raycastParams then
+		local localAbove = math.max(getConfigNumber("passengerSurfaceSearchAbove", 10), 0.5)
+		local localBelow = math.max(getConfigNumber("passengerSurfaceSearchBelow", 32), 0.5)
+		local localOrigin = Vector3.new(position.X, position.Y + localAbove, position.Z)
+		local result = Workspace:Raycast(localOrigin, Vector3.new(0, -(localAbove + localBelow), 0), raycastParams)
+		if result then
+			return result.Position, true, result.Instance
+		end
+
 		local rayHeight = math.max(getConfigNumber("passengerSurfaceRaycastHeight", 140), 1)
 		local rayDepth = math.max(getConfigNumber("passengerSurfaceRaycastDepth", 260), rayHeight + 1)
 		local origin = Vector3.new(position.X, position.Y + rayHeight, position.Z)
-		local result = Workspace:Raycast(origin, Vector3.new(0, -rayDepth, 0), raycastParams)
+		result = Workspace:Raycast(origin, Vector3.new(0, -rayDepth, 0), raycastParams)
 		if result then
 			return result.Position, true, result.Instance
 		end

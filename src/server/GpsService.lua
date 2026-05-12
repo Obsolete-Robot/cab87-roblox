@@ -185,17 +185,70 @@ local function edgesById(edges)
 	return lookup
 end
 
+local function isOneWayEdge(edge)
+	return edge and edge.oneWay == true
+end
+
+local function isReverseOneWayEdge(edge)
+	return isOneWayEdge(edge) and edge.oneWayDirection == "reverse"
+end
+
+local function appendRoutePoint(points, point)
+	if typeof(point) ~= "Vector3" then
+		return
+	end
+
+	local previous = points[#points]
+	if previous and (previous - point).Magnitude <= 0.01 then
+		return
+	end
+
+	table.insert(points, point)
+end
+
+local function addRoutePolyline(graph, points, edge)
+	if #points < 2 then
+		return
+	end
+
+	local directed = isOneWayEdge(edge)
+	local options = {
+		directed = directed,
+		width = edge and edge.width or nil,
+	}
+	local previousNodeId = nil
+
+	if isReverseOneWayEdge(edge) then
+		for i = #points, 1, -1 do
+			local nodeId = addRouteNode(graph, points[i])
+			if previousNodeId then
+				addRouteEdge(graph, previousNodeId, nodeId, options)
+			end
+			previousNodeId = nodeId
+		end
+	else
+		for _, point in ipairs(points) do
+			local nodeId = addRouteNode(graph, point)
+			if previousNodeId then
+				addRouteEdge(graph, previousNodeId, nodeId, options)
+			end
+			previousNodeId = nodeId
+		end
+	end
+end
+
 local function buildAuthoredRouteGraph(world)
 	local graphData = RoadGraphData.collectGraph(world, Config)
 	if graphData then
 		local meshData = RoadGraphMesher.buildNetworkMesh(graphData, graphData.settings)
 		local graph = newRouteGraph()
-		local authoredNodeIds = {}
+		local authoredNodesById = {}
 		local authoredEdgesById = edgesById(graphData.edges)
 		local routedEdges = {}
 
 		for _, node in ipairs(graphData.nodes or {}) do
-			authoredNodeIds[node.id] = addRouteNode(graph, node.point)
+			authoredNodesById[node.id] = node
+			addRouteNode(graph, node.point)
 		end
 
 		for _, centerLine in ipairs(meshData.centerLines or {}) do
@@ -203,27 +256,25 @@ local function buildAuthoredRouteGraph(world)
 			if edge then
 				routedEdges[edge.id] = true
 			end
-			local previousNodeId = nil
-			if edge and authoredNodeIds[edge.source] then
-				previousNodeId = authoredNodeIds[edge.source]
+			local routePoints = {}
+			if edge and authoredNodesById[edge.source] then
+				appendRoutePoint(routePoints, authoredNodesById[edge.source].point)
 			end
-
 			for _, position in ipairs(centerLine) do
-				local nodeId = addRouteNode(graph, position)
-				if previousNodeId then
-					addRouteEdge(graph, previousNodeId, nodeId)
-				end
-				previousNodeId = nodeId
+				appendRoutePoint(routePoints, position)
 			end
-
-			if edge and edge.target and authoredNodeIds[edge.target] and previousNodeId then
-				addRouteEdge(graph, previousNodeId, authoredNodeIds[edge.target])
+			if edge and edge.target and authoredNodesById[edge.target] then
+				appendRoutePoint(routePoints, authoredNodesById[edge.target].point)
 			end
+			addRoutePolyline(graph, routePoints, edge)
 		end
 
 		for _, edge in ipairs(graphData.edges or {}) do
-			if not routedEdges[edge.id] and edge.target and authoredNodeIds[edge.source] and authoredNodeIds[edge.target] then
-				addRouteEdge(graph, authoredNodeIds[edge.source], authoredNodeIds[edge.target])
+			if not routedEdges[edge.id] and edge.target and authoredNodesById[edge.source] and authoredNodesById[edge.target] then
+				addRoutePolyline(graph, {
+					authoredNodesById[edge.source].point,
+					authoredNodesById[edge.target].point,
+				}, edge)
 			end
 		end
 
@@ -286,6 +337,7 @@ local function buildGeneratedRouteGraph(driveSurfaces)
 				zMin = surface.Position.Z - halfLength,
 				zMax = surface.Position.Z + halfLength,
 				y = y,
+				width = surface.Size.X,
 				points = {},
 			}
 			addGeneratedRoadPoint(road, Vector3.new(road.x, y, road.zMin), road.zMin)
@@ -299,6 +351,7 @@ local function buildGeneratedRouteGraph(driveSurfaces)
 				xMin = surface.Position.X - halfLength,
 				xMax = surface.Position.X + halfLength,
 				y = y,
+				width = surface.Size.Z,
 				points = {},
 			}
 			addGeneratedRoadPoint(road, Vector3.new(road.xMin, y, road.z), road.xMin)
@@ -336,7 +389,9 @@ local function buildGeneratedRouteGraph(driveSurfaces)
 		for _, point in ipairs(road.points) do
 			local nodeId = addRouteNode(graph, point.position)
 			if previousNodeId then
-				addRouteEdge(graph, previousNodeId, nodeId)
+				addRouteEdge(graph, previousNodeId, nodeId, {
+					width = road.width,
+				})
 			end
 			previousNodeId = nodeId
 		end
@@ -494,10 +549,18 @@ end
 local function getSurfacePosition(service, position, fallbackY)
 	local raycastParams = service.surfaceRaycastParams
 	if raycastParams then
+		local localAbove = math.max(getConfigNumber("passengerRouteSurfaceSearchAbove", 10), 0.5)
+		local localBelow = math.max(getConfigNumber("passengerRouteSurfaceSearchBelow", 32), 0.5)
+		local localOrigin = Vector3.new(position.X, position.Y + localAbove, position.Z)
+		local result = Workspace:Raycast(localOrigin, Vector3.new(0, -(localAbove + localBelow), 0), raycastParams)
+		if result then
+			return result.Position
+		end
+
 		local rayHeight = math.max(getConfigNumber("passengerRouteRaycastHeight", 140), 1)
 		local rayDepth = math.max(getConfigNumber("passengerRouteRaycastDepth", 260), rayHeight + 1)
 		local origin = Vector3.new(position.X, position.Y + rayHeight, position.Z)
-		local result = Workspace:Raycast(origin, Vector3.new(0, -rayDepth, 0), raycastParams)
+		result = Workspace:Raycast(origin, Vector3.new(0, -rayDepth, 0), raycastParams)
 		if result then
 			return result.Position
 		end
@@ -569,6 +632,45 @@ local function buildDisplayRoutePoints(points, maxSegments)
 	return displayPoints, math.max(#displayPoints - 1, 0)
 end
 
+local function getRouteLaneDirection(points, index)
+	local previousDirection = if index > 1 then getHorizontalDirection(points[index - 1], points[index]) else nil
+	local nextDirection = if index < #points then getHorizontalDirection(points[index], points[index + 1]) else nil
+	if previousDirection and nextDirection and previousDirection:Dot(nextDirection) > -0.75 then
+		local combined = previousDirection + nextDirection
+		if combined.Magnitude > 0.001 then
+			return combined.Unit
+		end
+	end
+
+	return nextDirection or previousDirection
+end
+
+local function getRouteLaneOffset(service, point, routeWidth)
+	local snap = RoadGraph.findNearestEdge(service.routeGraph, point)
+	local roadWidth = snap and snap.edge and snap.edge.width or RoadSampling.DEFAULT_ROAD_WIDTH
+	local halfRoadWidth = math.max(roadWidth * 0.5, 0)
+	local configuredOffset = Config.passengerRouteLaneOffset
+	local offset = if type(configuredOffset) == "number"
+		then configuredOffset
+		else roadWidth * math.max(getConfigNumber("passengerRouteLaneOffsetScale", 0.25), 0)
+	local laneEdgeInset = math.max(getConfigNumber("passengerRouteLaneEdgeInset", 4), 0)
+	local maxOffset = math.max(halfRoadWidth - routeWidth * 0.5 - laneEdgeInset, 0)
+	return math.clamp(offset, 0, maxOffset), snap
+end
+
+local function getRouteLanePoint(service, displayPoints, index, routeWidth)
+	local point = displayPoints[index]
+	local direction = getRouteLaneDirection(displayPoints, index)
+	if not direction then
+		return point
+	end
+
+	local offset, snap = getRouteLaneOffset(service, point, routeWidth)
+	local centerPoint = if snap then snap.position else point
+	local right = Vector3.new(-direction.Z, 0, direction.X)
+	return centerPoint + right * offset
+end
+
 local function updateRouteLine(service, cabPosition, targetPosition)
 	local guide = service.gpsGuide
 	if not guide then
@@ -596,21 +698,15 @@ local function updateRouteLine(service, cabPosition, targetPosition)
 		return
 	end
 
-	if horizontalDistance(cabPosition, routePath[1]) > 2 then
-		table.insert(routePath, 1, cabPosition)
-	end
-
-	if horizontalDistance(targetPosition, routePath[#routePath]) > 2 then
-		table.insert(routePath, targetPosition)
-	end
-
 	local displayPoints, segmentCount = buildDisplayRoutePoints(routePath, guide.maxSegments)
 	local heightOffset = getConfigNumber("passengerRouteHeightOffset", 1.65)
+	local routeWidth = math.max(getConfigNumber("passengerRouteWidth", 2.6), 0.2)
 	local points = {}
 
-	for _, point in ipairs(displayPoints) do
-		local surfacePoint = getSurfacePosition(service, point, point.Y)
-		table.insert(points, Vector3.new(point.X, surfacePoint.Y + heightOffset, point.Z))
+	for index, _ in ipairs(displayPoints) do
+		local lanePoint = getRouteLanePoint(service, displayPoints, index, routeWidth)
+		local surfacePoint = getSurfacePosition(service, lanePoint, lanePoint.Y)
+		table.insert(points, Vector3.new(lanePoint.X, surfacePoint.Y + heightOffset, lanePoint.Z))
 	end
 	if debugLoggingEnabled() and (service.elapsedTime or 0) >= (service.nextRouteDebugLogAt or 0) then
 		debugLog(
@@ -627,7 +723,6 @@ local function updateRouteLine(service, cabPosition, targetPosition)
 		service.nextRouteDebugLogAt = (service.elapsedTime or 0) + math.max(getConfigNumber("passengerDebugLogInterval", 2), 0.25)
 	end
 
-	local routeWidth = math.max(getConfigNumber("passengerRouteWidth", 2.6), 0.2)
 	local routeThickness = math.max(getConfigNumber("passengerRouteThickness", 0.18), 0.05)
 	for i, segment in ipairs(guide.segments) do
 		if i <= segmentCount then

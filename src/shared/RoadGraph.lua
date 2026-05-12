@@ -6,6 +6,14 @@ local function getBucketKey(ix, iz)
 	return tostring(ix) .. ":" .. tostring(iz)
 end
 
+local function getEdgeLookupKey(a, b, directed)
+	if directed then
+		return tostring(a) .. ">" .. tostring(b)
+	end
+
+	return if a < b then tostring(a) .. ":" .. tostring(b) else tostring(b) .. ":" .. tostring(a)
+end
+
 function RoadGraph.new(options)
 	options = options or {}
 	local mergeDistance = math.max(tonumber(options.mergeDistance) or 0, 0)
@@ -75,12 +83,14 @@ function RoadGraph.addNode(graph, position)
 	return nodeId
 end
 
-function RoadGraph.addEdge(graph, a, b)
+function RoadGraph.addEdge(graph, a, b, options)
 	if not a or not b or a == b then
 		return
 	end
 
-	local key = if a < b then tostring(a) .. ":" .. tostring(b) else tostring(b) .. ":" .. tostring(a)
+	options = options or {}
+	local directed = options.directed == true
+	local key = getEdgeLookupKey(a, b, directed)
 	if graph.edgeLookup[key] then
 		return
 	end
@@ -92,10 +102,21 @@ function RoadGraph.addEdge(graph, a, b)
 		return
 	end
 
-	graph.edgeLookup[key] = true
-	table.insert(graph.nodes[a].neighbors, { id = b, cost = cost })
-	table.insert(graph.nodes[b].neighbors, { id = a, cost = cost })
-	table.insert(graph.edges, { a = a, b = b, cost = cost })
+	local edge = {
+		a = a,
+		b = b,
+		cost = cost,
+		width = tonumber(options.width),
+		allowsForward = true,
+		allowsReverse = not directed,
+	}
+
+	graph.edgeLookup[key] = edge
+	table.insert(graph.nodes[a].neighbors, { id = b, cost = cost, edge = edge })
+	if not directed then
+		table.insert(graph.nodes[b].neighbors, { id = a, cost = cost, edge = edge })
+	end
+	table.insert(graph.edges, edge)
 end
 
 function RoadGraph.connectJunction(graph, center, radius, extraRadius)
@@ -149,7 +170,7 @@ function RoadGraph.findNearestEdge(graph, position)
 		local a = graph.nodes[edge.a].position
 		local b = graph.nodes[edge.b].position
 		local projected, alpha, distance = RoadSampling.projectPointToSegmentXZ(position, a, b)
-		local verticalPenalty = math.abs(position.Y - projected.Y) * 0.08
+		local verticalPenalty = math.abs(position.Y - projected.Y) * 2
 		local score = distance + verticalPenalty
 		if score < bestScore then
 			bestScore = score
@@ -180,30 +201,88 @@ function RoadGraph.findNearestNode(graph, position)
 	return bestNodeId
 end
 
-local function addTemporaryConnection(neighbors, a, b, cost)
+local function addTemporaryDirectedConnection(neighbors, a, b, cost, edge)
 	if not a or not b or a == b then
 		return
 	end
 
 	neighbors[a] = neighbors[a] or {}
-	neighbors[b] = neighbors[b] or {}
-	table.insert(neighbors[a], { id = b, cost = cost })
-	table.insert(neighbors[b], { id = a, cost = cost })
+	table.insert(neighbors[a], { id = b, cost = cost, edge = edge })
 end
 
-local function connectTemporaryNode(graph, neighbors, nodeId, position)
+local function addTemporaryConnection(neighbors, a, b, cost, edge)
+	addTemporaryDirectedConnection(neighbors, a, b, cost, edge)
+	addTemporaryDirectedConnection(neighbors, b, a, cost, edge)
+end
+
+local function connectTemporaryNodeToEdge(graph, neighbors, nodeId, snap, mode)
+	local edge = snap.edge
+	local aPosition = graph.nodes[edge.a].position
+	local bPosition = graph.nodes[edge.b].position
+
+	if mode == "start" then
+		if edge.allowsForward then
+			addTemporaryDirectedConnection(neighbors, nodeId, edge.b, RoadSampling.distanceXZ(snap.position, bPosition), edge)
+		end
+		if edge.allowsReverse then
+			addTemporaryDirectedConnection(neighbors, nodeId, edge.a, RoadSampling.distanceXZ(snap.position, aPosition), edge)
+		end
+	elseif mode == "target" then
+		if edge.allowsForward then
+			addTemporaryDirectedConnection(neighbors, edge.a, nodeId, RoadSampling.distanceXZ(aPosition, snap.position), edge)
+		end
+		if edge.allowsReverse then
+			addTemporaryDirectedConnection(neighbors, edge.b, nodeId, RoadSampling.distanceXZ(bPosition, snap.position), edge)
+		end
+	else
+		addTemporaryConnection(neighbors, nodeId, edge.a, RoadSampling.distanceXZ(snap.position, aPosition), edge)
+		addTemporaryConnection(neighbors, nodeId, edge.b, RoadSampling.distanceXZ(snap.position, bPosition), edge)
+	end
+end
+
+local function edgeAllowsTravelBetween(edge, fromAlpha, toAlpha)
+	if edge.allowsForward and toAlpha >= fromAlpha then
+		return true
+	end
+	if edge.allowsReverse and toAlpha <= fromAlpha then
+		return true
+	end
+	return false
+end
+
+local function addTemporarySameEdgeConnection(neighbors, startId, targetId, startSnap, targetSnap)
+	if not startSnap or not targetSnap or startSnap.edge ~= targetSnap.edge then
+		return
+	end
+
+	if not edgeAllowsTravelBetween(startSnap.edge, startSnap.alpha, targetSnap.alpha) then
+		return
+	end
+
+	addTemporaryDirectedConnection(
+		neighbors,
+		startId,
+		targetId,
+		RoadSampling.distanceXZ(startSnap.position, targetSnap.position),
+		startSnap.edge
+	)
+end
+
+local function addTemporaryNodeConnection(neighbors, a, b, cost)
+	neighbors[b] = neighbors[b] or {}
+	addTemporaryConnection(neighbors, a, b, cost, nil)
+end
+
+local function connectTemporaryNode(graph, neighbors, nodeId, position, mode)
 	local snap = RoadGraph.findNearestEdge(graph, position)
 	if snap then
-		local a = graph.nodes[snap.edge.a].position
-		local b = graph.nodes[snap.edge.b].position
-		addTemporaryConnection(neighbors, nodeId, snap.edge.a, RoadSampling.distanceXZ(snap.position, a))
-		addTemporaryConnection(neighbors, nodeId, snap.edge.b, RoadSampling.distanceXZ(snap.position, b))
+		connectTemporaryNodeToEdge(graph, neighbors, nodeId, snap, mode)
 		return snap
 	end
 
 	local nearestNodeId = RoadGraph.findNearestNode(graph, position)
 	if nearestNodeId then
-		addTemporaryConnection(neighbors, nodeId, nearestNodeId, RoadSampling.distanceXZ(position, graph.nodes[nearestNodeId].position))
+		addTemporaryNodeConnection(neighbors, nodeId, nearestNodeId, RoadSampling.distanceXZ(position, graph.nodes[nearestNodeId].position))
 	end
 
 	return nil
@@ -275,8 +354,8 @@ function RoadGraph.findPath(graph, startPosition, targetPosition)
 		[targetId] = targetPosition,
 	}
 	local temporaryNeighbors = {}
-	local startSnap = connectTemporaryNode(graph, temporaryNeighbors, startId, startPosition)
-	local targetSnap = connectTemporaryNode(graph, temporaryNeighbors, targetId, targetPosition)
+	local startSnap = connectTemporaryNode(graph, temporaryNeighbors, startId, startPosition, "start")
+	local targetSnap = connectTemporaryNode(graph, temporaryNeighbors, targetId, targetPosition, "target")
 
 	if startSnap then
 		temporaryPositions[startId] = startSnap.position
@@ -284,14 +363,7 @@ function RoadGraph.findPath(graph, startPosition, targetPosition)
 	if targetSnap then
 		temporaryPositions[targetId] = targetSnap.position
 	end
-	if startSnap and targetSnap and startSnap.edge == targetSnap.edge then
-		addTemporaryConnection(
-			temporaryNeighbors,
-			startId,
-			targetId,
-			RoadSampling.distanceXZ(temporaryPositions[startId], temporaryPositions[targetId])
-		)
-	end
+	addTemporarySameEdgeConnection(temporaryNeighbors, startId, targetId, startSnap, targetSnap)
 
 	local distances = {
 		[startId] = 0,
