@@ -1,4 +1,5 @@
 import { DEFAULTS, sanitizeBuildingFillSettings } from './constants';
+import { getLowestPointZ } from './buildings';
 import { segmentIntersect } from './math';
 import { buildNetworkMesh } from './meshing';
 import { findClosedAreas } from './network';
@@ -521,6 +522,14 @@ function offsetPoint(point: Point, normal: Point, distance: number): Point {
   };
 }
 
+function footprintPoint(point: Point, z = point.z): Point {
+  const next: Point = { x: point.x, y: point.y };
+  if (typeof z === 'number' && Number.isFinite(z)) {
+    next.z = z;
+  }
+  return next;
+}
+
 function averagePoint(points: Point[]) {
   const sum = points.reduce((acc, point) => ({ x: acc.x + point.x, y: acc.y + point.y }), { x: 0, y: 0 });
   return { x: sum.x / points.length, y: sum.y / points.length };
@@ -630,11 +639,15 @@ function buildStripCandidate(frontCurve: Point[], side: CurveSide, depth: number
   const backA = offsetPoint(frontA, normal, depth);
 
   return [
-    { x: frontA.x, y: frontA.y },
-    { x: frontB.x, y: frontB.y },
-    { x: backB.x, y: backB.y },
-    { x: backA.x, y: backA.y },
+    footprintPoint(frontA),
+    footprintPoint(frontB),
+    footprintPoint(backB, frontB.z),
+    footprintPoint(backA, frontA.z),
   ];
+}
+
+function getBuildingFillBaseZ(frontCurve: Point[], vertices: Point[]) {
+  return getLowestPointZ([...frontCurve, ...vertices], DEFAULTS.buildingBaseZ);
 }
 
 function buildDepthCandidates(preferredDepth: number, settings: BuildingFillSettings) {
@@ -719,11 +732,10 @@ function generateBuildingsAlongCurve(options: {
     }
 
     if (acceptedVertices) {
-      const averageZ = frontCurve.reduce((sum, point) => sum + (point.z ?? DEFAULTS.buildingBaseZ), 0) / frontCurve.length;
       const building: BuildingPolygon = {
         id: makeBuildingId(`${options.seed}:${index}`, options.usedIds),
         vertices: acceptedVertices,
-        baseZ: averageZ,
+        baseZ: getBuildingFillBaseZ(frontCurve, acceptedVertices),
         height,
         color: DEFAULTS.buildingColor,
         material: DEFAULTS.buildingMaterial,
@@ -777,11 +789,10 @@ function tryCreateClosedCornerBuilding(options: {
       if (hasBuildingOverlap(vertices, options.occupied)) continue;
 
       const heightRandom = createRandom(`${options.seed}:height`);
-      const averageZ = options.frontCurve.reduce((sum, point) => sum + (point.z ?? DEFAULTS.buildingBaseZ), 0) / options.frontCurve.length;
       return {
         id: makeBuildingId(options.seed, options.usedIds),
         vertices,
-        baseZ: averageZ,
+        baseZ: getBuildingFillBaseZ(options.frontCurve, vertices),
         height: Math.round(randomRange(heightRandom, options.settings.minHeight, options.settings.maxHeight)),
         color: DEFAULTS.buildingColor,
         material: DEFAULTS.buildingMaterial,
@@ -890,12 +901,11 @@ function generateClosedBoundaryBuildings(options: {
 
       if (!acceptedVertices) continue;
 
-      const averageZ = frontCurve.reduce((sum, point) => sum + (point.z ?? DEFAULTS.buildingBaseZ), 0) / frontCurve.length;
       const heightRandom = createRandom(`${buildingSeed}:height`);
       const building: BuildingPolygon = {
         id: makeBuildingId(buildingSeed, options.usedIds),
         vertices: acceptedVertices,
-        baseZ: averageZ,
+        baseZ: getBuildingFillBaseZ(frontCurve, acceptedVertices),
         height: Math.round(randomRange(heightRandom, options.settings.minHeight, options.settings.maxHeight)),
         color: DEFAULTS.buildingColor,
         material: DEFAULTS.buildingMaterial,

@@ -1092,14 +1092,18 @@ end
 local function appendGraphBuildingCrashObstacles(target, graph)
 	for _, building in ipairs(graph.buildings or {}) do
 		local vertices = {}
+		local baseY = nil
 		for _, vertex in ipairs(building.vertices or {}) do
 			if typeof(vertex) == "Vector3" then
+				baseY = if baseY == nil then vertex.Y else math.min(baseY, vertex.Y)
 				table.insert(vertices, vertex)
 			end
 		end
 
 		if #vertices >= 3 then
-			local baseY = vertices[1].Y
+			for index, vertex in ipairs(vertices) do
+				vertices[index] = Vector3.new(vertex.X, baseY, vertex.Z)
+			end
 			local height = math.max(tonumber(building.height) or 80, 1)
 			table.insert(target, {
 				kind = "AuthoredBuildingPolygon",

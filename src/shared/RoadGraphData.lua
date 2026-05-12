@@ -34,6 +34,39 @@ local function finiteNumber(value)
 	return nil
 end
 
+local function lowestVectorY(vertices)
+	local lowest = nil
+	for _, vertex in ipairs(vertices or {}) do
+		if typeof(vertex) == "Vector3" then
+			lowest = if lowest == nil then vertex.Y else math.min(lowest, vertex.Y)
+		end
+	end
+	return lowest
+end
+
+local function lowestBaseZFromVectors(vertices, planeY, fallback)
+	local lowestY = lowestVectorY(vertices)
+	if lowestY ~= nil then
+		return lowestY - (finiteNumber(planeY) or 0)
+	end
+	return fallback
+end
+
+local function lowestBaseZFromPayload(building, fallback)
+	local lowest = nil
+	if type(building) == "table" and type(building.vertices) == "table" then
+		for _, vertex in ipairs(building.vertices) do
+			if type(vertex) == "table" then
+				local z = finiteNumber(vertex.elevation) or finiteNumber(vertex.z)
+				if z ~= nil then
+					lowest = if lowest == nil then z else math.min(lowest, z)
+				end
+			end
+		end
+	end
+	return lowest or fallback
+end
+
 local function sanitizeId(value, prefix, index)
 	if type(value) == "string" and value ~= "" then
 		return value
@@ -135,7 +168,10 @@ local function sanitizeBuildings(buildings, planeY)
 
 	for index, building in ipairs(buildings) do
 		if type(building) == "table" and type(building.vertices) == "table" then
-			local baseZ = finiteNumber(building.baseZ) or DEFAULT_BUILDING_BASE_ELEVATION
+			local baseZ = lowestBaseZFromPayload(
+				building,
+				finiteNumber(building.baseZ) or DEFAULT_BUILDING_BASE_ELEVATION
+			)
 			local vertices = {}
 			for _, vertex in ipairs(building.vertices) do
 				local point = graphPointToVector({
@@ -172,7 +208,7 @@ local function sanitizeBuildings(buildings, planeY)
 	return normalized
 end
 
-local function cloneBuildings(buildings)
+local function cloneBuildings(buildings, planeY)
 	local cloned = {}
 	for index, building in ipairs(buildings or {}) do
 		if type(building) == "table" and type(building.vertices) == "table" then
@@ -184,11 +220,21 @@ local function cloneBuildings(buildings)
 			end
 
 			if #vertices >= 3 then
+				local baseZ = lowestBaseZFromVectors(
+					vertices,
+					planeY,
+					finiteNumber(building.baseZ) or DEFAULT_BUILDING_BASE_ELEVATION
+				)
+				local baseY = (finiteNumber(planeY) or 0) + baseZ
+				local flattenedVertices = {}
+				for _, vertex in ipairs(vertices) do
+					table.insert(flattenedVertices, Vector3.new(vertex.X, baseY, vertex.Z))
+				end
 				table.insert(cloned, {
 					id = sanitizeId(building.id, "b", index),
 					name = sanitizeName(building.name, nil),
-					vertices = vertices,
-					baseZ = finiteNumber(building.baseZ) or DEFAULT_BUILDING_BASE_ELEVATION,
+					vertices = flattenedVertices,
+					baseZ = baseZ,
 					height = sanitizePositiveNumber(building.height, DEFAULT_BUILDING_HEIGHT),
 					color = sanitizeColor(building.color) or DEFAULT_BUILDING_COLOR,
 					material = sanitizeBuildingMaterial(building.material),
@@ -504,7 +550,11 @@ function RoadGraphData.scaleGraph(graph, options)
 			end
 
 			if #vertices >= 3 then
-				local baseZ = vertices[1].Y - planeY
+				local baseZ = lowestBaseZFromVectors(vertices, planeY, DEFAULT_BUILDING_BASE_ELEVATION)
+				local baseY = planeY + baseZ
+				for vertexIndex, vertex in ipairs(vertices) do
+					vertices[vertexIndex] = Vector3.new(vertex.X, baseY, vertex.Z)
+				end
 				table.insert(buildings, {
 					id = sanitizeId(building.id, "b", index),
 					name = sanitizeName(building.name, nil),
@@ -663,7 +713,8 @@ function RoadGraphData.writeGraph(root, graph, name)
 		end
 	end
 
-	local buildings = cloneBuildings(graph.buildings)
+	local planeY = finiteNumber(graph.planeY) or 0
+	local buildings = cloneBuildings(graph.buildings, planeY)
 	if #buildings > 0 then
 		local buildingsFolder = Instance.new("Folder")
 		buildingsFolder.Name = RoadGraphData.BUILDINGS_NAME
@@ -800,11 +851,21 @@ function RoadGraphData.collectGraph(root, config)
 			end
 
 			if #vertices >= 3 then
+				local planeY = finiteNumber(graphFolder:GetAttribute("PlaneY")) or 0
+				local baseZ = lowestBaseZFromVectors(
+					vertices,
+					planeY,
+					finiteNumber(buildingFolder:GetAttribute("BaseZ")) or DEFAULT_BUILDING_BASE_ELEVATION
+				)
+				local baseY = planeY + baseZ
+				for vertexIndex, vertex in ipairs(vertices) do
+					vertices[vertexIndex] = Vector3.new(vertex.X, baseY, vertex.Z)
+				end
 				table.insert(buildings, {
 					id = sanitizeId(buildingFolder:GetAttribute("BuildingId") or buildingFolder.Name, "b", index),
 					name = sanitizeName(buildingFolder:GetAttribute("DisplayName"), nil),
 					vertices = vertices,
-					baseZ = finiteNumber(buildingFolder:GetAttribute("BaseZ")) or (vertices[1].Y - (finiteNumber(graphFolder:GetAttribute("PlaneY")) or 0)),
+					baseZ = baseZ,
 					height = sanitizePositiveNumber(buildingFolder:GetAttribute("Height"), DEFAULT_BUILDING_HEIGHT),
 					color = sanitizeColor(buildingFolder:GetAttribute("Color")) or DEFAULT_BUILDING_COLOR,
 					material = sanitizeBuildingMaterial(buildingFolder:GetAttribute("Material")),
@@ -878,10 +939,11 @@ function RoadGraphData.toPayload(graph)
 			end
 
 			if #vertices >= 3 then
-				local baseZ = finiteNumber(building.baseZ)
-				if baseZ == nil and typeof(building.vertices[1]) == "Vector3" then
-					baseZ = building.vertices[1].Y - (finiteNumber(graph.planeY) or 0)
-				end
+				local baseZ = lowestBaseZFromVectors(
+					building.vertices,
+					graph.planeY,
+					finiteNumber(building.baseZ) or DEFAULT_BUILDING_BASE_ELEVATION
+				)
 				table.insert(buildings, {
 					id = sanitizeId(building.id, "b", index),
 					name = building.name,

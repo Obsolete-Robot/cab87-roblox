@@ -1366,14 +1366,17 @@ local function transformGraphToImportedCoordinates(root, RoadGraphData, transfor
 		end
 	end
 	for _, building in ipairs(graph.buildings or {}) do
+		local lowestY = nil
 		for index, vertex in ipairs(building.vertices or {}) do
 			if typeof(vertex) == "Vector3" then
-				building.vertices[index] = coordinateTransformPosition(vertex, transform)
+				local transformed = coordinateTransformPosition(vertex, transform)
+				building.vertices[index] = transformed
+				lowestY = if lowestY == nil then transformed.Y else math.min(lowestY, transformed.Y)
 				transformedPoints += 1
 			end
 		end
-		if typeof((building.vertices or {})[1]) == "Vector3" then
-			building.baseZ = building.vertices[1].Y - (tonumber(graph.planeY) or 0)
+		if lowestY ~= nil then
+			building.baseZ = lowestY - (tonumber(graph.planeY) or 0)
 		end
 	end
 

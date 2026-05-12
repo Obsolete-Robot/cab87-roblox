@@ -14,6 +14,16 @@ local function horizontalDistance(a, b)
 	return math.sqrt(dx * dx + dz * dz)
 end
 
+local function lowestY(points)
+	local lowest = nil
+	for _, point in ipairs(points or {}) do
+		if typeof(point) == "Vector3" then
+			lowest = if lowest == nil then point.Y else math.min(lowest, point.Y)
+		end
+	end
+	return lowest
+end
+
 local function getDir(fromPoint, toPoint)
 	local dx = toPoint.X - fromPoint.X
 	local dz = toPoint.Z - fromPoint.Z
@@ -688,6 +698,14 @@ local function buildBuildingMeshes(mesh, graph)
 			continue
 		end
 
+		local baseY = lowestY(baseVertices)
+		if baseY == nil then
+			continue
+		end
+		for vertexIndex, vertex in ipairs(baseVertices) do
+			baseVertices[vertexIndex] = Vector3.new(vertex.X, baseY, vertex.Z)
+		end
+
 		if horizontalDistance(baseVertices[1], baseVertices[#baseVertices]) <= 0.01 then
 			table.remove(baseVertices)
 		end
@@ -737,7 +755,7 @@ local function buildBuildingMeshes(mesh, graph)
 				id = building.id or ("b" .. tostring(index)),
 				name = building.name,
 				vertices = baseVertices,
-				baseZ = building.baseZ,
+				baseZ = baseY - (tonumber(graph.planeY) or 0),
 				height = height,
 				color = building.color or "#64748b",
 				material = building.material or "Concrete",

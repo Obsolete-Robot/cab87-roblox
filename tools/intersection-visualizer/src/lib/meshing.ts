@@ -1,6 +1,6 @@
 import { DEFAULTS } from './constants';
 import { Point, Node, Edge, PolygonFill, MeshData, Triangle, BuildingPolygon } from "./types";
-import { cleanBuildingVertices } from './buildings';
+import { cleanBuildingVertices, getBuildingBaseZ } from './buildings';
 import { getDir, intersectSegmentPolygon, segmentIntersect } from "./math";
 import { calculateBothCornerPoints } from "./junctions";
 import { getEdgeControlPoints, sampleEdgeSpline, hasCrosswalk, isTrueJunction, getIncidentConnections } from "./network";
@@ -1096,7 +1096,7 @@ function buildBuildingMeshes(buildings: BuildingPolygon[]): MeshData['buildingMe
     const vertices = cleanBuildingVertices(building.vertices || []);
     if (vertices.length < 3) continue;
 
-    const baseZ = building.baseZ ?? DEFAULTS.buildingBaseZ;
+    const baseZ = getBuildingBaseZ(building);
     const height = Math.max(1, building.height || DEFAULTS.buildingHeight);
     const topZ = baseZ + height;
     const baseBoundary = vertices.map((vertex) => ({ x: vertex.x, y: vertex.y, z: baseZ }));

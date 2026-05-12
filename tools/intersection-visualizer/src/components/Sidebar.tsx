@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2 } from 'lucide-react';
 import { Node, Edge, BuildingPolygon, BuildingFillSettings, VisibilitySettings, PolygonFill } from '../lib/types';
 import { sanitizeBuildingFillSettings, sanitizeMeshResolution } from '../lib/constants';
+import { getBuildingBaseZ } from '../lib/buildings';
 import { getEdgeClearance } from '../lib/junctions';
 import { isTrueJunction } from '../lib/network';
 
@@ -505,10 +506,15 @@ export default function Sidebar({
                           <label className="text-xs text-slate-400 block mb-1">Base Z</label>
                           <input
                             type="number"
-                            value={Math.round(selectedBuilding.baseZ ?? DEFAULTS.buildingBaseZ)}
+                            value={Math.round(getBuildingBaseZ(selectedBuilding))}
                             onChange={(evt) => {
                               const value = parseFloat(evt.target.value);
-                              setBuildings(prev => prev.map(building => building.id === selectedBuilding.id ? { ...building, baseZ: Number.isFinite(value) ? value : DEFAULTS.buildingBaseZ } : building));
+                              const nextBaseZ = Number.isFinite(value) ? value : DEFAULTS.buildingBaseZ;
+                              setBuildings(prev => prev.map(building => building.id === selectedBuilding.id ? {
+                                ...building,
+                                baseZ: nextBaseZ,
+                                vertices: building.vertices.map(vertex => ({ ...vertex, z: nextBaseZ })),
+                              } : building));
                             }}
                             className="w-full bg-slate-800 text-white border border-slate-600 rounded p-1 text-xs focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 transition-colors"
                           />

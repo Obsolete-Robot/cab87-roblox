@@ -13,7 +13,7 @@ import {
   COLORS, ROAD_NETWORK_SCHEMA, ROAD_NETWORK_VERSION,
   sanitizeMeshResolution, sanitizeBuildingFillSettings, DEFAULTS
 } from './lib/constants';
-import { cleanBuildingVertices, getBuildingBaseZ, getBuildingCenter, getBuildingHeight, pointInBuilding } from './lib/buildings';
+import { cleanBuildingVertices, getBuildingBaseZ, getBuildingCenter, getBuildingHeight, getLowestPointZ, pointInBuilding } from './lib/buildings';
 import { generateBuildingFill } from './lib/buildingFill';
 
 type DragState = {
@@ -319,7 +319,7 @@ export default function App() {
     const nextBuilding: BuildingPolygon = {
       id,
       vertices: cleanedVertices,
-      baseZ: DEFAULTS.buildingBaseZ,
+      baseZ: getLowestPointZ(cleanedVertices, DEFAULTS.buildingBaseZ),
       height: DEFAULTS.buildingHeight,
       color: DEFAULTS.buildingColor,
       material: DEFAULTS.buildingMaterial,
@@ -1278,7 +1278,11 @@ export default function App() {
         return;
       }
 
-      const nextDraft = [...buildingDraft, { x: pos.x, y: pos.y }];
+      const draftPoint: Point = { x: pos.x, y: pos.y };
+      if (typeof pos.z === 'number' && Number.isFinite(pos.z)) {
+        draftPoint.z = pos.z;
+      }
+      const nextDraft = [...buildingDraft, draftPoint];
       if (e.detail >= 2 && nextDraft.length >= 3) {
         finishBuildingDraft(nextDraft);
         return;

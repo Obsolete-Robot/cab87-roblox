@@ -1,8 +1,23 @@
 import { DEFAULTS } from './constants';
 import { BuildingPolygon, Point } from './types';
 
-export function getBuildingBaseZ(building: Pick<BuildingPolygon, 'baseZ'>) {
-  return building.baseZ ?? DEFAULTS.buildingBaseZ;
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+export function getLowestPointZ(points: Point[] | undefined, fallback = DEFAULTS.buildingBaseZ) {
+  let lowest: number | undefined;
+  for (const point of points ?? []) {
+    const z = finiteNumber(point.z);
+    if (z === undefined) continue;
+    lowest = lowest === undefined ? z : Math.min(lowest, z);
+  }
+
+  return lowest ?? fallback;
+}
+
+export function getBuildingBaseZ(building: Pick<BuildingPolygon, 'baseZ'> & { vertices?: Point[] }) {
+  return getLowestPointZ(building.vertices, building.baseZ ?? DEFAULTS.buildingBaseZ);
 }
 
 export function getBuildingHeight(building: Pick<BuildingPolygon, 'height'>) {
@@ -59,9 +74,14 @@ export function cleanBuildingVertices(vertices: Point[]) {
   const cleaned: Point[] = [];
   for (const vertex of vertices) {
     if (!Number.isFinite(vertex.x) || !Number.isFinite(vertex.y)) continue;
+    const nextVertex: Point = { x: vertex.x, y: vertex.y };
+    if (typeof vertex.z === 'number' && Number.isFinite(vertex.z)) {
+      nextVertex.z = vertex.z;
+    }
+
     const previous = cleaned[cleaned.length - 1];
-    if (previous && Math.hypot(previous.x - vertex.x, previous.y - vertex.y) < 0.01) continue;
-    cleaned.push({ x: vertex.x, y: vertex.y });
+    if (previous && Math.hypot(previous.x - nextVertex.x, previous.y - nextVertex.y) < 0.01) continue;
+    cleaned.push(nextVertex);
   }
 
   if (cleaned.length > 2) {
@@ -74,4 +94,3 @@ export function cleanBuildingVertices(vertices: Point[]) {
 
   return cleaned;
 }
-
