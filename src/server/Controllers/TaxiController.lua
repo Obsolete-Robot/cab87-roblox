@@ -236,6 +236,8 @@ function TaxiController:start()
 	local velocity = Vector3.zero
 	local verticalVelocity = 0
 	local grounded = true
+	local hillAirtimeGraceTimer = 0
+	local hillAirtimeArmed = true
 	local visualPitch = 0
 	local visualRoll = 0
 	local visualDriveRoll = 0
@@ -751,6 +753,44 @@ function TaxiController:start()
 		return Config.roadSurfaceY + Config.carRideHeight
 	end
 
+	local function getFiniteNumberConfig(key, fallback)
+		local value = Config[key]
+		if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+			return value
+		end
+
+		return fallback
+	end
+
+	local function getHillAirtimeGrace(groundProfile, dropDistance, currentHorizontalSpeed, horizontalStepDistance)
+		if not groundProfile then
+			return 0
+		end
+
+		local baseGrace = math.max(getFiniteNumberConfig("carHillAirtimeGraceSeconds", 0), 0)
+		if baseGrace <= 0 then
+			return 0
+		end
+
+		local minSpeed = math.max(getFiniteNumberConfig("carHillAirtimeMinSpeed", 0), 0)
+		local minDrop = math.max(getFiniteNumberConfig("carHillAirtimeMinDrop", 0), 0)
+		if currentHorizontalSpeed < minSpeed or dropDistance < minDrop then
+			return 0
+		end
+
+		local maxGrace = math.max(getFiniteNumberConfig("carHillAirtimeMaxGraceSeconds", baseGrace), 0)
+		if maxGrace <= 0 then
+			return 0
+		end
+
+		local slopeScale = math.max(getFiniteNumberConfig("carHillAirtimeSlopeGraceScale", 0), 0)
+		local descentSlope = if horizontalStepDistance > 0.001
+			then math.max(dropDistance / horizontalStepDistance, 0)
+			else 0
+
+		return math.clamp(baseGrace + descentSlope * slopeScale, 0, maxGrace)
+	end
+
 	local function getWallScrapeVelocity(tangentVelocity, normal, speed)
 		local tangentSpeed = tangentVelocity.Magnitude
 		if tangentSpeed <= 0.001 then
@@ -973,6 +1013,8 @@ function TaxiController:start()
 		velocity = Vector3.zero
 		verticalVelocity = 0
 		grounded = true
+		hillAirtimeGraceTimer = 0
+		hillAirtimeArmed = true
 		visualPitch = 0
 		visualRoll = 0
 		visualDriveRoll = 0
@@ -1059,6 +1101,8 @@ function TaxiController:start()
 			car:SetAttribute("Cab87HasDriver", driverMode == "AI" or seat.Occupant ~= nil)
 			grounded = true
 			verticalVelocity = 0
+			hillAirtimeGraceTimer = 0
+			hillAirtimeArmed = true
 			visualPitch = 0
 			visualRoll = 0
 			visualDriveRoll = 0
@@ -1251,10 +1295,27 @@ function TaxiController:start()
 
 		if grounded then
 			local stepUp = stepY - previousY
-			if not groundProfile or previousY - targetY > Config.carGroundSnapDistance then
+			local dropDistance = groundProfile and previousY - targetY or 0
+			local horizontalStepDistance = horizontalSpeed * dt
+			local hillAirtimeGrace = if hillAirtimeArmed
+				then getHillAirtimeGrace(
+					groundProfile,
+					dropDistance,
+					horizontalSpeed,
+					horizontalStepDistance
+				)
+				else 0
+
+			if not groundProfile or dropDistance > Config.carGroundSnapDistance then
 				pendingFallResetPose = getSafeFallResetPose()
 				grounded = false
-				verticalVelocity = math.max(verticalVelocity, 8)
+				hillAirtimeGraceTimer = hillAirtimeGrace
+				if hillAirtimeGraceTimer > 0 then
+					verticalVelocity = math.max(verticalVelocity, 0)
+					hillAirtimeArmed = false
+				else
+					verticalVelocity = math.max(verticalVelocity, 8)
+				end
 				targetPitch = visualPitch
 				targetRoll = visualRoll
 			elseif stepUp > Config.carGroundMaxStepUp then
@@ -1262,40 +1323,61 @@ function TaxiController:start()
 				position = previousPosition
 				velocity = getGroundStepCrashVelocity(velocity, normal)
 				verticalVelocity = 0
+				hillAirtimeGraceTimer = 0
 				boostTimer = 0
 				targetPitch = visualPitch
 				targetRoll = visualRoll
 				triggerCrashFeedback(driver, impactSpeed)
 				reportImpactDamage("ground", impactSpeed)
+			elseif hillAirtimeGrace > 0 then
+				pendingFallResetPose = getSafeFallResetPose()
+				grounded = false
+				hillAirtimeGraceTimer = hillAirtimeGrace
+				hillAirtimeArmed = false
+				verticalVelocity = math.max(verticalVelocity, 0)
+				targetPitch = visualPitch
+				targetRoll = visualRoll
 			else
 				position = Vector3.new(position.X, targetY, position.Z)
 				local riseVelocity = (position.Y - previousY) / dt
 				verticalVelocity = math.max(riseVelocity, 0)
+				hillAirtimeGraceTimer = 0
 				airPitchVelocity = 0
 				airRollVelocity = 0
 				pendingFallResetPose = nil
+				if dropDistance <= 0 then
+					hillAirtimeArmed = true
+				end
 				recordSafeGroundPose(groundProfile)
 			end
 		else
-			local gravity = if verticalVelocity > 0 then Config.carGravityUp else Config.carGravityDown
 			local maxPitch = math.rad(Config.carMaxPitchDegrees)
-			local pitchGravityAlpha = if maxPitch > 0
-				then math.clamp(visualPitch / maxPitch, -1, 1)
-				else 0
-			if pitchGravityAlpha < 0 then
-				gravity *= 1 + (Config.carAirPitchUpGravityMultiplier - 1) * -pitchGravityAlpha
-			elseif pitchGravityAlpha > 0 then
-				gravity *= 1 + (Config.carAirPitchDownGravityMultiplier - 1) * pitchGravityAlpha
+			local ignoreGravityAndLanding = hillAirtimeGraceTimer > 0
+
+			if ignoreGravityAndLanding then
+				hillAirtimeGraceTimer = math.max(hillAirtimeGraceTimer - dt, 0)
+			else
+				local gravity = if verticalVelocity > 0 then Config.carGravityUp else Config.carGravityDown
+				local pitchGravityAlpha = if maxPitch > 0
+					then math.clamp(visualPitch / maxPitch, -1, 1)
+					else 0
+				if pitchGravityAlpha < 0 then
+					gravity *= 1 + (Config.carAirPitchUpGravityMultiplier - 1) * -pitchGravityAlpha
+				elseif pitchGravityAlpha > 0 then
+					gravity *= 1 + (Config.carAirPitchDownGravityMultiplier - 1) * pitchGravityAlpha
+				end
+
+				verticalVelocity -= gravity * dt
 			end
 
-			verticalVelocity -= gravity * dt
 			position = Vector3.new(position.X, position.Y + verticalVelocity * dt, position.Z)
 
-			if groundProfile and position.Y <= targetY and verticalVelocity <= 0 then
+			if not ignoreGravityAndLanding and groundProfile and position.Y <= targetY and verticalVelocity <= 0 then
 				local landingSpeed = -verticalVelocity
 				position = Vector3.new(position.X, targetY, position.Z)
 				verticalVelocity = 0
 				grounded = true
+				hillAirtimeGraceTimer = 0
 				triggerLandingBounce(landingSpeed)
 				airPitchVelocity = 0
 				airRollVelocity = 0
