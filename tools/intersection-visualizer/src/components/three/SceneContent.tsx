@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import * as THREE from 'three';
 import { Node, Edge, Point } from '../../lib/types';
+import { getBuildingBaseZ, getBuildingCenter, getBuildingHeight } from '../../lib/buildings';
 import { CameraSync } from './CameraSync';
 import { PointerInterceptor } from './PointerInterceptor';
 import { BezierPaths } from './BezierPaths';
@@ -9,9 +10,9 @@ import { LaneArrows } from './LaneArrows';
 import { Grid } from '@react-three/drei';
 
 export function SceneContent({
-  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, polygonFills, selectedPolygonFillId,
+  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, polygonFills, buildings, selectedPolygonFillId,
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
-  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints,
+  isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints, selectedBuildingId, selectedBuildingVertex,
   softSelectionEnabled, softSelectionRadius,
   setView, containerRef, marqueeStart, marqueeEnd, snapGridSize = 10, debugOptions
 }: any) {
@@ -71,6 +72,7 @@ export function SceneContent({
         initialCameraParams={initialCameraParams}
         nodes={nodes}
         edges={edges}
+        buildings={buildings}
         selectedNode={selectedNode}
       />
 
@@ -113,6 +115,48 @@ export function SceneContent({
               <sphereGeometry args={[14, 16, 16]} />
               <meshBasicMaterial color={color} depthTest={false} depthWrite={false} transparent />
             </mesh>
+          );
+        })}
+
+        {buildings && buildings.map((building: any) => {
+          const center = getBuildingCenter(building);
+          const baseZ = getBuildingBaseZ(building);
+          const height = getBuildingHeight(building);
+          const isSelected = selectedBuildingId === building.id;
+          return (
+            <group key={`building-handles-${building.id}`}>
+              {building.vertices.map((vertex: Point, vertexIndex: number) => {
+                const isVertexSelected = selectedBuildingVertex?.buildingId === building.id && selectedBuildingVertex.vertexIndex === vertexIndex;
+                return (
+                  <mesh
+                    key={`building-${building.id}-vertex-${vertexIndex}`}
+                    position={[vertex.x, baseZ, vertex.y]}
+                    renderOrder={1000}
+                  >
+                    <boxGeometry args={[14, 14, 14]} />
+                    <meshBasicMaterial color={isVertexSelected ? '#f97316' : isSelected ? '#fdba74' : '#fb923c'} depthTest={false} depthWrite={false} transparent />
+                  </mesh>
+                );
+              })}
+              <mesh position={[center.x, baseZ + height, center.y]} renderOrder={1000}>
+                <sphereGeometry args={[isSelected ? 13 : 10, 16, 16]} />
+                <meshBasicMaterial color={isSelected && !selectedBuildingVertex ? '#ffffff' : '#f97316'} depthTest={false} depthWrite={false} transparent />
+              </mesh>
+              {isSelected && (
+                <lineSegments renderOrder={999}>
+                  <bufferGeometry>
+                    <bufferAttribute
+                      attach="attributes-position"
+                      args={[new Float32Array([
+                        center.x, baseZ, center.y,
+                        center.x, baseZ + height, center.y,
+                      ]), 3]}
+                    />
+                  </bufferGeometry>
+                  <lineBasicMaterial color="#f97316" transparent opacity={0.8} depthTest={false} depthWrite={false} />
+                </lineSegments>
+              )}
+            </group>
           );
         })}
 

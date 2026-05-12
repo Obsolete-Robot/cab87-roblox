@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Point, Node, Edge, PointSelection } from './lib/types';
+import { Point, Node, Edge, PointSelection, BuildingPolygon } from './lib/types';
 import { getExtendedEdgeControlPoints, sampleEdgeSpline, findClosedAreas } from './lib/network';
 import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
@@ -13,6 +13,13 @@ import {
   COLORS, ROAD_NETWORK_SCHEMA, ROAD_NETWORK_VERSION,
   sanitizeMeshResolution, DEFAULTS
 } from './lib/constants';
+import { cleanBuildingVertices, getBuildingBaseZ, getBuildingCenter, getBuildingHeight, pointInBuilding } from './lib/buildings';
+
+type DragState = {
+  type: 'node' | 'edge' | 'pan' | 'marquee' | 'building-center' | 'building-vertex';
+  id: string;
+  pointId?: number;
+};
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -37,6 +44,11 @@ export default function App() {
   const startDragPosRef = useRef<Point | null>(null);
   const addedToSelectionRef = useRef<boolean>(false);
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
+  const [buildings, setBuildings] = useState<BuildingPolygon[]>([]);
+  const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
+  const [selectedBuildingVertex, setSelectedBuildingVertex] = useState<{ buildingId: string; vertexIndex: number } | null>(null);
+  const [isBuildingMode, setIsBuildingMode] = useState(false);
+  const [buildingDraft, setBuildingDraft] = useState<Point[]>([]);
   const selectedNode = selectedNodes.length > 0 ? selectedNodes[selectedNodes.length - 1] : null;
 
   const setSelectedNode = (id: string | null) => {
@@ -44,7 +56,7 @@ export default function App() {
   };
   const [isAddNodeMode, setIsAddNodeMode] = useState(false);
 
-  const [dragging, setDragging] = useState<{ type: 'node' | 'edge' | 'pan' | 'marquee'; id: string; pointId?: number } | null>(null);
+  const [dragging, setDragging] = useState<DragState | null>(null);
   const [marqueeStart, setMarqueeStart] = useState<Point | null>(null);
   const [marqueeEnd, setMarqueeEnd] = useState<Point | null>(null);
 
@@ -56,8 +68,19 @@ export default function App() {
         if (dragging.pointId != null) return edge ? edge.points[dragging.pointId] : null;
         else if (lastDragPosRef.current) return lastDragPosRef.current;
     }
+    if (dragging.type === 'building-center') {
+      const building = buildings.find((item) => item.id === dragging.id);
+      if (!building) return null;
+      const center = getBuildingCenter(building);
+      return { ...center, z: getBuildingBaseZ(building) + getBuildingHeight(building) };
+    }
+    if (dragging.type === 'building-vertex') {
+      const building = buildings.find((item) => item.id === dragging.id);
+      const vertex = building && dragging.pointId != null ? building.vertices[dragging.pointId] : null;
+      return vertex ? { ...vertex, z: getBuildingBaseZ(building!) } : null;
+    }
     return null;
-  }, [dragging, nodes, edges]);
+  }, [dragging, nodes, edges, buildings]);
 
   const [isMergeMode, setIsMergeMode] = useState(false);
   const [showMesh, setShowMesh] = useState(false);
@@ -83,6 +106,7 @@ export default function App() {
     crossroads: true,
     lines: true,
     polyFills: true,
+    buildings: true,
   });
 
   const handleMatchSelectedZToLast = () => {
@@ -147,6 +171,39 @@ export default function App() {
 
   const [polygonFills, setPolygonFills] = useState<{ id: string; points: string[]; color: string }[]>([]);
   const [deletedFaces, setDeletedFaces] = useState<string[]>([]);
+
+  const clearBuildingSelection = () => {
+    setSelectedBuildingId(null);
+    setSelectedBuildingVertex(null);
+  };
+
+  const clearRoadSelection = () => {
+    setSelectedNode(null);
+    setSelectedEdges([]);
+    setSelectedPoints([]);
+    setSelectedPolygonFillId(null);
+  };
+
+  const finishBuildingDraft = (vertices = buildingDraft) => {
+    const cleanedVertices = cleanBuildingVertices(vertices);
+    if (cleanedVertices.length < 3) return false;
+
+    const id = Math.random().toString(36).substring(2, 9);
+    const nextBuilding: BuildingPolygon = {
+      id,
+      vertices: cleanedVertices,
+      baseZ: DEFAULTS.buildingBaseZ,
+      height: DEFAULTS.buildingHeight,
+      color: DEFAULTS.buildingColor,
+      material: DEFAULTS.buildingMaterial,
+    };
+    setBuildings(prev => [...prev, nextBuilding]);
+    setSelectedBuildingId(id);
+    setSelectedBuildingVertex(null);
+    clearRoadSelection();
+    setBuildingDraft([]);
+    return true;
+  };
 
   const getFaceKey = (points: string[]) => {
     let minKey = points.join(',');
@@ -283,6 +340,7 @@ export default function App() {
       nodes,
       edges,
       polygonFills,
+      buildings,
       deletedFaces,
     }, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
@@ -300,7 +358,8 @@ export default function App() {
     chamferAngle,
     meshResolution,
     laneWidth,
-    polygonFills
+    polygonFills,
+    buildings
   );
 
   const handleExportObj = () => {
@@ -369,10 +428,27 @@ export default function App() {
           } else {
             setDeletedFaces([]);
           }
+          if (Array.isArray(data.buildings)) {
+            setBuildings(data.buildings.map((building: any, index: number) => ({
+              id: typeof building.id === 'string' && building.id ? building.id : `b${index + 1}`,
+              name: typeof building.name === 'string' ? building.name : undefined,
+              vertices: cleanBuildingVertices(Array.isArray(building.vertices) ? building.vertices : []),
+              baseZ: typeof building.baseZ === 'number' ? building.baseZ : DEFAULTS.buildingBaseZ,
+              height: Math.max(1, typeof building.height === 'number' ? building.height : DEFAULTS.buildingHeight),
+              color: typeof building.color === 'string' ? building.color : DEFAULTS.buildingColor,
+              material: typeof building.material === 'string' ? building.material : DEFAULTS.buildingMaterial,
+            })).filter((building: BuildingPolygon) => building.vertices.length >= 3));
+          } else {
+            setBuildings([]);
+          }
           setSelectedEdges([]);
           setSelectedNode(null);
           setSelectedPoints([]);
+          setSelectedBuildingId(null);
+          setSelectedBuildingVertex(null);
+          setBuildingDraft([]);
           setIsAddNodeMode(false);
+          setIsBuildingMode(false);
           setDragging(null);
           setIsMergeMode(false);
         } else {
@@ -398,17 +474,38 @@ export default function App() {
         setSelectedNode(null);
         setSelectedEdges([]);
         setSelectedPoints([]);
+        clearBuildingSelection();
         setDragging(null);
         setIsAddNodeMode(false);
+        setIsBuildingMode(false);
+        setBuildingDraft([]);
         setIsMergeMode(false);
+      }
+      if (isBuildingMode && e.key === 'Enter') {
+        finishBuildingDraft();
+        return;
+      }
+      if (isBuildingMode && (e.key === 'Backspace' || e.key === 'Delete') && buildingDraft.length > 0) {
+        setBuildingDraft(prev => prev.slice(0, -1));
+        return;
       }
       if (e.key.toLowerCase() === 'c') {
         setIsAddNodeMode(prev => !prev);
         setIsMergeMode(false);
+        setIsBuildingMode(false);
+        setBuildingDraft([]);
       }
       if (e.key.toLowerCase() === 'm') {
         setIsMergeMode(prev => !prev);
         setIsAddNodeMode(false);
+        setIsBuildingMode(false);
+        setBuildingDraft([]);
+      }
+      if (e.key.toLowerCase() === 'b') {
+        setIsBuildingMode(prev => !prev);
+        setIsAddNodeMode(false);
+        setIsMergeMode(false);
+        setBuildingDraft([]);
       }
       if (e.key.toLowerCase() === 'p' && !e.ctrlKey) {
         if (selectedNodes.length >= 3) {
@@ -421,6 +518,22 @@ export default function App() {
         }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedBuildingId) {
+            if (selectedBuildingVertex) {
+                setBuildings(prev => prev.flatMap(building => {
+                    if (building.id !== selectedBuildingVertex.buildingId) return [building];
+                    if (building.vertices.length <= 3) return [];
+                    return [{
+                        ...building,
+                        vertices: building.vertices.filter((_, index) => index !== selectedBuildingVertex.vertexIndex),
+                    }];
+                }));
+            } else {
+                setBuildings(prev => prev.filter(building => building.id !== selectedBuildingId));
+            }
+            clearBuildingSelection();
+            return;
+        }
         if (selectedPolygonFillId) {
             setPolygonFills(prev => {
                 const pf = prev.find(p => p.id === selectedPolygonFillId);
@@ -487,6 +600,14 @@ export default function App() {
               maxY = Math.max(maxY, p.y);
             });
           });
+          buildings.forEach(building => {
+            building.vertices.forEach(vertex => {
+              minX = Math.min(minX, vertex.x);
+              minY = Math.min(minY, vertex.y);
+              maxX = Math.max(maxX, vertex.x);
+              maxY = Math.max(maxY, vertex.y);
+            });
+          });
 
           if (minX !== Infinity) {
             const padding = 100;
@@ -510,7 +631,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNode, selectedEdges, selectedPoints, nodes, edges, size, isMergeMode, isAddNodeMode]);
+  }, [selectedNode, selectedEdges, selectedPoints, selectedBuildingId, selectedBuildingVertex, buildingDraft, nodes, edges, buildings, size, isMergeMode, isAddNodeMode, isBuildingMode]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -593,6 +714,7 @@ export default function App() {
       ctx, size, nodes, edges, selectedEdges, selectedNodes, selectedNode,
       showMesh, showControlPoints, isAddNodeMode, isMergeMode,
       chamferAngle, meshResolution, laneWidth, polygonFills,
+      buildings, selectedBuildingId, selectedBuildingVertex, buildingDraft,
       softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPoints,
       selectedPolygonFillId, view, snapGridSize
     );
@@ -613,7 +735,7 @@ export default function App() {
       ctx.strokeRect(x, y, w, h);
       ctx.restore();
     }
-  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPoints, selectedPolygonFillId, isAddNodeMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills, marqueeStart, marqueeEnd, snapGridSize]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPoints, selectedPolygonFillId, selectedBuildingId, selectedBuildingVertex, isAddNodeMode, isMergeMode, showMesh, showControlPoints, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills, buildings, buildingDraft, marqueeStart, marqueeEnd, snapGridSize]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
     let pos;
@@ -925,6 +1047,26 @@ export default function App() {
 
     const pos = getMousePos(e);
 
+    if (e.button === 0 && isBuildingMode) {
+      if (buildingDraft.length >= 3 && Math.hypot(pos.x - buildingDraft[0].x, pos.y - buildingDraft[0].y) < 18) {
+        finishBuildingDraft();
+        return;
+      }
+
+      const nextDraft = [...buildingDraft, { x: pos.x, y: pos.y }];
+      if (e.detail >= 2 && nextDraft.length >= 3) {
+        finishBuildingDraft(nextDraft);
+        return;
+      }
+      setBuildingDraft(nextDraft);
+      setSelectedEdges([]);
+      setSelectedNode(null);
+      setSelectedPoints([]);
+      clearBuildingSelection();
+      setSelectedPolygonFillId(null);
+      return;
+    }
+
     // Divert behavior to handleRightClick if in Add Node Mode
     if (e.button === 0 && isAddNodeMode) {
       handleRightClick(e, pos);
@@ -932,6 +1074,42 @@ export default function App() {
     }
 
     setSelectedPolygonFillId(null);
+    clearBuildingSelection();
+
+    for (let i = buildings.length - 1; i >= 0; i--) {
+      const building = buildings[i];
+      const baseZ = getBuildingBaseZ(building);
+      const height = getBuildingHeight(building);
+      const center = getBuildingCenter(building);
+
+      for (let vertexIndex = building.vertices.length - 1; vertexIndex >= 0; vertexIndex--) {
+        const vertex = building.vertices[vertexIndex];
+        if (Math.hypot(pos.x - vertex.x, pos.y - vertex.y) < 18) {
+          setSelectedBuildingId(building.id);
+          setSelectedBuildingVertex({ buildingId: building.id, vertexIndex });
+          setSelectedNodes([]);
+          setSelectedEdges([]);
+          setSelectedPoints([]);
+          setSelectedPolygonFillId(null);
+          startDragPosRef.current = { x: vertex.x, y: vertex.y, z: baseZ };
+          setDragging({ type: 'building-vertex', id: building.id, pointId: vertexIndex });
+          return;
+        }
+      }
+
+      if (Math.hypot(pos.x - center.x, pos.y - center.y) < 22 || pointInBuilding(pos, building)) {
+        setSelectedBuildingId(building.id);
+        setSelectedBuildingVertex(null);
+        setSelectedNodes([]);
+        setSelectedEdges([]);
+        setSelectedPoints([]);
+        setSelectedPolygonFillId(null);
+        startDragPosRef.current = { x: center.x, y: center.y, z: baseZ + height };
+        setDragging({ type: 'building-center', id: building.id });
+        return;
+      }
+    }
+
     for (const pg of polygonFills) {
       let cx = 0, cy = 0, count = 0;
       pg.points.forEach(nid => {
@@ -1525,7 +1703,47 @@ export default function App() {
       return changed ? { ...edge, points: newPts } : edge;
   };
 
-  const handleDrag = (dragState: { type: 'node' | 'edge' | 'pan' | 'marquee'; id: string; pointId?: number }, pos: Point, shiftKey: boolean) => {
+  const handleDrag = (dragState: DragState, pos: Point, shiftKey: boolean) => {
+    if (dragState.type === 'building-center') {
+      setBuildings(prev => prev.map(building => {
+        if (building.id !== dragState.id) return building;
+        const center = getBuildingCenter(building);
+        const baseZ = getBuildingBaseZ(building);
+
+        if (is3DMode && shiftKey && pos.z !== undefined) {
+          return {
+            ...building,
+            height: Math.max(1, pos.z - baseZ),
+          };
+        }
+
+        const dx = pos.x - center.x;
+        const dy = pos.y - center.y;
+        return {
+          ...building,
+          vertices: building.vertices.map(vertex => ({
+            ...vertex,
+            x: vertex.x + dx,
+            y: vertex.y + dy,
+          })),
+        };
+      }));
+      return;
+    }
+
+    if (dragState.type === 'building-vertex' && dragState.pointId !== undefined) {
+      setBuildings(prev => prev.map(building => {
+        if (building.id !== dragState.id) return building;
+        return {
+          ...building,
+          vertices: building.vertices.map((vertex, index) => (
+            index === dragState.pointId ? { ...vertex, x: pos.x, y: pos.y } : vertex
+          )),
+        };
+      }));
+      return;
+    }
+
     const taper = (dist: number, radius: number) => Math.max(0, 1 - Math.pow(dist / radius, 2));
     const pointEpsilon = 0.0001;
     const numbersEqual = (a: number | undefined, b: number | undefined, fallback?: number) => {
@@ -1980,6 +2198,7 @@ export default function App() {
               nodes={nodes}
               edges={edges}
               polygonFills={polygonFills}
+              buildings={buildings}
               chamferAngle={chamferAngle}
               meshResolution={meshResolution}
               laneWidth={laneWidth}
@@ -2004,6 +2223,8 @@ export default function App() {
               selectedEdges={selectedEdges}
               selectedPoints={selectedPoints}
               selectedPolygonFillId={selectedPolygonFillId}
+              selectedBuildingId={selectedBuildingId}
+              selectedBuildingVertex={selectedBuildingVertex}
               marqueeStart={marqueeStart}
               marqueeEnd={marqueeEnd}
               snapGridSize={snapGridSize}
@@ -2048,6 +2269,7 @@ export default function App() {
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Scroll</span> Zoom</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Click Edge</span> Add Point</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">P</span> (with 3+ nodes) Fill Polygon</div>
+                <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className={isBuildingMode ? "text-orange-400" : "text-blue-300"}>B</span>{isBuildingMode ? "Click Footprint" : "Building Mode"}</div>
                 <div className="text-white font-bold flex flex-col gap-1.5 opacity-90"><span className="text-blue-300">Esc</span> Deselect</div>
               </div>
             </>
@@ -2059,6 +2281,15 @@ export default function App() {
           setIsSidebarOpen={setIsSidebarOpen}
           isAddNodeMode={isAddNodeMode}
           setIsAddNodeMode={setIsAddNodeMode}
+          isBuildingMode={isBuildingMode}
+          setIsBuildingMode={(value) => {
+            setIsBuildingMode(value);
+            if (value) {
+              setIsAddNodeMode(false);
+              setIsMergeMode(false);
+            }
+            setBuildingDraft([]);
+          }}
           softSelectionEnabled={softSelectionEnabled}
           setSoftSelectionEnabled={setSoftSelectionEnabled}
           softSelectionRadius={softSelectionRadius}
@@ -2082,6 +2313,12 @@ export default function App() {
           setSelectedNodes={setSelectedNodes}
           selectedEdges={selectedEdges}
           setSelectedEdges={setSelectedEdges}
+          buildings={buildings}
+          setBuildings={setBuildings}
+          selectedBuildingId={selectedBuildingId}
+          selectedBuildingVertex={selectedBuildingVertex}
+          setSelectedBuildingId={setSelectedBuildingId}
+          setSelectedBuildingVertex={setSelectedBuildingVertex}
           debugOptions={debugOptions}
           setDebugOptions={setDebugOptions}
         />

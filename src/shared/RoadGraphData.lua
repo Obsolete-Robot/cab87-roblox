@@ -5,7 +5,7 @@ local RoadSampling = require(script.Parent:WaitForChild("RoadSampling"))
 local RoadGraphData = {}
 
 RoadGraphData.SCHEMA = "cab87-road-network"
-RoadGraphData.VERSION = 1
+RoadGraphData.VERSION = 2
 RoadGraphData.EDITOR_ROOT_NAME = "Cab87RoadEditor"
 RoadGraphData.ROAD_GRAPH_NAME = "RoadGraph"
 RoadGraphData.RUNTIME_DATA_NAME = "AuthoredRoadGraphData"
@@ -14,11 +14,17 @@ RoadGraphData.EDGES_NAME = "Edges"
 RoadGraphData.EDGE_POINTS_NAME = "Points"
 RoadGraphData.POLYGON_FILLS_NAME = "PolygonFills"
 RoadGraphData.POLYGON_FILL_POINTS_NAME = "Points"
+RoadGraphData.BUILDINGS_NAME = "Buildings"
+RoadGraphData.BUILDING_VERTICES_NAME = "Vertices"
 
 local DEFAULT_CHAMFER_ANGLE_DEG = 70
 local DEFAULT_SIDEWALK_WIDTH = 12
 local DEFAULT_MESH_RESOLUTION = 20
 local DEFAULT_IMPORT_SCALE = 1
+local DEFAULT_BUILDING_BASE_ELEVATION = 4
+local DEFAULT_BUILDING_HEIGHT = 80
+local DEFAULT_BUILDING_COLOR = "#64748b"
+local DEFAULT_BUILDING_MATERIAL = "Concrete"
 
 local function finiteNumber(value)
 	local number = tonumber(value)
@@ -47,6 +53,14 @@ local function sanitizeColor(value)
 		return value
 	end
 	return nil
+end
+
+local function sanitizePositiveNumber(value, fallback)
+	local number = finiteNumber(value)
+	if number and number > 0 then
+		return number
+	end
+	return fallback
 end
 
 local function sanitizePolygonFills(fills, nodeLookup)
@@ -104,6 +118,87 @@ local function clonePolygonFills(fills, nodeLookup)
 	return cloned
 end
 
+local graphPointToVector
+
+local function sanitizeBuildingMaterial(value)
+	if type(value) == "string" and value ~= "" then
+		return value
+	end
+	return DEFAULT_BUILDING_MATERIAL
+end
+
+local function sanitizeBuildings(buildings, planeY)
+	local normalized = {}
+	if type(buildings) ~= "table" then
+		return normalized
+	end
+
+	for index, building in ipairs(buildings) do
+		if type(building) == "table" and type(building.vertices) == "table" then
+			local baseZ = finiteNumber(building.baseZ) or DEFAULT_BUILDING_BASE_ELEVATION
+			local vertices = {}
+			for _, vertex in ipairs(building.vertices) do
+				local point = graphPointToVector({
+					x = vertex.x,
+					y = vertex.y,
+					z = baseZ,
+				}, planeY)
+				if point then
+					local previous = vertices[#vertices]
+					if not previous or (previous - point).Magnitude > 0.01 then
+						table.insert(vertices, point)
+					end
+				end
+			end
+
+			if #vertices > 2 and (vertices[1] - vertices[#vertices]).Magnitude <= 0.01 then
+				table.remove(vertices)
+			end
+
+			if #vertices >= 3 then
+				table.insert(normalized, {
+					id = sanitizeId(building.id, "b", index),
+					name = sanitizeName(building.name, nil),
+					vertices = vertices,
+					baseZ = baseZ,
+					height = sanitizePositiveNumber(building.height, DEFAULT_BUILDING_HEIGHT),
+					color = sanitizeColor(building.color) or DEFAULT_BUILDING_COLOR,
+					material = sanitizeBuildingMaterial(building.material),
+				})
+			end
+		end
+	end
+
+	return normalized
+end
+
+local function cloneBuildings(buildings)
+	local cloned = {}
+	for index, building in ipairs(buildings or {}) do
+		if type(building) == "table" and type(building.vertices) == "table" then
+			local vertices = {}
+			for _, vertex in ipairs(building.vertices) do
+				if typeof(vertex) == "Vector3" then
+					table.insert(vertices, vertex)
+				end
+			end
+
+			if #vertices >= 3 then
+				table.insert(cloned, {
+					id = sanitizeId(building.id, "b", index),
+					name = sanitizeName(building.name, nil),
+					vertices = vertices,
+					baseZ = finiteNumber(building.baseZ) or DEFAULT_BUILDING_BASE_ELEVATION,
+					height = sanitizePositiveNumber(building.height, DEFAULT_BUILDING_HEIGHT),
+					color = sanitizeColor(building.color) or DEFAULT_BUILDING_COLOR,
+					material = sanitizeBuildingMaterial(building.material),
+				})
+			end
+		end
+	end
+	return cloned
+end
+
 local function sanitizeScale(value)
 	local number = finiteNumber(value) or DEFAULT_IMPORT_SCALE
 	return math.max(number, 0.001)
@@ -117,7 +212,7 @@ local function scaleNumber(value, scale)
 	return nil
 end
 
-local function graphPointToVector(point, planeY, pointScale)
+graphPointToVector = function(point, planeY, pointScale)
 	if type(point) ~= "table" then
 		return nil
 	end
@@ -321,6 +416,7 @@ function RoadGraphData.normalizePayload(payload, options)
 		nodes = normalizedNodes,
 		edges = normalizedEdges,
 		polygonFills = sanitizePolygonFills(payload.polygonFills, nodeLookup),
+		buildings = sanitizeBuildings(payload.buildings, planeY),
 	}
 
 	if pointScale ~= DEFAULT_IMPORT_SCALE or widthScale ~= DEFAULT_IMPORT_SCALE then
@@ -397,6 +493,31 @@ function RoadGraphData.scaleGraph(graph, options)
 		end
 	end
 
+	local buildings = {}
+	for index, building in ipairs(graph.buildings or {}) do
+		if type(building) == "table" then
+			local vertices = {}
+			for _, vertex in ipairs(building.vertices or {}) do
+				if typeof(vertex) == "Vector3" then
+					table.insert(vertices, scaleVectorFromPlane(vertex, planeY, pointScale))
+				end
+			end
+
+			if #vertices >= 3 then
+				local baseZ = vertices[1].Y - planeY
+				table.insert(buildings, {
+					id = sanitizeId(building.id, "b", index),
+					name = sanitizeName(building.name, nil),
+					vertices = vertices,
+					baseZ = baseZ,
+					height = sanitizePositiveNumber(building.height, DEFAULT_BUILDING_HEIGHT) * pointScale,
+					color = sanitizeColor(building.color) or DEFAULT_BUILDING_COLOR,
+					material = sanitizeBuildingMaterial(building.material),
+				})
+			end
+		end
+	end
+
 	return {
 		schema = graph.schema or RoadGraphData.SCHEMA,
 		version = tonumber(graph.version) or RoadGraphData.VERSION,
@@ -408,6 +529,7 @@ function RoadGraphData.scaleGraph(graph, options)
 		edges = edges,
 		nodeLookup = nodeLookup,
 		polygonFills = clonePolygonFills(graph.polygonFills, nodeLookup),
+		buildings = buildings,
 	}
 end
 
@@ -541,9 +663,42 @@ function RoadGraphData.writeGraph(root, graph, name)
 		end
 	end
 
+	local buildings = cloneBuildings(graph.buildings)
+	if #buildings > 0 then
+		local buildingsFolder = Instance.new("Folder")
+		buildingsFolder.Name = RoadGraphData.BUILDINGS_NAME
+		buildingsFolder.Parent = graphFolder
+
+		for index, building in ipairs(buildings) do
+			local buildingFolder = Instance.new("Folder")
+			buildingFolder.Name = sanitizeId(building.id, "b", index)
+			buildingFolder:SetAttribute("BuildingId", sanitizeId(building.id, "b", index))
+			if building.name then
+				buildingFolder:SetAttribute("DisplayName", building.name)
+			end
+			buildingFolder:SetAttribute("BaseZ", finiteNumber(building.baseZ) or DEFAULT_BUILDING_BASE_ELEVATION)
+			buildingFolder:SetAttribute("Height", sanitizePositiveNumber(building.height, DEFAULT_BUILDING_HEIGHT))
+			buildingFolder:SetAttribute("Color", sanitizeColor(building.color) or DEFAULT_BUILDING_COLOR)
+			buildingFolder:SetAttribute("Material", sanitizeBuildingMaterial(building.material))
+			buildingFolder.Parent = buildingsFolder
+
+			local verticesFolder = Instance.new("Folder")
+			verticesFolder.Name = RoadGraphData.BUILDING_VERTICES_NAME
+			verticesFolder.Parent = buildingFolder
+
+			for vertexIndex, vertex in ipairs(building.vertices or {}) do
+				local vertexValue = Instance.new("Vector3Value")
+				vertexValue.Name = string.format("V%04d", vertexIndex)
+				vertexValue.Value = vertex
+				vertexValue.Parent = verticesFolder
+			end
+		end
+	end
+
 	graphFolder:SetAttribute("NodeCount", #(graph.nodes or {}))
 	graphFolder:SetAttribute("EdgeCount", #(graph.edges or {}))
 	graphFolder:SetAttribute("PolygonFillCount", #polygonFills)
+	graphFolder:SetAttribute("BuildingCount", #buildings)
 	return graphFolder
 end
 
@@ -632,6 +787,32 @@ function RoadGraphData.collectGraph(root, config)
 		end
 	end
 
+	local buildings = {}
+	local buildingsFolder = childFolders(graphFolder, RoadGraphData.BUILDINGS_NAME)
+	for index, buildingFolder in ipairs(sortedChildren(buildingsFolder)) do
+		if buildingFolder:IsA("Folder") then
+			local vertices = {}
+			local verticesFolder = childFolders(buildingFolder, RoadGraphData.BUILDING_VERTICES_NAME)
+			for _, vertexValue in ipairs(sortedChildren(verticesFolder)) do
+				if vertexValue:IsA("Vector3Value") then
+					table.insert(vertices, vertexValue.Value)
+				end
+			end
+
+			if #vertices >= 3 then
+				table.insert(buildings, {
+					id = sanitizeId(buildingFolder:GetAttribute("BuildingId") or buildingFolder.Name, "b", index),
+					name = sanitizeName(buildingFolder:GetAttribute("DisplayName"), nil),
+					vertices = vertices,
+					baseZ = finiteNumber(buildingFolder:GetAttribute("BaseZ")) or (vertices[1].Y - (finiteNumber(graphFolder:GetAttribute("PlaneY")) or 0)),
+					height = sanitizePositiveNumber(buildingFolder:GetAttribute("Height"), DEFAULT_BUILDING_HEIGHT),
+					color = sanitizeColor(buildingFolder:GetAttribute("Color")) or DEFAULT_BUILDING_COLOR,
+					material = sanitizeBuildingMaterial(buildingFolder:GetAttribute("Material")),
+				})
+			end
+		end
+	end
+
 	if #nodes == 0 or #edges == 0 then
 		return nil
 	end
@@ -647,6 +828,7 @@ function RoadGraphData.collectGraph(root, config)
 		edges = edges,
 		nodeLookup = nodeLookup,
 		polygonFills = polygonFills,
+		buildings = buildings,
 	}
 end
 
@@ -682,6 +864,37 @@ function RoadGraphData.toPayload(graph)
 		})
 	end
 
+	local buildings = {}
+	for index, building in ipairs(graph.buildings or {}) do
+		if type(building) == "table" and type(building.vertices) == "table" then
+			local vertices = {}
+			for _, vertex in ipairs(building.vertices) do
+				if typeof(vertex) == "Vector3" then
+					table.insert(vertices, {
+						x = vertex.X,
+						y = vertex.Z,
+					})
+				end
+			end
+
+			if #vertices >= 3 then
+				local baseZ = finiteNumber(building.baseZ)
+				if baseZ == nil and typeof(building.vertices[1]) == "Vector3" then
+					baseZ = building.vertices[1].Y - (finiteNumber(graph.planeY) or 0)
+				end
+				table.insert(buildings, {
+					id = sanitizeId(building.id, "b", index),
+					name = building.name,
+					vertices = vertices,
+					baseZ = baseZ or DEFAULT_BUILDING_BASE_ELEVATION,
+					height = sanitizePositiveNumber(building.height, DEFAULT_BUILDING_HEIGHT),
+					color = sanitizeColor(building.color) or DEFAULT_BUILDING_COLOR,
+					material = sanitizeBuildingMaterial(building.material),
+				})
+			end
+		end
+	end
+
 	return {
 		schema = RoadGraphData.SCHEMA,
 		version = RoadGraphData.VERSION,
@@ -689,6 +902,7 @@ function RoadGraphData.toPayload(graph)
 		nodes = nodes,
 		edges = edges,
 		polygonFills = clonePolygonFills(graph.polygonFills),
+		buildings = buildings,
 	}
 end
 

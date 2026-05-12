@@ -27,6 +27,16 @@ export type PolygonFill = {
   color: string;
 };
 
+export type BuildingPolygon = {
+  id: string;
+  name?: string;
+  vertices: Point[];
+  baseZ?: number;
+  height: number;
+  color: string;
+  material?: string;
+};
+
 export type Edge = {
   id: string;
   source: string; // Node ID
@@ -60,4 +70,18 @@ export type MeshData = {
   solidLineTriangles: Triangle[];
   laneArrows: { position: Point; dir: Point; ignoreMeshing?: boolean }[];
   polygonTriangles: { triangles: Triangle[], color: string }[];
+  buildingMeshes: {
+    id: string;
+    name?: string;
+    vertices: Point[];
+    baseZ: number;
+    height: number;
+    color: string;
+    material?: string;
+    triangles: Triangle[];
+    topTriangles: Triangle[];
+    bottomTriangles: Triangle[];
+    wallTriangles: Triangle[];
+  }[];
+  buildingTriangles: Triangle[];
 };

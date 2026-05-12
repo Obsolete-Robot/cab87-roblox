@@ -2,10 +2,11 @@ import React, { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import { getBuildingBaseZ, getBuildingCenter, getBuildingHeight } from '../../lib/buildings';
 
 export function PointerInterceptor({
    onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel,
-   isDragging, initialCameraParams, controlsRef, draggingPoint, nodes, edges, selectedNode
+   isDragging, initialCameraParams, controlsRef, draggingPoint, nodes, edges, buildings, selectedNode
 }: any) {
    const { camera, raycaster, gl } = useThree();
 
@@ -63,6 +64,13 @@ export function PointerInterceptor({
                edges.forEach((e: any) => {
                   e.points.forEach((p: any) => checkPt(p));
                });
+               (buildings || []).forEach((building: any) => {
+                  const baseZ = getBuildingBaseZ(building);
+                  const height = getBuildingHeight(building);
+                  building.vertices.forEach((vertex: any) => checkPt({ x: vertex.x, y: vertex.y, z: baseZ }));
+                  const center = getBuildingCenter(building);
+                  checkPt({ x: center.x, y: center.y, z: baseZ + height });
+               });
 
                if (closestPt) currentY = closestPt.y;
             }
@@ -116,7 +124,7 @@ export function PointerInterceptor({
          gl.domElement.removeEventListener('contextmenu', ctx);
          gl.domElement.removeEventListener('pointercancel', cancel);
       };
-   }, [camera, raycaster, gl, onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, isDragging, draggingPoint, nodes, edges, selectedNode]);
+   }, [camera, raycaster, gl, onPointerDown, onPointerMove, onPointerUp, onContextMenu, onPointerCancel, isDragging, draggingPoint, nodes, edges, buildings, selectedNode]);
 
    return <OrbitControls
       ref={controlsRef}

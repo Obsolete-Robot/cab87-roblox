@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2 } from 'lucide-react';
-import { Node, Edge } from '../lib/types';
+import { Node, Edge, BuildingPolygon } from '../lib/types';
 import { sanitizeMeshResolution } from '../lib/constants';
 import { getEdgeClearance } from '../lib/junctions';
 import { isTrueJunction } from '../lib/network';
@@ -14,6 +14,8 @@ interface SidebarProps {
   setIsSidebarOpen: (v: boolean) => void;
   isAddNodeMode: boolean;
   setIsAddNodeMode: (v: boolean) => void;
+  isBuildingMode: boolean;
+  setIsBuildingMode: (v: boolean) => void;
   softSelectionEnabled: boolean;
   setSoftSelectionEnabled: (v: boolean) => void;
   softSelectionRadius: number;
@@ -37,6 +39,12 @@ interface SidebarProps {
   setSelectedNodes: React.Dispatch<React.SetStateAction<string[]>>;
   selectedEdges: string[];
   setSelectedEdges: React.Dispatch<React.SetStateAction<string[]>>;
+  buildings: BuildingPolygon[];
+  setBuildings: React.Dispatch<React.SetStateAction<BuildingPolygon[]>>;
+  selectedBuildingId: string | null;
+  selectedBuildingVertex: { buildingId: string; vertexIndex: number } | null;
+  setSelectedBuildingId: React.Dispatch<React.SetStateAction<string | null>>;
+  setSelectedBuildingVertex: React.Dispatch<React.SetStateAction<{ buildingId: string; vertexIndex: number } | null>>;
   debugOptions: any;
   setDebugOptions: (v: any) => void;
 }
@@ -46,6 +54,8 @@ export default function Sidebar({
   setIsSidebarOpen,
   isAddNodeMode,
   setIsAddNodeMode,
+  isBuildingMode,
+  setIsBuildingMode,
   softSelectionEnabled,
   setSoftSelectionEnabled,
   softSelectionRadius,
@@ -69,6 +79,12 @@ export default function Sidebar({
   setSelectedNodes,
   selectedEdges,
   setSelectedEdges,
+  buildings,
+  setBuildings,
+  selectedBuildingId,
+  selectedBuildingVertex,
+  setSelectedBuildingId,
+  setSelectedBuildingVertex,
   debugOptions,
   setDebugOptions,
 }: SidebarProps) {
@@ -83,6 +99,7 @@ export default function Sidebar({
   const [globalScaleMap, setGlobalScaleMap] = useState<string>("1.5");
   const [globalScaleRoads, setGlobalScaleRoads] = useState<string>("1.5");
   const [globalScaleSidewalks, setGlobalScaleSidewalks] = useState<string>("1.5");
+  const selectedBuilding = buildings.find((building) => building.id === selectedBuildingId) || null;
 
   const applyGlobalScaleMap = () => {
     const scale = parseFloat(globalScaleMap);
@@ -98,6 +115,12 @@ export default function Sidebar({
         maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
       });
     });
+    buildings.forEach(building => {
+      building.vertices.forEach(vertex => {
+        minX = Math.min(minX, vertex.x); minY = Math.min(minY, vertex.y);
+        maxX = Math.max(maxX, vertex.x); maxY = Math.max(maxY, vertex.y);
+      });
+    });
 
     if (minX !== Infinity) {
       const cx = (minX + maxX) / 2;
@@ -111,6 +134,11 @@ export default function Sidebar({
       setEdges(prev => prev.map(e => ({
         ...e,
         points: e.points.map(p => ({ ...p, x: cx + (p.x - cx) * scale, y: cy + (p.y - cy) * scale }))
+      })));
+
+      setBuildings(prev => prev.map(building => ({
+        ...building,
+        vertices: building.vertices.map(vertex => ({ ...vertex, x: cx + (vertex.x - cx) * scale, y: cy + (vertex.y - cy) * scale })),
       })));
     }
     setGlobalScaleMap("1.0");
@@ -285,6 +313,18 @@ export default function Sidebar({
                     {isAddNodeMode ? 'Add Node Mode: ON' : 'Add Node'}
                   </button>
               </div>
+              <div className="flex gap-2 mt-2">
+                  <button
+                      onClick={() => setIsBuildingMode(!isBuildingMode)}
+                      className={`flex-1 px-3 py-1.5 rounded text-sm font-semibold flex justify-center items-center gap-2 transition-colors ${
+                        isBuildingMode
+                          ? 'bg-orange-600 hover:bg-orange-500 text-white border border-orange-400'
+                          : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                      }`}
+                  >
+                    {isBuildingMode ? 'Building Mode: ON' : 'Add Building'}
+                  </button>
+              </div>
             </section>
 
 
@@ -385,12 +425,79 @@ export default function Sidebar({
           </div>
           {!collapsedSections['selected_items'] && (
             <div className="space-y-3 overflow-y-auto pb-4">
-              {selectedNodes.length === 0 && selectedEdges.length === 0 ? (
+              {selectedNodes.length === 0 && selectedEdges.length === 0 && !selectedBuilding ? (
                 <div className="text-sm text-slate-500 text-center py-4 px-4 bg-slate-800/10 rounded-lg border border-slate-800/50 border-dashed">
-                  Select a junction or road in the viewport.
+                  Select a junction, road, or building in the viewport.
                 </div>
               ) : (
                 <>
+                  {selectedBuilding && (
+                    <div className="p-3 bg-orange-900/10 rounded-xl border border-orange-500/50 flex flex-col gap-3">
+                      <div className="flex justify-between items-center text-sm font-bold text-slate-200">
+                        <span>{selectedBuilding.name || `Building ${selectedBuilding.id.substring(0, 4)}`}</span>
+                        <button
+                          onClick={(evt) => {
+                            evt.stopPropagation();
+                            setBuildings(prev => prev.filter(building => building.id !== selectedBuilding.id));
+                            setSelectedBuildingId(null);
+                            setSelectedBuildingVertex(null);
+                          }}
+                          className="text-slate-500 hover:text-red-400 p-1 rounded-lg hover:bg-slate-800 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4 opacity-70" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-xs text-slate-400 block mb-1">Base Z</label>
+                          <input
+                            type="number"
+                            value={Math.round(selectedBuilding.baseZ ?? DEFAULTS.buildingBaseZ)}
+                            onChange={(evt) => {
+                              const value = parseFloat(evt.target.value);
+                              setBuildings(prev => prev.map(building => building.id === selectedBuilding.id ? { ...building, baseZ: Number.isFinite(value) ? value : DEFAULTS.buildingBaseZ } : building));
+                            }}
+                            className="w-full bg-slate-800 text-white border border-slate-600 rounded p-1 text-xs focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 transition-colors"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-slate-400 block mb-1">Height</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={Math.round(selectedBuilding.height)}
+                            onChange={(evt) => {
+                              const value = parseFloat(evt.target.value);
+                              setBuildings(prev => prev.map(building => building.id === selectedBuilding.id ? { ...building, height: Math.max(1, Number.isFinite(value) ? value : DEFAULTS.buildingHeight) } : building));
+                            }}
+                            className="w-full bg-slate-800 text-white border border-slate-600 rounded p-1 text-xs focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 transition-colors"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 block mb-1">Color</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="color"
+                            value={selectedBuilding.color || DEFAULTS.buildingColor}
+                            onChange={(evt) => setBuildings(prev => prev.map(building => building.id === selectedBuilding.id ? { ...building, color: evt.target.value } : building))}
+                            className="h-8 w-12 bg-slate-800 border border-slate-700 rounded cursor-pointer"
+                          />
+                          <input
+                            type="text"
+                            value={selectedBuilding.color || DEFAULTS.buildingColor}
+                            onChange={(evt) => setBuildings(prev => prev.map(building => building.id === selectedBuilding.id ? { ...building, color: evt.target.value } : building))}
+                            className="flex-1 min-w-0 bg-slate-800 text-white border border-slate-600 rounded p-1 text-xs focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 transition-colors"
+                          />
+                        </div>
+                      </div>
+                      {selectedBuildingVertex && (
+                        <div className="text-xs text-orange-200 bg-orange-950/40 border border-orange-900 rounded p-2">
+                          Vertex {selectedBuildingVertex.vertexIndex + 1} selected
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {nodes.filter(n => selectedNodes.includes(n.id)).map((n) => (
                     <div
                       key={n.id}

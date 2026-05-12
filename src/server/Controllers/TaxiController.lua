@@ -47,6 +47,77 @@ local function getOwnerAttributeName(config)
 	return "Cab87OwnerUserId"
 end
 
+local function pointInPolygonXZ(point, vertices)
+	local inside = false
+	for index = 1, #vertices do
+		local previousIndex = if index == 1 then #vertices else index - 1
+		local current = vertices[index]
+		local previous = vertices[previousIndex]
+		if
+			(current.Z > point.Z) ~= (previous.Z > point.Z)
+			and point.X < (previous.X - current.X) * (point.Z - current.Z) / (previous.Z - current.Z) + current.X
+		then
+			inside = not inside
+		end
+	end
+	return inside
+end
+
+local function closestPointOnSegmentXZ(point, a, b)
+	local abX = b.X - a.X
+	local abZ = b.Z - a.Z
+	local lengthSq = abX * abX + abZ * abZ
+	if lengthSq <= 0.0001 then
+		local dx = point.X - a.X
+		local dz = point.Z - a.Z
+		return a, math.sqrt(dx * dx + dz * dz)
+	end
+
+	local t = math.clamp(((point.X - a.X) * abX + (point.Z - a.Z) * abZ) / lengthSq, 0, 1)
+	local closest = Vector3.new(a.X + abX * t, point.Y, a.Z + abZ * t)
+	local dx = point.X - closest.X
+	local dz = point.Z - closest.Z
+	return closest, math.sqrt(dx * dx + dz * dz)
+end
+
+local function getPolygonCollisionPush(position, vertices, radius)
+	local point = Vector3.new(position.X, 0, position.Z)
+	local inside = pointInPolygonXZ(point, vertices)
+	local bestClosest = nil
+	local bestDistance = math.huge
+
+	for index = 1, #vertices do
+		local a = vertices[index]
+		local b = vertices[(index % #vertices) + 1]
+		local closest, distance = closestPointOnSegmentXZ(point, a, b)
+		if distance < bestDistance then
+			bestDistance = distance
+			bestClosest = closest
+		end
+	end
+
+	if not bestClosest then
+		return nil
+	end
+
+	local away = Vector3.new(position.X - bestClosest.X, 0, position.Z - bestClosest.Z)
+	if away.Magnitude <= 0.001 then
+		away = Vector3.new(1, 0, 0)
+	else
+		away = away.Unit
+	end
+
+	if inside then
+		return -away, radius + bestDistance
+	end
+
+	if bestDistance < radius then
+		return away, radius - bestDistance
+	end
+
+	return nil
+end
+
 local TaxiController = {}
 TaxiController.__index = TaxiController
 
@@ -739,51 +810,64 @@ function TaxiController:start()
 		local scrapeDirection = nil
 
 		for _, obstacle in ipairs(crashObstacles) do
-			local obstacleTop = obstacle.Position.Y + obstacle.Size.Y * 0.5
-			if resolved.Y < obstacleTop + Config.carCrashHeightClearance then
-				local halfX = obstacle.Size.X * 0.5 + Config.carCrashRadius
-				local halfZ = obstacle.Size.Z * 0.5 + Config.carCrashRadius
-				local deltaX = resolved.X - obstacle.Position.X
-				local deltaZ = resolved.Z - obstacle.Position.Z
-
-				if math.abs(deltaX) < halfX and math.abs(deltaZ) < halfZ then
-					local pushX = halfX - math.abs(deltaX)
-					local pushZ = halfZ - math.abs(deltaZ)
-					local normal
-
-					if pushX < pushZ then
-						local side = if deltaX >= 0 then 1 else -1
-						normal = Vector3.new(side, 0, 0)
-						resolved = Vector3.new(obstacle.Position.X + side * halfX, resolved.Y, resolved.Z)
-					else
-						local side = if deltaZ >= 0 then 1 else -1
-						normal = Vector3.new(0, 0, side)
-						resolved = Vector3.new(resolved.X, resolved.Y, obstacle.Position.Z + side * halfZ)
+			local normal = nil
+			if type(obstacle) == "table" and obstacle.kind == "AuthoredBuildingPolygon" then
+				local topY = tonumber(obstacle.topY) or math.huge
+				if resolved.Y < topY + Config.carCrashHeightClearance then
+					local pushNormal, penetration = getPolygonCollisionPush(resolved, obstacle.vertices or {}, Config.carCrashRadius)
+					if pushNormal and penetration and penetration > 0 then
+						normal = pushNormal
+						resolved += normal * penetration
 					end
+				end
+			elseif typeof(obstacle) == "Instance" and obstacle:IsA("BasePart") then
+				local obstacleTop = obstacle.Position.Y + obstacle.Size.Y * 0.5
+				if resolved.Y < obstacleTop + Config.carCrashHeightClearance then
+					local halfX = obstacle.Size.X * 0.5 + Config.carCrashRadius
+					local halfZ = obstacle.Size.Z * 0.5 + Config.carCrashRadius
+					local deltaX = resolved.X - obstacle.Position.X
+					local deltaZ = resolved.Z - obstacle.Position.Z
 
-					local intoWall = resolvedVelocity:Dot(normal)
-					local tangentVelocity = resolvedVelocity - normal * intoWall
-					local tangentSpeed = tangentVelocity.Magnitude
-					local speed = resolvedVelocity.Magnitude
-					local maxScrapeImpact = speed * math.sin(math.rad(Config.carWallScrapeMaxAngleDegrees))
+					if math.abs(deltaX) < halfX and math.abs(deltaZ) < halfZ then
+						local pushX = halfX - math.abs(deltaX)
+						local pushZ = halfZ - math.abs(deltaZ)
 
-					if intoWall < 0 then
-						local normalImpact = -intoWall
-						local canScrape = speed >= Config.carWallScrapeMinSpeed
-							and tangentSpeed > 0.001
-							and normalImpact <= maxScrapeImpact
-
-						if canScrape then
-							resolvedVelocity, scrapeDirection = getWallScrapeVelocity(tangentVelocity, normal, speed)
+						if pushX < pushZ then
+							local side = if deltaX >= 0 then 1 else -1
+							normal = Vector3.new(side, 0, 0)
+							resolved = Vector3.new(obstacle.Position.X + side * halfX, resolved.Y, resolved.Z)
 						else
-							hardCrashed = true
-							resolvedVelocity = tangentVelocity * Config.carCrashSlideRetain
-								+ normal * (normalImpact * Config.carCrashBounce)
+							local side = if deltaZ >= 0 then 1 else -1
+							normal = Vector3.new(0, 0, side)
+							resolved = Vector3.new(resolved.X, resolved.Y, obstacle.Position.Z + side * halfZ)
 						end
+					end
+				end
+			end
+
+			if normal then
+				local intoWall = resolvedVelocity:Dot(normal)
+				local tangentVelocity = resolvedVelocity - normal * intoWall
+				local tangentSpeed = tangentVelocity.Magnitude
+				local speed = resolvedVelocity.Magnitude
+				local maxScrapeImpact = speed * math.sin(math.rad(Config.carWallScrapeMaxAngleDegrees))
+
+				if intoWall < 0 then
+					local normalImpact = -intoWall
+					local canScrape = speed >= Config.carWallScrapeMinSpeed
+						and tangentSpeed > 0.001
+						and normalImpact <= maxScrapeImpact
+
+					if canScrape then
+						resolvedVelocity, scrapeDirection = getWallScrapeVelocity(tangentVelocity, normal, speed)
 					else
-						if tangentSpeed > Config.carWallScrapeMinSpeed then
-							_, scrapeDirection = getWallScrapeVelocity(tangentVelocity, normal, speed)
-						end
+						hardCrashed = true
+						resolvedVelocity = tangentVelocity * Config.carCrashSlideRetain
+							+ normal * (normalImpact * Config.carCrashBounce)
+					end
+				else
+					if tangentSpeed > Config.carWallScrapeMinSpeed then
+						_, scrapeDirection = getWallScrapeVelocity(tangentVelocity, normal, speed)
 					end
 				end
 			end

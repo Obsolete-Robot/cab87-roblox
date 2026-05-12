@@ -70,6 +70,7 @@ Both meshers should produce the same conceptual groups:
 - `hubs`: junction records with `polygon`, `outerPolygon`, `corners`, and `outerCorners`.
 - `crosswalks`: crosswalk polygons used for display/debug and fill boundary behavior.
 - `polygonTriangles` / `polygonFills`: polygon-fill triangles and color metadata.
+- `buildingTriangles` / `buildingMeshes`: extruded authored building footprint geometry.
 - `centerLines`: sampled route/navigation centerlines.
 
 Names do not have to be identical when one side has compatibility aliases, but the
@@ -85,7 +86,8 @@ Keep this order aligned with Road-Maker:
 3. Build road strips, sidewalks, crosswalks, road polygons, outer road curves, and
    centerlines.
 4. Build polygon fills from road outer curves and hub outer polygons.
-5. Compute bounds.
+5. Build extruded building meshes from authored footprints.
+6. Compute bounds.
 
 Polygon fills depend on data generated earlier in the pipeline. If the fill mesh overlaps
 crosswalks or junction roads in Roblox but not in Road-Maker, first compare the boundary
@@ -164,6 +166,7 @@ For any mesher change:
    - sidewalk triangle count
    - crosswalk triangle count
    - polygon fill triangle count
+   - building triangle count
    - mesh bounds
 4. Check polygon fills with roads/crosswalks hidden in both tools to verify the raw fill
    geometry, not only layered rendering.

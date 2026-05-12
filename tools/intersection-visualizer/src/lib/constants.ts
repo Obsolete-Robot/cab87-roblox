@@ -1,6 +1,6 @@
 export const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 export const ROAD_NETWORK_SCHEMA = 'cab87-road-network';
-export const ROAD_NETWORK_VERSION = 1;
+export const ROAD_NETWORK_VERSION = 2;
 
 export const DEFAULTS = {
   roadWidth: 60,
@@ -10,6 +10,10 @@ export const DEFAULTS = {
   softSelectionRadius: 200,
   chamferAngle: 70,
   meshResolution: 20,
+  buildingBaseZ: 4,
+  buildingHeight: 80,
+  buildingColor: '#64748b',
+  buildingMaterial: 'Concrete',
 };
 
 export function sanitizeMeshResolution(value: unknown): number {

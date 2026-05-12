@@ -10,7 +10,9 @@ Run locally:
 ./run.sh
 ```
 
-Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for distance-based mesh density, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 1` and is imported by the `Cab87 Road Graph Builder` Studio plugin. You can also export the current generated mesh as OBJ or GLB from the header; GLB keeps material colors, while OBJ is mostly geometry/object names. Use **Roblox** export for the large-map workflow: it downloads `cab87-road-mesh.zip`, containing a chunked GLB plus `cab87-road-mesh.manifest.json`, with visual and collision objects split by tile, elevation band, and triangle budget. The Roblox dropdown can also download the chunked GLB and manifest as individual files. In Studio, import the JSON, unzip and import the GLB with the 3D Importer, select the imported model, then click **Adopt Imported GLB Mesh** in the plugin and choose the manifest.
+Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for distance-based mesh density, then export JSON. The export format is `schema: "cab87-road-network"` / `version: 2` and is imported by the `Cab87 Road Graph Builder` Studio plugin. You can also export the current generated mesh as OBJ or GLB from the header; GLB keeps material colors, while OBJ is mostly geometry/object names. Use **Roblox** export for the large-map workflow: it downloads `cab87-road-mesh.zip`, containing a chunked GLB plus `cab87-road-mesh.manifest.json`, with visual and collision objects split by tile, elevation band, and triangle budget. The Roblox dropdown can also download the chunked GLB and manifest as individual files. In Studio, import the JSON, unzip and import the GLB with the 3D Importer, select the imported model, then click **Adopt Imported GLB Mesh** in the plugin and choose the manifest.
+
+Press **B** to toggle building mode. Left-click footprint vertices in the 2D view, then close the polygon by clicking the first vertex or pressing Enter. Building vertices can be dragged from the base in either view, the center handle moves the whole footprint in XY, and Shift-dragging the center/top handle in 3D adjusts height.
 
 Mesher changes must stay in parity with Roblox's Luau port in `src/shared/RoadGraphMesher.lua`.
 See [`../../docs/ROAD_MAKER_SYNC.md`](../../docs/ROAD_MAKER_SYNC.md) before changing
@@ -18,19 +20,31 @@ See [`../../docs/ROAD_MAKER_SYNC.md`](../../docs/ROAD_MAKER_SYNC.md) before chan
 
 ## Export Format
 
-Exports use the `cab87-road-network` JSON schema with `version: 1`. The payload includes
-`settings` for mesh-affecting editor options and the authored `nodes` and `edges` arrays:
+Exports use the `cab87-road-network` JSON schema with `version: 2`. The payload includes
+`settings` for mesh-affecting editor options and the authored `nodes`, `edges`, and
+`buildings` arrays:
 
 ```json
 {
   "schema": "cab87-road-network",
-  "version": 1,
+  "version": 2,
   "settings": {
     "chamferAngleDeg": 70,
     "meshResolution": 20
   },
   "nodes": [],
-  "edges": []
+  "edges": [],
+  "buildings": [
+    {
+      "id": "building-1",
+      "name": "Building 1",
+      "vertices": [{ "x": -80, "y": -60 }, { "x": -20, "y": -60 }, { "x": -20, "y": 20 }],
+      "baseZ": 4,
+      "height": 80,
+      "color": "#64748b",
+      "material": "Concrete"
+    }
+  ]
 }
 ```
 
