@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { Node, Edge, Point, PointSelection, BuildingPolygon } from './lib/types';
+import { Node, Edge, Point, PointSelection, BuildingPolygon, VisibilitySettings } from './lib/types';
 import { buildNetworkMesh } from './lib/meshing';
 import { SceneContent } from './components/three/SceneContent';
 
@@ -13,7 +13,7 @@ interface ThreeSceneProps {
   meshResolution: number;
   laneWidth?: number;
   showMesh: boolean;
-  showControlPoints: boolean;
+  visibilitySettings: VisibilitySettings;
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
   onPointerDown: (e: any) => void;
@@ -42,7 +42,7 @@ interface ThreeSceneProps {
 }
 
 export default function ThreeScene({
-    nodes, edges, polygonFills, buildings, chamferAngle, meshResolution, laneWidth, showMesh, showControlPoints,
+    nodes, edges, polygonFills, buildings, chamferAngle, meshResolution, laneWidth, showMesh, visibilitySettings,
     setNodes, setEdges,
     onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
     isDragging, draggingPoint, selectedNode, selectedNodes, selectedEdges, selectedPoints, selectedPolygonFillId, selectedBuildingId, selectedBuildingVertex,
@@ -78,7 +78,7 @@ export default function ThreeScene({
           polygonFills={polygonFills}
           buildings={buildings}
           showMesh={showMesh}
-          showControlPoints={showControlPoints}
+          visibilitySettings={visibilitySettings}
           nodes={nodes}
           edges={edges}
           chamferAngle={chamferAngle}

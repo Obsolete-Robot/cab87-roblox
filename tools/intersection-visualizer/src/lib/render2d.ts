@@ -1,4 +1,4 @@
-import { Point, Node, Edge, BuildingPolygon } from './types';
+import { Point, Node, Edge, BuildingPolygon, VisibilitySettings } from './types';
 import { getExtendedEdgeControlPoints } from './network';
 import { buildNetworkMesh } from './meshing';
 import { getBuildingBaseZ, getBuildingCenter, getBuildingHeight } from './buildings';
@@ -12,7 +12,7 @@ export const drawNetwork2D = (
   selectedNodes: string[],
   selectedNode: string | null,
   showMesh: boolean,
-  showControlPoints: boolean,
+  visibilitySettings: VisibilitySettings,
   isConnectMode: boolean,
   isMergeMode: boolean,
   chamferAngle: number,
@@ -203,7 +203,7 @@ export const drawNetwork2D = (
                 }
             });
 
-            if (count > 0 && fillDef) {
+            if (visibilitySettings.showPolyFillHandles && count > 0 && fillDef) {
                 renderables.push({
                     z: 9999,
                     priority: 100, // On top of everything
@@ -515,26 +515,30 @@ export const drawNetwork2D = (
     ctx.fill();
     ctx.stroke();
 
-    building.vertices.forEach((vertex, vertexIndex) => {
-      const isVertexSelected = selectedBuildingVertex?.buildingId === building.id && selectedBuildingVertex.vertexIndex === vertexIndex;
+    if (visibilitySettings.showBuildingControlPoints) {
+      building.vertices.forEach((vertex, vertexIndex) => {
+        const isVertexSelected = selectedBuildingVertex?.buildingId === building.id && selectedBuildingVertex.vertexIndex === vertexIndex;
+        ctx.beginPath();
+        ctx.rect(vertex.x - 7, vertex.y - 7, 14, 14);
+        ctx.fillStyle = isVertexSelected ? '#ffffff' : isSelected ? '#fdba74' : '#fb923c';
+        ctx.strokeStyle = '#111827';
+        ctx.lineWidth = 2;
+        ctx.fill();
+        ctx.stroke();
+      });
+    }
+
+    if (visibilitySettings.showBuildingHandles) {
       ctx.beginPath();
-      ctx.rect(vertex.x - 7, vertex.y - 7, 14, 14);
-      ctx.fillStyle = isVertexSelected ? '#ffffff' : isSelected ? '#fdba74' : '#fb923c';
+      ctx.arc(center.x, center.y, isSelected && !selectedBuildingVertex ? 9 : 7, 0, Math.PI * 2);
+      ctx.fillStyle = isSelected && !selectedBuildingVertex ? '#ffffff' : '#f97316';
       ctx.strokeStyle = '#111827';
       ctx.lineWidth = 2;
       ctx.fill();
       ctx.stroke();
-    });
+    }
 
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, isSelected && !selectedBuildingVertex ? 9 : 7, 0, Math.PI * 2);
-    ctx.fillStyle = isSelected && !selectedBuildingVertex ? '#ffffff' : '#f97316';
-    ctx.strokeStyle = '#111827';
-    ctx.lineWidth = 2;
-    ctx.fill();
-    ctx.stroke();
-
-    if (isSelected) {
+    if (isSelected && visibilitySettings.showBuildingHandles) {
       ctx.fillStyle = '#f8fafc';
       ctx.font = '12px sans-serif';
       ctx.textAlign = 'center';
@@ -581,7 +585,7 @@ export const drawNetwork2D = (
   }
 
   // Nodes and control points
-  nodes.forEach(n => {
+  if (visibilitySettings.showNodeHandles) nodes.forEach(n => {
       const isActive = selectedNode === n.id;
       const isSelected = selectedNodes.includes(n.id) || isActive;
 
@@ -609,7 +613,7 @@ export const drawNetwork2D = (
   });
 
   edges.forEach((e) => {
-      if (showControlPoints) {
+      if (visibilitySettings.showNodeControlPoints) {
           const controlPts = getExtendedEdgeControlPoints(e, nodes, edges, chamferAngle);
           if (controlPts.length > 0) {
               const cubicPts = controlPts;
@@ -638,7 +642,7 @@ export const drawNetwork2D = (
 
       e.points.forEach((pt, j) => {
           const isAnchor = (j % 3 === 2);
-          if (!showControlPoints && !isAnchor) return;
+          if (!visibilitySettings.showNodeControlPoints) return;
 
           ctx.beginPath();
           const isSelectedPoint = selectedPoints?.some(p => p.edgeId === e.id && p.pointIndex === j) || false;

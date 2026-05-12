@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2 } from 'lucide-react';
-import { Node, Edge, BuildingPolygon } from '../lib/types';
-import { sanitizeMeshResolution } from '../lib/constants';
+import { Node, Edge, BuildingPolygon, BuildingFillSettings, VisibilitySettings, PolygonFill } from '../lib/types';
+import { sanitizeBuildingFillSettings, sanitizeMeshResolution } from '../lib/constants';
 import { getEdgeClearance } from '../lib/junctions';
 import { isTrueJunction } from '../lib/network';
 
@@ -31,6 +31,11 @@ interface SidebarProps {
   setMeshResolution: (v: number) => void;
   laneWidth: number;
   setLaneWidth: (v: number) => void;
+  buildingFillSettings: BuildingFillSettings;
+  setBuildingFillSettings: React.Dispatch<React.SetStateAction<BuildingFillSettings>>;
+  visibilitySettings: VisibilitySettings;
+  setVisibilitySettings: React.Dispatch<React.SetStateAction<VisibilitySettings>>;
+  onGenerateBuildingFill: () => void;
   nodes: Node[];
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   edges: Edge[];
@@ -41,6 +46,8 @@ interface SidebarProps {
   setSelectedEdges: React.Dispatch<React.SetStateAction<string[]>>;
   buildings: BuildingPolygon[];
   setBuildings: React.Dispatch<React.SetStateAction<BuildingPolygon[]>>;
+  polygonFills: PolygonFill[];
+  selectedPolygonFillId: string | null;
   selectedBuildingId: string | null;
   selectedBuildingVertex: { buildingId: string; vertexIndex: number } | null;
   setSelectedBuildingId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -71,6 +78,11 @@ export default function Sidebar({
   setMeshResolution,
   laneWidth,
   setLaneWidth,
+  buildingFillSettings,
+  setBuildingFillSettings,
+  visibilitySettings,
+  setVisibilitySettings,
+  onGenerateBuildingFill,
   nodes,
   setNodes,
   edges,
@@ -81,6 +93,8 @@ export default function Sidebar({
   setSelectedEdges,
   buildings,
   setBuildings,
+  polygonFills,
+  selectedPolygonFillId,
   selectedBuildingId,
   selectedBuildingVertex,
   setSelectedBuildingId,
@@ -100,6 +114,23 @@ export default function Sidebar({
   const [globalScaleRoads, setGlobalScaleRoads] = useState<string>("1.5");
   const [globalScaleSidewalks, setGlobalScaleSidewalks] = useState<string>("1.5");
   const selectedBuilding = buildings.find((building) => building.id === selectedBuildingId) || null;
+  const selectedPolygonFill = polygonFills.find((fill) => fill.id === selectedPolygonFillId) || null;
+  const buildingFillSliderRanges = {
+    minWidth: Math.max(300, buildingFillSettings.minWidth),
+    maxWidth: Math.max(300, buildingFillSettings.maxWidth),
+    minHeight: Math.max(500, buildingFillSettings.minHeight),
+    maxHeight: Math.max(500, buildingFillSettings.maxHeight),
+  };
+  const updateVisibilitySetting = (key: keyof VisibilitySettings, value: boolean) => {
+    setVisibilitySettings(prev => ({ ...prev, [key]: value }));
+  };
+  const updateBuildingFillSetting = (key: keyof BuildingFillSettings, value: string) => {
+    const parsed = parseFloat(value);
+    setBuildingFillSettings(prev => sanitizeBuildingFillSettings({
+      ...prev,
+      [key]: Number.isFinite(parsed) ? parsed : prev[key],
+    }));
+  };
 
   const applyGlobalScaleMap = () => {
     const scale = parseFloat(globalScaleMap);
@@ -325,6 +356,14 @@ export default function Sidebar({
                     {isBuildingMode ? 'Building Mode: ON' : 'Add Building'}
                   </button>
               </div>
+              <div className="flex gap-2 mt-2">
+                  <button
+                      onClick={onGenerateBuildingFill}
+                      className="flex-1 px-3 py-1.5 rounded text-sm font-semibold flex justify-center items-center gap-2 transition-colors bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+                  >
+                    Building Fill
+                  </button>
+              </div>
             </section>
 
 
@@ -425,12 +464,26 @@ export default function Sidebar({
           </div>
           {!collapsedSections['selected_items'] && (
             <div className="space-y-3 overflow-y-auto pb-4">
-              {selectedNodes.length === 0 && selectedEdges.length === 0 && !selectedBuilding ? (
+              {selectedNodes.length === 0 && selectedEdges.length === 0 && !selectedBuilding && !selectedPolygonFill ? (
                 <div className="text-sm text-slate-500 text-center py-4 px-4 bg-slate-800/10 rounded-lg border border-slate-800/50 border-dashed">
-                  Select a junction, road, or building in the viewport.
+                  Select a junction, road, polygon fill, or building in the viewport.
                 </div>
               ) : (
                 <>
+                  {selectedPolygonFill && (
+                    <div className="p-3 bg-emerald-900/10 rounded-xl border border-emerald-500/50 flex flex-col gap-2">
+                      <div className="flex justify-between items-center text-sm font-bold text-slate-200">
+                        <span>Polygon Fill {selectedPolygonFill.id.substring(0, 4)}</span>
+                        <span
+                          className="w-5 h-5 rounded border border-slate-700"
+                          style={{ backgroundColor: selectedPolygonFill.color }}
+                        />
+                      </div>
+                      <div className="text-xs text-emerald-100/80 bg-emerald-950/40 border border-emerald-900 rounded p-2">
+                        Building Fill will use these {selectedPolygonFill.points.length} polygon control points.
+                      </div>
+                    </div>
+                  )}
                   {selectedBuilding && (
                     <div className="p-3 bg-orange-900/10 rounded-xl border border-orange-500/50 flex flex-col gap-3">
                       <div className="flex justify-between items-center text-sm font-bold text-slate-200">
@@ -846,6 +899,72 @@ export default function Sidebar({
                   />
                 </div>
               </div>
+              <div className="pt-3 border-t border-slate-800">
+                <label className="block text-sm font-medium text-slate-300 mb-2">Building Fill Size</label>
+                <div className="space-y-3">
+                  {[
+                    ['minWidth', 'Min Width', buildingFillSliderRanges.minWidth],
+                    ['maxWidth', 'Max Width', buildingFillSliderRanges.maxWidth],
+                    ['minHeight', 'Min Height', buildingFillSliderRanges.minHeight],
+                    ['maxHeight', 'Max Height', buildingFillSliderRanges.maxHeight],
+                  ].map(([key, label, maxValue]) => (
+                    <div key={key}>
+                      <label className="text-xs text-slate-400 block mb-1">
+                        {label} ({buildingFillSettings[key as keyof BuildingFillSettings]}px)
+                      </label>
+                      <div className="flex gap-2 items-center">
+                        <input
+                          type="range"
+                          min="1"
+                          max={maxValue as number}
+                          step="1"
+                          value={buildingFillSettings[key as keyof BuildingFillSettings]}
+                          onChange={(e) => updateBuildingFillSetting(key as keyof BuildingFillSettings, e.target.value)}
+                          className="flex-grow min-w-0"
+                        />
+                        <input
+                          type="number"
+                          min="1"
+                          value={buildingFillSettings[key as keyof BuildingFillSettings]}
+                          onChange={(e) => updateBuildingFillSetting(key as keyof BuildingFillSettings, e.target.value)}
+                          className="w-16 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section>
+          <div
+            className="flex items-center justify-between cursor-pointer mb-2"
+            onClick={() => toggleSection('visibility')}
+          >
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Visibility</h3>
+            {collapsedSections['visibility'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+          </div>
+          {!collapsedSections['visibility'] && (
+            <div className="space-y-3 bg-slate-800/20 p-3 rounded-lg border border-slate-800/50">
+              {[
+                ['showNodeHandles', 'Show Node Handles'],
+                ['showNodeControlPoints', 'Show Node Control Points'],
+                ['showPolyFillHandles', 'Show Poly Fill Handles'],
+                ['showBuildingHandles', 'Show Building Handles'],
+                ['showBuildingControlPoints', 'Show Building Control Points'],
+              ].map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={visibilitySettings[key as keyof VisibilitySettings]}
+                    onChange={(event) => updateVisibilitySetting(key as keyof VisibilitySettings, event.target.checked)}
+                    className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
             </div>
           )}
         </section>

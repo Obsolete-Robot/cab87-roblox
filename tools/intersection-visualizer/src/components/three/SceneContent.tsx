@@ -10,7 +10,7 @@ import { LaneArrows } from './LaneArrows';
 import { Grid } from '@react-three/drei';
 
 export function SceneContent({
-  mesh, showMesh, showControlPoints, nodes, edges, chamferAngle, polygonFills, buildings, selectedPolygonFillId,
+  mesh, showMesh, visibilitySettings, nodes, edges, chamferAngle, polygonFills, buildings, selectedPolygonFillId,
   onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu,
   isDragging, draggingPoint, initialCameraParams, selectedNode, selectedNodes, selectedEdges, selectedPoints, selectedBuildingId, selectedBuildingVertex,
   softSelectionEnabled, softSelectionRadius,
@@ -74,11 +74,12 @@ export function SceneContent({
         edges={edges}
         buildings={buildings}
         selectedNode={selectedNode}
+        visibilitySettings={visibilitySettings}
       />
 
       <group>
-        {showControlPoints && <BezierPaths edges={edges} nodes={nodes} chamferAngle={chamferAngle} />}
-        {polygonFills && polygonFills.map((fill: any, i: number) => {
+        {visibilitySettings.showNodeControlPoints && <BezierPaths edges={edges} nodes={nodes} chamferAngle={chamferAngle} />}
+        {visibilitySettings.showPolyFillHandles && polygonFills && polygonFills.map((fill: any, i: number) => {
           let cx = 0, cy = 0, count = 0;
           fill.points.forEach((nid: string) => {
              const n = nodes.find((nn: any) => nn.id === nid);
@@ -102,7 +103,7 @@ export function SceneContent({
           }
           return null;
         })}
-        {nodes.map((n: Node) => {
+        {visibilitySettings.showNodeHandles && nodes.map((n: Node) => {
           const isActive = selectedNode === n.id;
           const isSelected = selectedNodes?.includes(n.id) || isActive;
           const color = isActive ? (n.point.linked ? '#059669' : '#ef4444') : isSelected ? (n.point.linked ? '#6ee7b7' : '#fca5a5') : (n.point.linked ? '#10b981' : '#60a5fa');
@@ -125,7 +126,7 @@ export function SceneContent({
           const isSelected = selectedBuildingId === building.id;
           return (
             <group key={`building-handles-${building.id}`}>
-              {building.vertices.map((vertex: Point, vertexIndex: number) => {
+              {visibilitySettings.showBuildingControlPoints && building.vertices.map((vertex: Point, vertexIndex: number) => {
                 const isVertexSelected = selectedBuildingVertex?.buildingId === building.id && selectedBuildingVertex.vertexIndex === vertexIndex;
                 return (
                   <mesh
@@ -138,11 +139,13 @@ export function SceneContent({
                   </mesh>
                 );
               })}
-              <mesh position={[center.x, baseZ + height, center.y]} renderOrder={1000}>
-                <sphereGeometry args={[isSelected ? 13 : 10, 16, 16]} />
-                <meshBasicMaterial color={isSelected && !selectedBuildingVertex ? '#ffffff' : '#f97316'} depthTest={false} depthWrite={false} transparent />
-              </mesh>
-              {isSelected && (
+              {visibilitySettings.showBuildingHandles && (
+                <mesh position={[center.x, baseZ + height, center.y]} renderOrder={1000}>
+                  <sphereGeometry args={[isSelected ? 13 : 10, 16, 16]} />
+                  <meshBasicMaterial color={isSelected && !selectedBuildingVertex ? '#ffffff' : '#f97316'} depthTest={false} depthWrite={false} transparent />
+                </mesh>
+              )}
+              {isSelected && visibilitySettings.showBuildingHandles && (
                 <lineSegments renderOrder={999}>
                   <bufferGeometry>
                     <bufferAttribute
@@ -163,7 +166,7 @@ export function SceneContent({
         {edges.flatMap((edge: Edge) =>
           edge.points.map((pt: Point, i: number) => {
             const isAnchor = (i % 3 === 2);
-            if (!showControlPoints && !isAnchor) return null;
+            if (!visibilitySettings.showNodeControlPoints) return null;
             const isSelectedEdge = selectedEdges.includes(edge.id);
             const isSelectedPoint = selectedPoints?.some((p: any) => p.edgeId === edge.id && p.pointIndex === i) || false;
 

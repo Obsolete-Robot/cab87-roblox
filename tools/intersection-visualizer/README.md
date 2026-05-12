@@ -14,6 +14,8 @@ Open `http://localhost:3000`, author the graph, tune **Mesh Split Size** for dis
 
 Press **B** to toggle building mode. Left-click footprint vertices in the 2D view, then close the polygon by clicking the first vertex or pressing Enter. Building vertices can be dragged from the base in either view, the center handle moves the whole footprint in XY, and Shift-dragging the center/top handle in 3D adjusts height.
 
+Use **Building Fill** after selecting road edges or junctions to generate buildings from the current sidewalk edges. Open road selections place frontage buildings on both sides of the road. Closed block selections use the inner sidewalk boundary and generate four-point strip buildings along road curves and junction corners without collapsing footprints into the block center. Building fill keeps generated footprints linked to the selected roads, so adjusting a road curve regenerates the linked buildings from the updated sidewalk edge. Moving a generated building or dragging one of its vertices turns that footprint into a manual building. Tune min/max frontage width and vertical height in **Global > Settings**.
+
 Mesher changes must stay in parity with Roblox's Luau port in `src/shared/RoadGraphMesher.lua`.
 See [`../../docs/ROAD_MAKER_SYNC.md`](../../docs/ROAD_MAKER_SYNC.md) before changing
 `src/lib/meshing.ts`.
@@ -30,7 +32,13 @@ Exports use the `cab87-road-network` JSON schema with `version: 2`. The payload 
   "version": 2,
   "settings": {
     "chamferAngleDeg": 70,
-    "meshResolution": 20
+    "meshResolution": 20,
+    "buildingFill": {
+      "minWidth": 48,
+      "maxWidth": 120,
+      "minHeight": 50,
+      "maxHeight": 160
+    }
   },
   "nodes": [],
   "edges": [],

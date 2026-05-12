@@ -35,6 +35,30 @@ export type BuildingPolygon = {
   height: number;
   color: string;
   material?: string;
+  fillSource?: BuildingFillSource;
+};
+
+export type BuildingFillSettings = {
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+};
+
+export type BuildingFillSource = {
+  groupId: string;
+  mode: 'open' | 'closed';
+  selectedNodes: string[];
+  selectedEdges: string[];
+  settings: BuildingFillSettings;
+};
+
+export type VisibilitySettings = {
+  showNodeHandles: boolean;
+  showNodeControlPoints: boolean;
+  showPolyFillHandles: boolean;
+  showBuildingHandles: boolean;
+  showBuildingControlPoints: boolean;
 };
 
 export type Edge = {
