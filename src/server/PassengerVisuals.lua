@@ -66,6 +66,36 @@ local function destroyInstance(instance)
 	end
 end
 
+local function getSafeNormal(normal)
+	if typeof(normal) == "Vector3" and normal.Magnitude > 0.001 then
+		return normal.Unit
+	end
+
+	return Vector3.new(0, 1, 0)
+end
+
+local function getSurfaceBasis(normal)
+	local up = getSafeNormal(normal)
+	local reference = if math.abs(up:Dot(Vector3.new(0, 0, 1))) < 0.95
+		then Vector3.new(0, 0, 1)
+		else Vector3.new(1, 0, 0)
+	local right = reference:Cross(up)
+	if right.Magnitude <= 0.001 then
+		right = Vector3.new(1, 0, 0)
+	else
+		right = right.Unit
+	end
+
+	local forward = up:Cross(right)
+	if forward.Magnitude <= 0.001 then
+		forward = Vector3.new(0, 0, 1)
+	else
+		forward = forward.Unit
+	end
+
+	return up, right, forward
+end
+
 local function getVisibleTarget(target)
 	if type(target) == "table" then
 		return target.model
@@ -74,29 +104,30 @@ local function getVisibleTarget(target)
 	return target
 end
 
-local function createCircleMarker(parent, name, position, radius, color)
+local function createCircleMarker(parent, name, position, radius, color, normal)
 	local marker = Instance.new("Model")
 	marker.Name = name
 	marker:SetAttribute("Radius", radius)
 	marker:SetAttribute("GeneratedBy", "Cab87PassengerService")
 	marker.Parent = parent
 
+	local up, basisRight, basisForward = getSurfaceBasis(normal)
 	local segments = math.max(12, math.floor(getConfigNumber("passengerMarkerSegments", 28)))
 	local thickness = math.max(getConfigNumber("passengerMarkerThickness", 0.35), 0.05)
 	local transparency = math.clamp(getConfigNumber("passengerMarkerTransparency", 0.12), 0, 1)
 	local heightOffset = getConfigNumber("passengerMarkerHeightOffset", 0.25)
 	local segmentLength = (2 * math.pi * radius / segments) * 0.92
-	local y = position.Y + heightOffset
+	local center = position + up * heightOffset
 
 	for i = 1, segments do
 		local angle = ((i - 1) / segments) * math.pi * 2
-		local radial = Vector3.new(math.cos(angle), 0, math.sin(angle))
-		local tangent = Vector3.new(-math.sin(angle), 0, math.cos(angle))
-		local segmentPosition = Vector3.new(position.X, y, position.Z) + radial * radius
+		local radial = basisRight * math.cos(angle) + basisForward * math.sin(angle)
+		local tangent = -basisRight * math.sin(angle) + basisForward * math.cos(angle)
+		local segmentPosition = center + radial * radius
 		local segment = makePart(marker, {
 			Name = string.format("Segment_%02d", i),
 			Size = Vector3.new(thickness, 0.12, segmentLength),
-			CFrame = CFrame.lookAt(segmentPosition, segmentPosition + tangent),
+			CFrame = CFrame.lookAt(segmentPosition, segmentPosition + tangent, up),
 			Color = color,
 			Material = Enum.Material.Neon,
 			Transparency = transparency,
@@ -119,11 +150,12 @@ function PassengerVisuals.recreateFolder(parent, name)
 	return folder
 end
 
-function PassengerVisuals.createStop(parent, id, position)
+function PassengerVisuals.createStop(parent, id, position, normal)
+	local up, basisRight, basisForward = getSurfaceBasis(normal)
 	local part = makePart(parent, {
 		Name = string.format("PassengerStop_%03d", id),
 		Size = Vector3.new(2, 0.2, 2),
-		Position = position,
+		CFrame = CFrame.fromMatrix(position, basisRight, up, -basisForward),
 		Transparency = 1,
 		Color = Color3.fromRGB(255, 255, 255),
 	})
@@ -231,7 +263,8 @@ function PassengerVisuals.createPickupMarker(visual, parent, passengerId, stop, 
 		string.format("PickupCircle_%03d", passengerId),
 		stop.position,
 		radius,
-		getConfigColor("passengerPickupColor", Color3.fromRGB(70, 255, 120))
+		getConfigColor("passengerPickupColor", Color3.fromRGB(70, 255, 120)),
+		stop.normal
 	)
 	marker:SetAttribute("PassengerId", passengerId)
 	marker:SetAttribute("PickupStopId", stop.id)
@@ -245,7 +278,8 @@ function PassengerVisuals.createDeliveryMarker(visual, parent, passengerId, stop
 		string.format("DeliveryCircle_%03d", passengerId),
 		stop.position,
 		radius,
-		getConfigColor("passengerDeliveryColor", Color3.fromRGB(255, 70, 55))
+		getConfigColor("passengerDeliveryColor", Color3.fromRGB(255, 70, 55)),
+		stop.normal
 	)
 	marker:SetAttribute("PassengerId", passengerId)
 	marker:SetAttribute("TargetStopId", stop.id)
