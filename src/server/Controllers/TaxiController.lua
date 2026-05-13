@@ -240,6 +240,11 @@ function TaxiController:start()
 	local hillAirtimeGraceTimer = 0
 	local hillAirtimeArmed = true
 	local lastGroundedHillTravelPitch = 0
+	local hillAirtimeUphillCrestPitch = 0
+	local hillAirtimeLastGroundGap = 0
+	local hillAirtimeGapStallTime = 0
+	local hillAirtimeGapCheckTimer = 0
+	local hillAirtimeMode = nil
 	local visualPitch = 0
 	local visualRoll = 0
 	local visualDriveRoll = 0
@@ -806,13 +811,19 @@ function TaxiController:start()
 	local function getHillAirtimeGrace(
 		groundProfile,
 		currentHorizontalSpeed,
-		currentForwardSpeed
+		currentForwardSpeed,
+		airtimePitchOverride,
+		airtimeMode
 	)
 		if not groundProfile then
 			return 0
 		end
 
-		local baseGrace = math.max(getFiniteNumberConfig("carHillAirtimeGraceSeconds", 0), 0)
+		local isCrestAirtime = airtimeMode == "crest"
+		local defaultBaseGrace = getFiniteNumberConfig("carHillAirtimeGraceSeconds", 0)
+		local baseGrace = if isCrestAirtime
+			then math.max(getFiniteNumberConfig("carHillAirtimeCrestGraceSeconds", defaultBaseGrace), 0)
+			else math.max(defaultBaseGrace, 0)
 		if baseGrace <= 0 then
 			return 0
 		end
@@ -830,17 +841,24 @@ function TaxiController:start()
 
 		local downhillPitch = getHillTravelPitch(groundProfile, forwardSpeed)
 		local minDownhillPitch = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeMinDownhillPitchDegrees", 0), 0))
-		if downhillPitch <= minDownhillPitch then
+		local airtimePitch = airtimePitchOverride or downhillPitch
+		if not airtimePitchOverride and downhillPitch <= minDownhillPitch then
+			return 0
+		end
+		if airtimePitch <= 0 then
 			return 0
 		end
 
-		local maxGrace = math.max(getFiniteNumberConfig("carHillAirtimeMaxGraceSeconds", baseGrace), 0)
+		local defaultMaxGrace = getFiniteNumberConfig("carHillAirtimeMaxGraceSeconds", baseGrace)
+		local maxGrace = if isCrestAirtime
+			then math.max(getFiniteNumberConfig("carHillAirtimeCrestMaxGraceSeconds", defaultMaxGrace), 0)
+			else math.max(defaultMaxGrace, 0)
 		if maxGrace <= 0 then
 			return 0
 		end
 
 		local slopeScale = math.max(getFiniteNumberConfig("carHillAirtimeSlopeGraceScale", 0), 0)
-		local descentSlope = math.max(math.tan(downhillPitch), 0)
+		local descentSlope = math.max(math.tan(airtimePitch), 0)
 
 		return math.clamp(baseGrace + descentSlope * slopeScale, 0, maxGrace)
 	end
@@ -1071,6 +1089,11 @@ function TaxiController:start()
 		hillAirtimeGraceTimer = 0
 		hillAirtimeArmed = true
 		lastGroundedHillTravelPitch = 0
+		hillAirtimeUphillCrestPitch = 0
+		hillAirtimeLastGroundGap = 0
+		hillAirtimeGapStallTime = 0
+		hillAirtimeGapCheckTimer = 0
+		hillAirtimeMode = nil
 		visualPitch = 0
 		visualRoll = 0
 		visualDriveRoll = 0
@@ -1161,6 +1184,11 @@ function TaxiController:start()
 			hillAirtimeGraceTimer = 0
 			hillAirtimeArmed = true
 			lastGroundedHillTravelPitch = 0
+			hillAirtimeUphillCrestPitch = 0
+			hillAirtimeLastGroundGap = 0
+			hillAirtimeGapStallTime = 0
+			hillAirtimeGapCheckTimer = 0
+			hillAirtimeMode = nil
 			visualPitch = 0
 			visualRoll = 0
 			visualDriveRoll = 0
@@ -1370,11 +1398,36 @@ function TaxiController:start()
 			local seesDownhillSlope = downhillPitch > minDownhillPitch
 			local enteredDownhillSlope = seesDownhillSlope
 				and lastGroundedHillTravelPitch <= minDownhillPitch
-			local hillAirtimeGrace = if hillAirtimeArmed and enteredDownhillSlope
+			local crestStartPitch = hillAirtimeUphillCrestPitch
+			local minCrestUphillPitch = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeCrestMinUphillPitchDegrees", 5), 0))
+			local minCrestFlatten = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeCrestMinFlattenDegrees", 4), 0))
+			if downhillPitch < crestStartPitch then
+				crestStartPitch = downhillPitch
+				hillAirtimeUphillCrestPitch = downhillPitch
+			end
+			local crestFlattenPitch = downhillPitch - crestStartPitch
+			local targetRiseVelocity = if dt > 0
+				then math.max((targetY - previousY) / dt, 0)
+				else 0
+			local minCrestRiseExcess = math.max(getFiniteNumberConfig("carHillAirtimeCrestMinRiseExcess", 1), 0)
+			local crestRiseExcess = verticalVelocity - targetRiseVelocity
+			local enteredUphillCrest = crestStartPitch <= -minCrestUphillPitch
+				and crestFlattenPitch >= minCrestFlatten
+				and crestRiseExcess >= minCrestRiseExcess
+			local hillAirtimeTriggerMode = if enteredDownhillSlope then "downhill" elseif enteredUphillCrest then "crest" else nil
+			local hillAirtimeTriggerPitch = if hillAirtimeTriggerMode == "crest" then crestFlattenPitch else nil
+			local maxLaunchStepUp = math.max(getFiniteNumberConfig("carHillAirtimeMaxLaunchStepUp", 0.25), 0)
+			local maxCrestGroundRise = math.max(getFiniteNumberConfig("carHillAirtimeCrestMaxGroundRise", 1.5), 0)
+			local canStartHillAirtime = if hillAirtimeTriggerMode == "crest"
+				then targetY <= position.Y + maxCrestGroundRise
+				else stepUp <= maxLaunchStepUp
+			local hillAirtimeGrace = if hillAirtimeArmed and hillAirtimeTriggerMode and canStartHillAirtime
 				then getHillAirtimeGrace(
 					groundProfile,
 					horizontalSpeed,
-					currentForwardSpeed
+					currentForwardSpeed,
+					hillAirtimeTriggerPitch,
+					hillAirtimeTriggerMode
 				)
 				else 0
 			lastGroundedHillTravelPitch = downhillPitch
@@ -1387,8 +1440,17 @@ function TaxiController:start()
 				if hillAirtimeGraceTimer > 0 then
 					verticalVelocity = math.max(verticalVelocity, 0)
 					hillAirtimeArmed = false
+					hillAirtimeUphillCrestPitch = 0
+					hillAirtimeLastGroundGap = math.max(position.Y - targetY, 0)
+					hillAirtimeGapStallTime = 0
+					hillAirtimeGapCheckTimer = 0
+					hillAirtimeMode = hillAirtimeTriggerMode
 				else
 					verticalVelocity = math.max(verticalVelocity, 0)
+					hillAirtimeLastGroundGap = 0
+					hillAirtimeGapStallTime = 0
+					hillAirtimeGapCheckTimer = 0
+					hillAirtimeMode = nil
 				end
 				targetPitch = visualPitch
 				targetRoll = visualRoll
@@ -1398,6 +1460,10 @@ function TaxiController:start()
 				velocity = getGroundStepCrashVelocity(velocity, normal)
 				verticalVelocity = 0
 				hillAirtimeGraceTimer = 0
+				hillAirtimeLastGroundGap = 0
+				hillAirtimeGapStallTime = 0
+				hillAirtimeGapCheckTimer = 0
+				hillAirtimeMode = nil
 				boostTimer = 0
 				targetPitch = visualPitch
 				targetRoll = visualRoll
@@ -1405,10 +1471,18 @@ function TaxiController:start()
 				reportImpactDamage("ground", impactSpeed)
 			elseif hillAirtimeGrace > 0 then
 				pendingFallResetPose = getSafeFallResetPose()
+				if hillAirtimeTriggerMode == "crest" then
+					position = Vector3.new(position.X, math.max(position.Y, targetY), position.Z)
+				end
 				grounded = false
 				airborneTime = 0
 				hillAirtimeGraceTimer = hillAirtimeGrace
 				hillAirtimeArmed = false
+				hillAirtimeUphillCrestPitch = 0
+				hillAirtimeLastGroundGap = math.max(position.Y - targetY, 0)
+				hillAirtimeGapStallTime = 0
+				hillAirtimeGapCheckTimer = 0
+				hillAirtimeMode = hillAirtimeTriggerMode
 				verticalVelocity = math.max(verticalVelocity, 0)
 				targetPitch = visualPitch
 				targetRoll = visualRoll
@@ -1417,13 +1491,21 @@ function TaxiController:start()
 				local riseVelocity = (position.Y - previousY) / dt
 				verticalVelocity = math.max(riseVelocity, 0)
 				hillAirtimeGraceTimer = 0
+				hillAirtimeLastGroundGap = 0
+				hillAirtimeGapStallTime = 0
+				hillAirtimeGapCheckTimer = 0
+				hillAirtimeMode = nil
 				airPitchVelocity = 0
 				airRollVelocity = 0
 				pendingFallResetPose = nil
 				if seesDownhillSlope then
 					hillAirtimeArmed = false
-				elseif downhillPitch <= 0 and dropDistance <= 0 then
+				elseif downhillPitch < 0 then
 					hillAirtimeArmed = true
+					hillAirtimeUphillCrestPitch = math.min(hillAirtimeUphillCrestPitch, downhillPitch)
+				elseif dropDistance <= 0 then
+					hillAirtimeArmed = true
+					hillAirtimeUphillCrestPitch = 0
 				end
 				recordSafeGroundPose(groundProfile)
 			end
@@ -1431,6 +1513,51 @@ function TaxiController:start()
 			local maxPitch = math.rad(Config.carMaxPitchDegrees)
 			local ignoreGravityAndLanding = hillAirtimeGraceTimer > 0
 			airborneTime += dt
+
+			if ignoreGravityAndLanding and groundProfile then
+				local maxLaunchStepUp = if hillAirtimeMode == "crest"
+					then math.max(getFiniteNumberConfig("carHillAirtimeCrestMaxGroundRise", 1.5), 0)
+					else math.max(getFiniteNumberConfig("carHillAirtimeMaxLaunchStepUp", 0.25), 0)
+				if targetY > position.Y + maxLaunchStepUp then
+					hillAirtimeGraceTimer = 0
+					hillAirtimeLastGroundGap = 0
+					hillAirtimeGapStallTime = 0
+					hillAirtimeGapCheckTimer = 0
+					hillAirtimeMode = nil
+					ignoreGravityAndLanding = false
+				else
+					hillAirtimeGapCheckTimer += dt
+				end
+
+				local gapCheckInterval = math.max(getFiniteNumberConfig("carHillAirtimeGapCheckIntervalSeconds", 0.2), 0.001)
+				if ignoreGravityAndLanding and hillAirtimeGapCheckTimer >= gapCheckInterval then
+					local checkElapsed = hillAirtimeGapCheckTimer
+					hillAirtimeGapCheckTimer = 0
+
+					local currentForwardSpeed = velocity:Dot(yawToForward(yaw))
+					local downhillPitch = getHillTravelPitch(groundProfile, currentForwardSpeed)
+					local minDownhillPitch = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeMinDownhillPitchDegrees", 0), 0))
+					local slopeStillValid = hillAirtimeMode == "crest" or downhillPitch > minDownhillPitch
+					local currentGroundGap = math.max(position.Y - targetY, 0)
+					local minGapGrowth = math.max(getFiniteNumberConfig("carHillAirtimeMinGapGrowth", 0.001), 0)
+					local gapStallGrace = math.max(getFiniteNumberConfig("carHillAirtimeGapStallSeconds", 0.1), 0)
+					if slopeStillValid and currentGroundGap > hillAirtimeLastGroundGap + minGapGrowth then
+						hillAirtimeLastGroundGap = currentGroundGap
+						hillAirtimeGapStallTime = 0
+					else
+						hillAirtimeGapStallTime += checkElapsed
+					end
+
+					if hillAirtimeGapStallTime >= gapStallGrace then
+						hillAirtimeGraceTimer = 0
+						hillAirtimeLastGroundGap = 0
+						hillAirtimeGapStallTime = 0
+						hillAirtimeGapCheckTimer = 0
+						hillAirtimeMode = nil
+						ignoreGravityAndLanding = false
+					end
+				end
+			end
 
 			if ignoreGravityAndLanding then
 				hillAirtimeGraceTimer = math.max(hillAirtimeGraceTimer - dt, 0)
@@ -1459,7 +1586,13 @@ function TaxiController:start()
 				airborneTime = 0
 				hillAirtimeGraceTimer = 0
 				hillAirtimeArmed = false
-				lastGroundedHillTravelPitch = getHillTravelPitch(groundProfile, velocity:Dot(yawToForward(yaw)))
+				local landedTravelPitch = getHillTravelPitch(groundProfile, velocity:Dot(yawToForward(yaw)))
+				lastGroundedHillTravelPitch = landedTravelPitch
+				hillAirtimeUphillCrestPitch = math.min(landedTravelPitch, 0)
+				hillAirtimeLastGroundGap = 0
+				hillAirtimeGapStallTime = 0
+				hillAirtimeGapCheckTimer = 0
+				hillAirtimeMode = nil
 				triggerLandingBounce(landingSpeed)
 				airPitchVelocity = 0
 				airRollVelocity = 0
