@@ -150,7 +150,7 @@ local function moveGroundedTowards(service, current, target, maxDistance, option
 	local horizontalStep = if arrived then delta else delta.Unit * maxDistance
 	local probePosition = Vector3.new(current.X + horizontalStep.X, current.Y, current.Z + horizontalStep.Z)
 	local sample = getSurfaceSample(service, probePosition, current.Y)
-	if not sample.hitSurface then
+	if not sample.hitSurface and not options.allowMissingSurface then
 		return nil, false, "missing_surface"
 	end
 
@@ -773,13 +773,11 @@ local function getBoardingReachability(service, passenger, target)
 	end
 
 	local sample = getSurfaceSample(service, target, passenger.position.Y)
-	if not sample.hitSurface then
-		return false, "missing_door_surface"
-	end
-
-	local maxDoorHeight = math.max(getConfigNumber("passengerBoardingMaxDoorSurfaceHeight", 7), 0)
-	if math.abs(target.Y - sample.position.Y) > maxDoorHeight then
-		return false, "door_off_ground"
+	if sample.hitSurface then
+		local maxDoorHeight = math.max(getConfigNumber("passengerBoardingMaxDoorSurfaceHeight", 7), 0)
+		if math.abs(target.Y - sample.position.Y) > maxDoorHeight then
+			return false, "door_off_ground"
+		end
 	end
 
 	return true, nil
@@ -795,7 +793,9 @@ local function updateBoarding(service, passenger, dt)
 
 	local fallbackSpeed = getConfigNumber("passengerWalkSpeed", 24)
 	local maxDistance = math.max(getConfigNumber("passengerBoardingSpeed", fallbackSpeed), 1) * dt
-	local nextPosition, arrived, blockedReason = moveGroundedTowards(service, passenger.position, target, maxDistance)
+	local nextPosition, arrived, blockedReason = moveGroundedTowards(service, passenger.position, target, maxDistance, {
+		allowMissingSurface = true,
+	})
 	if not nextPosition then
 		cancelBoarding(service, passenger, blockedReason)
 		return
