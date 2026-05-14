@@ -73,6 +73,22 @@ end
 
 local horizontalDistance = RoadSampling.distanceXZ
 
+local function distanceToStop(position, stop)
+	if not stop then
+		return math.huge
+	end
+
+	local stopPosition = stop.position
+	local normal = stop.normal
+	if typeof(normal) == "Vector3" and normal.Magnitude > 0.001 then
+		normal = normal.Unit
+		local delta = position - stopPosition
+		return (delta - normal * delta:Dot(normal)).Magnitude
+	end
+
+	return horizontalDistance(position, stopPosition)
+end
+
 local function getPassengerStopReservationDistance()
 	local pickupRadius = math.max(getConfigNumber("passengerPickupRadius", 24), 1)
 	local deliveryRadius = math.max(getConfigNumber("passengerDeliveryRadius", 28), 1)
@@ -95,7 +111,25 @@ local function getPerpendicularRight(direction)
 end
 
 local function getSurfacePosition(service, position, fallbackY)
-	return PassengerStopService.projectToSurface(service.surfaceRaycastParams, position, fallbackY)
+	local surfacePosition = PassengerStopService.projectToSurface(service.surfaceRaycastParams, position, fallbackY)
+	return surfacePosition
+end
+
+local function getSurfaceSample(service, position, fallbackY)
+	local surfacePosition, hitSurface, surface, normal =
+		PassengerStopService.projectToSurface(service.surfaceRaycastParams, position, fallbackY)
+	if typeof(normal) ~= "Vector3" or normal.Magnitude <= 0.001 then
+		normal = Vector3.new(0, 1, 0)
+	else
+		normal = normal.Unit
+	end
+
+	return {
+		position = surfacePosition,
+		hitSurface = hitSurface,
+		surface = surface,
+		normal = normal,
+	}
 end
 
 local function setPassengerGroundPose(passenger, groundPosition, lookAt, moving, pose)
@@ -103,14 +137,39 @@ local function setPassengerGroundPose(passenger, groundPosition, lookAt, moving,
 	PassengerVisuals.setPose(passenger.visual, groundPosition, lookAt, moving, passenger.runPhase, pose)
 end
 
-local function moveTowards(current, target, maxDistance)
-	local delta = target - current
+local function moveGroundedTowards(service, current, target, maxDistance, options)
+	options = options or {}
+
+	local delta = Vector3.new(target.X - current.X, 0, target.Z - current.Z)
 	local distance = delta.Magnitude
-	if distance <= maxDistance or distance <= 0.001 then
-		return target, true
+	if distance <= 0.001 then
+		return current, true, nil
 	end
 
-	return current + delta.Unit * maxDistance, false
+	local arrived = distance <= maxDistance
+	local horizontalStep = if arrived then delta else delta.Unit * maxDistance
+	local probePosition = Vector3.new(current.X + horizontalStep.X, current.Y, current.Z + horizontalStep.Z)
+	local sample = getSurfaceSample(service, probePosition, current.Y)
+	if not sample.hitSurface then
+		return nil, false, "missing_surface"
+	end
+
+	local minNormalY = math.clamp(getConfigNumber("passengerGroundMinNormalY", 0.35), 0, 1)
+	if sample.normal.Y < minNormalY then
+		return nil, false, "steep_surface"
+	end
+
+	local verticalDelta = sample.position.Y - current.Y
+	local maxStepUp = math.max(options.maxStepUp or getConfigNumber("passengerGroundMaxStepUp", 4), 0)
+	local maxStepDown = math.max(options.maxStepDown or getConfigNumber("passengerGroundMaxStepDown", 6), 0)
+	if verticalDelta > maxStepUp then
+		return nil, false, "step_up"
+	end
+	if -verticalDelta > maxStepDown then
+		return nil, false, "step_down"
+	end
+
+	return sample.position, arrived, nil
 end
 
 local function easeOutQuad(alpha)
@@ -320,7 +379,7 @@ end
 
 local function setPickupMarkersVisible(service, visible)
 	for _, passenger in ipairs(service.passengers) do
-		if passenger.status == "waiting" then
+		if passenger.status == "waiting" or passenger.status == "returning" then
 			PassengerVisuals.setPickupVisible(passenger.visual, visible)
 		end
 	end
@@ -329,7 +388,7 @@ end
 local function countWaitingPassengers(service)
 	local count = 0
 	for _, passenger in ipairs(service.passengers) do
-		if passenger.status == "waiting" then
+		if passenger.status == "waiting" or passenger.status == "returning" then
 			count += 1
 		end
 	end
@@ -490,7 +549,7 @@ local function removeWaitingPassengersNearStop(service, stop)
 	for i = #service.passengers, 1, -1 do
 		local passenger = service.passengers[i]
 		if
-			passenger.status == "waiting"
+			(passenger.status == "waiting" or passenger.status == "returning")
 			and passenger.pickupStop
 			and horizontalDistance(passenger.pickupStop.position, stop.position) <= reservationDistance
 		then
@@ -523,6 +582,34 @@ local function startBoarding(service, passenger)
 	setPickupMarkersVisible(service, false)
 	PassengerVisuals.setPickupVisible(passenger.visual, false)
 	PassengerVisuals.setDeliveryVisible(passenger.visual, false)
+end
+
+local function cancelBoarding(service, passenger, reason)
+	if service.activePassenger ~= passenger then
+		return
+	end
+
+	service.activePassenger = nil
+	service.mode = "pickup"
+	service.forceNextCabStatePublish = true
+	service.pickupCooldown = getConfigNumber("passengerModeSwitchCooldown", 0.45)
+	passenger.status = "returning"
+	passenger.runPhase = 0
+	clearPassengerDive(passenger)
+	clearGpsDestination(service)
+	PassengerVisuals.setParent(passenger.visual, service.passengerFolder)
+	PassengerVisuals.setPassengerVisible(passenger.visual, true)
+	PassengerVisuals.setDeliveryVisible(passenger.visual, false)
+	PassengerVisuals.setPickupVisible(passenger.visual, true)
+	setPickupMarkersVisible(service, true)
+	debugLog(
+		"cancelled boarding passenger id=%d reason=%s cab=%s passenger=%s pickup=%s",
+		passenger.id,
+		tostring(reason or "unknown"),
+		formatVector(service.car:GetPivot().Position),
+		formatVector(passenger.position),
+		formatVector(passenger.pickupStop and passenger.pickupStop.position or nil)
+	)
 end
 
 local function completeBoarding(service, passenger)
@@ -562,8 +649,16 @@ local function completeDelivery(service)
 
 	passenger.status = "exiting"
 	passenger.runPhase = 0
-	passenger.position = getCabDoorPosition(service.car)
 	passenger.exitTarget = passenger.targetStop.position
+	local doorPosition = getCabDoorPosition(service.car)
+	local doorSurface = getSurfaceSample(service, doorPosition, passenger.exitTarget.Y)
+	local doorSurfaceGap = math.abs(doorPosition.Y - doorSurface.position.Y)
+	local maxDoorSurfaceHeight = math.max(getConfigNumber("passengerBoardingMaxDoorSurfaceHeight", 7), 0)
+	if doorSurface.hitSurface and doorSurfaceGap <= maxDoorSurfaceHeight then
+		passenger.position = doorSurface.position
+	else
+		passenger.position = passenger.exitTarget
+	end
 	PassengerVisuals.setParent(passenger.visual, service.passengerFolder)
 	setPassengerGroundPose(passenger, passenger.position, passenger.exitTarget, false)
 	PassengerVisuals.setPassengerVisible(passenger.visual, true)
@@ -626,7 +721,11 @@ local function updateWaitingPassenger(service, passenger, dt, cabPosition, cabDi
 	end
 
 	local maxDistance = math.max(getConfigNumber("passengerDiveReturnSpeed", 16), 1) * dt
-	local nextPosition, arrived = moveTowards(passenger.position, pickupPosition, maxDistance)
+	local nextPosition, arrived = moveGroundedTowards(service, passenger.position, pickupPosition, maxDistance)
+	if not nextPosition then
+		nextPosition = pickupPosition
+		arrived = true
+	end
 	passenger.runPhase += dt * 8
 	setPassengerGroundPose(passenger, nextPosition, pickupPosition, true)
 
@@ -635,11 +734,73 @@ local function updateWaitingPassenger(service, passenger, dt, cabPosition, cabDi
 	end
 end
 
-local function updateBoarding(service, passenger, dt)
-	local target = getCabDoorPosition(service.car)
+local function updateReturningPassenger(service, passenger, dt)
+	local pickupPosition = passenger.pickupStop.position
 	local fallbackSpeed = getConfigNumber("passengerWalkSpeed", 24)
 	local maxDistance = math.max(getConfigNumber("passengerBoardingSpeed", fallbackSpeed), 1) * dt
-	local nextPosition, arrived = moveTowards(passenger.position, target, maxDistance)
+	local nextPosition, arrived = moveGroundedTowards(service, passenger.position, pickupPosition, maxDistance, {
+		maxStepUp = math.max(getConfigNumber("passengerGroundMaxStepUp", 4), getConfigNumber("passengerGroundMaxStepDown", 6)),
+		maxStepDown = math.max(getConfigNumber("passengerGroundMaxStepDown", 6), 0),
+	})
+
+	if not nextPosition then
+		nextPosition = pickupPosition
+		arrived = true
+	end
+
+	passenger.runPhase += dt * 10
+	setPassengerGroundPose(passenger, nextPosition, pickupPosition, true)
+
+	if arrived or horizontalDistance(nextPosition, pickupPosition) <= 0.5 then
+		passenger.status = "waiting"
+		setPassengerGroundPose(passenger, pickupPosition, passenger.targetStop.position, false)
+	end
+end
+
+local function getBoardingReachability(service, passenger, target)
+	local grounded = service.car:GetAttribute("Cab87Grounded")
+	if grounded == false then
+		return false, "cab_airborne"
+	end
+
+	local cancelDistance = math.max(getConfigNumber("passengerBoardingCancelDistance", 52), 1)
+	if horizontalDistance(passenger.position, target) > cancelDistance then
+		return false, "cab_too_far"
+	end
+
+	if passenger.pickupStop and horizontalDistance(passenger.pickupStop.position, target) > cancelDistance then
+		return false, "cab_left_pickup"
+	end
+
+	local sample = getSurfaceSample(service, target, passenger.position.Y)
+	if not sample.hitSurface then
+		return false, "missing_door_surface"
+	end
+
+	local maxDoorHeight = math.max(getConfigNumber("passengerBoardingMaxDoorSurfaceHeight", 7), 0)
+	if math.abs(target.Y - sample.position.Y) > maxDoorHeight then
+		return false, "door_off_ground"
+	end
+
+	return true, nil
+end
+
+local function updateBoarding(service, passenger, dt)
+	local target = getCabDoorPosition(service.car)
+	local reachable, reachabilityReason = getBoardingReachability(service, passenger, target)
+	if not reachable then
+		cancelBoarding(service, passenger, reachabilityReason)
+		return
+	end
+
+	local fallbackSpeed = getConfigNumber("passengerWalkSpeed", 24)
+	local maxDistance = math.max(getConfigNumber("passengerBoardingSpeed", fallbackSpeed), 1) * dt
+	local nextPosition, arrived, blockedReason = moveGroundedTowards(service, passenger.position, target, maxDistance)
+	if not nextPosition then
+		cancelBoarding(service, passenger, blockedReason)
+		return
+	end
+
 	passenger.runPhase += dt * 10
 	setPassengerGroundPose(passenger, nextPosition, target, true)
 
@@ -658,7 +819,11 @@ local function updateExiting(service, passenger, dt, cabPosition, cabDirection, 
 	local target = passenger.exitTarget or passenger.targetStop.position
 	local fallbackSpeed = getConfigNumber("passengerWalkSpeed", 24)
 	local maxDistance = math.max(getConfigNumber("passengerExitSpeed", fallbackSpeed), 1) * dt
-	local nextPosition, arrived = moveTowards(passenger.position, target, maxDistance)
+	local nextPosition, arrived = moveGroundedTowards(service, passenger.position, target, maxDistance)
+	if not nextPosition then
+		nextPosition = target
+		arrived = true
+	end
 	passenger.runPhase += dt * 10
 	setPassengerGroundPose(passenger, nextPosition, target, true)
 
@@ -673,7 +838,7 @@ local function getNearestWaitingPassenger(service, cabPosition, radius)
 
 	for _, passenger in ipairs(service.passengers) do
 		if passenger.status == "waiting" then
-			local distance = horizontalDistance(cabPosition, passenger.pickupStop.position)
+			local distance = distanceToStop(cabPosition, passenger.pickupStop)
 			if distance <= radius and distance < nearestDistance then
 				nearestPassenger = passenger
 				nearestDistance = distance
@@ -687,8 +852,8 @@ end
 local function getNearestPickupDistance(service, cabPosition)
 	local nearestDistance = math.huge
 	for _, passenger in ipairs(service.passengers) do
-		if passenger.status == "waiting" then
-			nearestDistance = math.min(nearestDistance, horizontalDistance(cabPosition, passenger.pickupStop.position))
+		if passenger.status == "waiting" or passenger.status == "returning" then
+			nearestDistance = math.min(nearestDistance, distanceToStop(cabPosition, passenger.pickupStop))
 		end
 	end
 
@@ -720,6 +885,8 @@ local function updateService(service, dt)
 		local passenger = service.passengers[i]
 		if passenger.status == "waiting" then
 			updateWaitingPassenger(service, passenger, dt, cabPosition, cabMotionDirection, cabSpeed)
+		elseif passenger.status == "returning" then
+			updateReturningPassenger(service, passenger, dt)
 		elseif passenger.status == "boarding" then
 			updateBoarding(service, passenger, dt)
 		elseif passenger.status == "exiting" then
@@ -729,11 +896,12 @@ local function updateService(service, dt)
 
 	local stoppedSpeed = getConfigNumber("passengerStoppedSpeed", 1.25)
 	local hasDriver = service.car:GetAttribute("Cab87HasDriver") == true
+	local cabGrounded = service.car:GetAttribute("Cab87Grounded") ~= false
 
 	if service.mode == "pickup" then
 		ensureWaitingPassengerCount(service)
 
-		if hasDriver and service.pickupCooldown <= 0 and cabSpeed <= stoppedSpeed then
+		if hasDriver and cabGrounded and service.pickupCooldown <= 0 and cabSpeed <= stoppedSpeed then
 			local passenger = getNearestWaitingPassenger(
 				service,
 				cabPosition,
@@ -743,9 +911,9 @@ local function updateService(service, dt)
 				startBoarding(service, passenger)
 			end
 		end
-	elseif service.mode == "delivery" and hasDriver and cabSpeed <= stoppedSpeed then
+	elseif service.mode == "delivery" and hasDriver and cabGrounded and cabSpeed <= stoppedSpeed then
 		local passenger = service.activePassenger
-		if passenger and horizontalDistance(cabPosition, passenger.targetStop.position) <= getConfigNumber("passengerDeliveryRadius", 28) then
+		if passenger and distanceToStop(cabPosition, passenger.targetStop) <= getConfigNumber("passengerDeliveryRadius", 28) then
 			completeDelivery(service)
 		end
 	end

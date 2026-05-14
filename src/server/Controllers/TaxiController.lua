@@ -236,6 +236,15 @@ function TaxiController:start()
 	local velocity = Vector3.zero
 	local verticalVelocity = 0
 	local grounded = true
+	local airborneTime = 0
+	local hillAirtimeGraceTimer = 0
+	local hillAirtimeArmed = true
+	local lastGroundedHillTravelPitch = 0
+	local hillAirtimeUphillCrestPitch = 0
+	local hillAirtimeLastGroundGap = 0
+	local hillAirtimeGapStallTime = 0
+	local hillAirtimeGapCheckTimer = 0
+	local hillAirtimeMode = nil
 	local visualPitch = 0
 	local visualRoll = 0
 	local visualDriveRoll = 0
@@ -636,6 +645,8 @@ function TaxiController:start()
 		local rightTotal = 0
 		local rightCount = 0
 		local highestSample = nil
+		local minSampleHeight = math.huge
+		local maxSampleHeight = -math.huge
 		local normalTotal = Vector3.zero
 		local normalCount = 0
 		local samples = {}
@@ -658,6 +669,8 @@ function TaxiController:start()
 
 			local sampleHeight = sample.height
 			totalHeight += sampleHeight
+			minSampleHeight = math.min(minSampleHeight, sampleHeight)
+			maxSampleHeight = math.max(maxSampleHeight, sampleHeight)
 			contactCount += 1
 			if not highestSample or sampleHeight > highestSample.height then
 				highestSample = sample
@@ -731,10 +744,13 @@ function TaxiController:start()
 		local profile = {
 			targetPitch = targetPitch,
 			targetRoll = targetRoll,
+			normalPitch = normalPitch,
+			normalRoll = normalRoll,
 			contacts = contactCount,
 			highestSample = highestSample,
 			samples = samples,
 			stepY = totalHeight / contactCount,
+			heightRange = maxSampleHeight - minSampleHeight,
 		}
 		profile.targetY = getGroundTargetYForPose(profile, targetPitch, targetRoll)
 			or profile.stepY
@@ -749,6 +765,102 @@ function TaxiController:start()
 		end
 
 		return Config.roadSurfaceY + Config.carRideHeight
+	end
+
+	local function getFiniteNumberConfig(key, fallback)
+		local value = Config[key]
+		if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+			return value
+		end
+
+		return fallback
+	end
+
+	local function hasMixedGroundHeights(groundProfile)
+		if not groundProfile then
+			return false
+		end
+
+		local mixedHeightThreshold = math.max(
+			Config.carGroundMaxStepUp,
+			Config.carGroundSnapDistance,
+			Config.carRideHeight * 2
+		)
+		if (groundProfile.heightRange or 0) <= mixedHeightThreshold then
+			return false
+		end
+
+		local maxGroundAngle = math.rad(math.max(getFiniteNumberConfig("carGroundMixedHeightAngleDegrees", 35), 1))
+		return math.abs(groundProfile.targetPitch or 0) > maxGroundAngle
+			or math.abs(groundProfile.targetRoll or 0) > maxGroundAngle
+	end
+
+	local function getHillTravelPitch(groundProfile, currentForwardSpeed)
+		if not groundProfile then
+			return 0
+		end
+
+		local forwardSpeed = currentForwardSpeed or 0
+		local targetPitch = groundProfile.targetPitch or 0
+		local normalPitch = groundProfile.normalPitch or targetPitch
+		return if forwardSpeed >= 0
+			then math.max(targetPitch, normalPitch)
+			else math.max(-targetPitch, -normalPitch)
+	end
+
+	local function getHillAirtimeGrace(
+		groundProfile,
+		currentHorizontalSpeed,
+		currentForwardSpeed,
+		airtimePitchOverride,
+		airtimeMode
+	)
+		if not groundProfile then
+			return 0
+		end
+
+		local isCrestAirtime = airtimeMode == "crest"
+		local defaultBaseGrace = getFiniteNumberConfig("carHillAirtimeGraceSeconds", 0)
+		local baseGrace = if isCrestAirtime
+			then math.max(getFiniteNumberConfig("carHillAirtimeCrestGraceSeconds", defaultBaseGrace), 0)
+			else math.max(defaultBaseGrace, 0)
+		if baseGrace <= 0 then
+			return 0
+		end
+
+		local minSpeed = math.max(getFiniteNumberConfig("carHillAirtimeMinSpeed", 0), 0)
+		if currentHorizontalSpeed < minSpeed then
+			return 0
+		end
+
+		local forwardSpeed = currentForwardSpeed or 0
+		local minForwardSpeed = math.max(minSpeed * 0.5, 1)
+		if math.abs(forwardSpeed) < minForwardSpeed then
+			return 0
+		end
+
+		local downhillPitch = getHillTravelPitch(groundProfile, forwardSpeed)
+		local minDownhillPitch = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeMinDownhillPitchDegrees", 0), 0))
+		local airtimePitch = airtimePitchOverride or downhillPitch
+		if not airtimePitchOverride and downhillPitch <= minDownhillPitch then
+			return 0
+		end
+		if airtimePitch <= 0 then
+			return 0
+		end
+
+		local defaultMaxGrace = getFiniteNumberConfig("carHillAirtimeMaxGraceSeconds", baseGrace)
+		local maxGrace = if isCrestAirtime
+			then math.max(getFiniteNumberConfig("carHillAirtimeCrestMaxGraceSeconds", defaultMaxGrace), 0)
+			else math.max(defaultMaxGrace, 0)
+		if maxGrace <= 0 then
+			return 0
+		end
+
+		local slopeScale = math.max(getFiniteNumberConfig("carHillAirtimeSlopeGraceScale", 0), 0)
+		local descentSlope = math.max(math.tan(airtimePitch), 0)
+
+		return math.clamp(baseGrace + descentSlope * slopeScale, 0, maxGrace)
 	end
 
 	local function getWallScrapeVelocity(tangentVelocity, normal, speed)
@@ -973,6 +1085,15 @@ function TaxiController:start()
 		velocity = Vector3.zero
 		verticalVelocity = 0
 		grounded = true
+		airborneTime = 0
+		hillAirtimeGraceTimer = 0
+		hillAirtimeArmed = true
+		lastGroundedHillTravelPitch = 0
+		hillAirtimeUphillCrestPitch = 0
+		hillAirtimeLastGroundGap = 0
+		hillAirtimeGapStallTime = 0
+		hillAirtimeGapCheckTimer = 0
+		hillAirtimeMode = nil
 		visualPitch = 0
 		visualRoll = 0
 		visualDriveRoll = 0
@@ -1058,7 +1179,16 @@ function TaxiController:start()
 			lastOccupant = seat.Occupant
 			car:SetAttribute("Cab87HasDriver", driverMode == "AI" or seat.Occupant ~= nil)
 			grounded = true
+			airborneTime = 0
 			verticalVelocity = 0
+			hillAirtimeGraceTimer = 0
+			hillAirtimeArmed = true
+			lastGroundedHillTravelPitch = 0
+			hillAirtimeUphillCrestPitch = 0
+			hillAirtimeLastGroundGap = 0
+			hillAirtimeGapStallTime = 0
+			hillAirtimeGapCheckTimer = 0
+			hillAirtimeMode = nil
 			visualPitch = 0
 			visualRoll = 0
 			visualDriveRoll = 0
@@ -1251,10 +1381,77 @@ function TaxiController:start()
 
 		if grounded then
 			local stepUp = stepY - previousY
-			if not groundProfile or previousY - targetY > Config.carGroundSnapDistance then
+			local dropDistance = groundProfile and previousY - targetY or 0
+			local rawDropDistance = dropDistance
+			local currentForwardSpeed = velocity:Dot(yawToForward(yaw))
+			local mixedGroundHeights = hasMixedGroundHeights(groundProfile)
+			if mixedGroundHeights then
+				targetPitch = visualPitch
+				targetRoll = visualRoll
+				targetY = getGroundTargetYWithCurrentPose(groundProfile, targetPitch, targetRoll) or targetY
+				stepY = groundProfile and groundProfile.stepY or targetY
+				stepUp = stepY - previousY
+				dropDistance = previousY - targetY
+			end
+			local downhillPitch = getHillTravelPitch(groundProfile, currentForwardSpeed)
+			local minDownhillPitch = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeMinDownhillPitchDegrees", 0), 0))
+			local seesDownhillSlope = downhillPitch > minDownhillPitch
+			local enteredDownhillSlope = seesDownhillSlope
+				and lastGroundedHillTravelPitch <= minDownhillPitch
+			local crestStartPitch = hillAirtimeUphillCrestPitch
+			local minCrestUphillPitch = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeCrestMinUphillPitchDegrees", 5), 0))
+			local minCrestFlatten = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeCrestMinFlattenDegrees", 4), 0))
+			if downhillPitch < crestStartPitch then
+				crestStartPitch = downhillPitch
+				hillAirtimeUphillCrestPitch = downhillPitch
+			end
+			local crestFlattenPitch = downhillPitch - crestStartPitch
+			local targetRiseVelocity = if dt > 0
+				then math.max((targetY - previousY) / dt, 0)
+				else 0
+			local minCrestRiseExcess = math.max(getFiniteNumberConfig("carHillAirtimeCrestMinRiseExcess", 1), 0)
+			local crestRiseExcess = verticalVelocity - targetRiseVelocity
+			local enteredUphillCrest = crestStartPitch <= -minCrestUphillPitch
+				and crestFlattenPitch >= minCrestFlatten
+				and crestRiseExcess >= minCrestRiseExcess
+			local hillAirtimeTriggerMode = if enteredDownhillSlope then "downhill" elseif enteredUphillCrest then "crest" else nil
+			local hillAirtimeTriggerPitch = if hillAirtimeTriggerMode == "crest" then crestFlattenPitch else nil
+			local maxLaunchStepUp = math.max(getFiniteNumberConfig("carHillAirtimeMaxLaunchStepUp", 0.25), 0)
+			local maxCrestGroundRise = math.max(getFiniteNumberConfig("carHillAirtimeCrestMaxGroundRise", 1.5), 0)
+			local canStartHillAirtime = if hillAirtimeTriggerMode == "crest"
+				then targetY <= position.Y + maxCrestGroundRise
+				else stepUp <= maxLaunchStepUp
+			local hillAirtimeGrace = if hillAirtimeArmed and hillAirtimeTriggerMode and canStartHillAirtime
+				then getHillAirtimeGrace(
+					groundProfile,
+					horizontalSpeed,
+					currentForwardSpeed,
+					hillAirtimeTriggerPitch,
+					hillAirtimeTriggerMode
+				)
+				else 0
+			lastGroundedHillTravelPitch = downhillPitch
+
+			if not groundProfile or rawDropDistance > Config.carGroundSnapDistance then
 				pendingFallResetPose = getSafeFallResetPose()
 				grounded = false
-				verticalVelocity = math.max(verticalVelocity, 8)
+				airborneTime = 0
+				hillAirtimeGraceTimer = hillAirtimeGrace
+				if hillAirtimeGraceTimer > 0 then
+					verticalVelocity = math.max(verticalVelocity, 0)
+					hillAirtimeArmed = false
+					hillAirtimeUphillCrestPitch = 0
+					hillAirtimeLastGroundGap = math.max(position.Y - targetY, 0)
+					hillAirtimeGapStallTime = 0
+					hillAirtimeGapCheckTimer = 0
+					hillAirtimeMode = hillAirtimeTriggerMode
+				else
+					verticalVelocity = math.max(verticalVelocity, 0)
+					hillAirtimeLastGroundGap = 0
+					hillAirtimeGapStallTime = 0
+					hillAirtimeGapCheckTimer = 0
+					hillAirtimeMode = nil
+				end
 				targetPitch = visualPitch
 				targetRoll = visualRoll
 			elseif stepUp > Config.carGroundMaxStepUp then
@@ -1262,40 +1459,140 @@ function TaxiController:start()
 				position = previousPosition
 				velocity = getGroundStepCrashVelocity(velocity, normal)
 				verticalVelocity = 0
+				hillAirtimeGraceTimer = 0
+				hillAirtimeLastGroundGap = 0
+				hillAirtimeGapStallTime = 0
+				hillAirtimeGapCheckTimer = 0
+				hillAirtimeMode = nil
 				boostTimer = 0
 				targetPitch = visualPitch
 				targetRoll = visualRoll
 				triggerCrashFeedback(driver, impactSpeed)
 				reportImpactDamage("ground", impactSpeed)
+			elseif hillAirtimeGrace > 0 then
+				pendingFallResetPose = getSafeFallResetPose()
+				if hillAirtimeTriggerMode == "crest" then
+					position = Vector3.new(position.X, math.max(position.Y, targetY), position.Z)
+				end
+				grounded = false
+				airborneTime = 0
+				hillAirtimeGraceTimer = hillAirtimeGrace
+				hillAirtimeArmed = false
+				hillAirtimeUphillCrestPitch = 0
+				hillAirtimeLastGroundGap = math.max(position.Y - targetY, 0)
+				hillAirtimeGapStallTime = 0
+				hillAirtimeGapCheckTimer = 0
+				hillAirtimeMode = hillAirtimeTriggerMode
+				verticalVelocity = math.max(verticalVelocity, 0)
+				targetPitch = visualPitch
+				targetRoll = visualRoll
 			else
 				position = Vector3.new(position.X, targetY, position.Z)
 				local riseVelocity = (position.Y - previousY) / dt
 				verticalVelocity = math.max(riseVelocity, 0)
+				hillAirtimeGraceTimer = 0
+				hillAirtimeLastGroundGap = 0
+				hillAirtimeGapStallTime = 0
+				hillAirtimeGapCheckTimer = 0
+				hillAirtimeMode = nil
 				airPitchVelocity = 0
 				airRollVelocity = 0
 				pendingFallResetPose = nil
+				if seesDownhillSlope then
+					hillAirtimeArmed = false
+				elseif downhillPitch < 0 then
+					hillAirtimeArmed = true
+					hillAirtimeUphillCrestPitch = math.min(hillAirtimeUphillCrestPitch, downhillPitch)
+				elseif dropDistance <= 0 then
+					hillAirtimeArmed = true
+					hillAirtimeUphillCrestPitch = 0
+				end
 				recordSafeGroundPose(groundProfile)
 			end
 		else
-			local gravity = if verticalVelocity > 0 then Config.carGravityUp else Config.carGravityDown
 			local maxPitch = math.rad(Config.carMaxPitchDegrees)
-			local pitchGravityAlpha = if maxPitch > 0
-				then math.clamp(visualPitch / maxPitch, -1, 1)
-				else 0
-			if pitchGravityAlpha < 0 then
-				gravity *= 1 + (Config.carAirPitchUpGravityMultiplier - 1) * -pitchGravityAlpha
-			elseif pitchGravityAlpha > 0 then
-				gravity *= 1 + (Config.carAirPitchDownGravityMultiplier - 1) * pitchGravityAlpha
+			local ignoreGravityAndLanding = hillAirtimeGraceTimer > 0
+			airborneTime += dt
+
+			if ignoreGravityAndLanding and groundProfile then
+				local maxLaunchStepUp = if hillAirtimeMode == "crest"
+					then math.max(getFiniteNumberConfig("carHillAirtimeCrestMaxGroundRise", 1.5), 0)
+					else math.max(getFiniteNumberConfig("carHillAirtimeMaxLaunchStepUp", 0.25), 0)
+				if targetY > position.Y + maxLaunchStepUp then
+					hillAirtimeGraceTimer = 0
+					hillAirtimeLastGroundGap = 0
+					hillAirtimeGapStallTime = 0
+					hillAirtimeGapCheckTimer = 0
+					hillAirtimeMode = nil
+					ignoreGravityAndLanding = false
+				else
+					hillAirtimeGapCheckTimer += dt
+				end
+
+				local gapCheckInterval = math.max(getFiniteNumberConfig("carHillAirtimeGapCheckIntervalSeconds", 0.2), 0.001)
+				if ignoreGravityAndLanding and hillAirtimeGapCheckTimer >= gapCheckInterval then
+					local checkElapsed = hillAirtimeGapCheckTimer
+					hillAirtimeGapCheckTimer = 0
+
+					local currentForwardSpeed = velocity:Dot(yawToForward(yaw))
+					local downhillPitch = getHillTravelPitch(groundProfile, currentForwardSpeed)
+					local minDownhillPitch = math.rad(math.max(getFiniteNumberConfig("carHillAirtimeMinDownhillPitchDegrees", 0), 0))
+					local slopeStillValid = hillAirtimeMode == "crest" or downhillPitch > minDownhillPitch
+					local currentGroundGap = math.max(position.Y - targetY, 0)
+					local minGapGrowth = math.max(getFiniteNumberConfig("carHillAirtimeMinGapGrowth", 0.001), 0)
+					local gapStallGrace = math.max(getFiniteNumberConfig("carHillAirtimeGapStallSeconds", 0.1), 0)
+					if slopeStillValid and currentGroundGap > hillAirtimeLastGroundGap + minGapGrowth then
+						hillAirtimeLastGroundGap = currentGroundGap
+						hillAirtimeGapStallTime = 0
+					else
+						hillAirtimeGapStallTime += checkElapsed
+					end
+
+					if hillAirtimeGapStallTime >= gapStallGrace then
+						hillAirtimeGraceTimer = 0
+						hillAirtimeLastGroundGap = 0
+						hillAirtimeGapStallTime = 0
+						hillAirtimeGapCheckTimer = 0
+						hillAirtimeMode = nil
+						ignoreGravityAndLanding = false
+					end
+				end
 			end
 
-			verticalVelocity -= gravity * dt
+			if ignoreGravityAndLanding then
+				hillAirtimeGraceTimer = math.max(hillAirtimeGraceTimer - dt, 0)
+			else
+				local gravity = if verticalVelocity > 0 then Config.carGravityUp else Config.carGravityDown
+				local pitchGravityAlpha = if maxPitch > 0
+					then math.clamp(visualPitch / maxPitch, -1, 1)
+					else 0
+				if pitchGravityAlpha < 0 then
+					gravity *= 1 + (Config.carAirPitchUpGravityMultiplier - 1) * -pitchGravityAlpha
+				elseif pitchGravityAlpha > 0 then
+					gravity *= 1 + (Config.carAirPitchDownGravityMultiplier - 1) * pitchGravityAlpha
+				end
+
+				verticalVelocity -= gravity * dt
+			end
+
 			position = Vector3.new(position.X, position.Y + verticalVelocity * dt, position.Z)
 
-			if groundProfile and position.Y <= targetY and verticalVelocity <= 0 then
+			if not ignoreGravityAndLanding and groundProfile and position.Y <= targetY and verticalVelocity <= 0 then
 				local landingSpeed = -verticalVelocity
+				local landedAirborneTime = airborneTime
 				position = Vector3.new(position.X, targetY, position.Z)
 				verticalVelocity = 0
 				grounded = true
+				airborneTime = 0
+				hillAirtimeGraceTimer = 0
+				hillAirtimeArmed = false
+				local landedTravelPitch = getHillTravelPitch(groundProfile, velocity:Dot(yawToForward(yaw)))
+				lastGroundedHillTravelPitch = landedTravelPitch
+				hillAirtimeUphillCrestPitch = math.min(landedTravelPitch, 0)
+				hillAirtimeLastGroundGap = 0
+				hillAirtimeGapStallTime = 0
+				hillAirtimeGapCheckTimer = 0
+				hillAirtimeMode = nil
 				triggerLandingBounce(landingSpeed)
 				airPitchVelocity = 0
 				airRollVelocity = 0
@@ -1303,9 +1600,11 @@ function TaxiController:start()
 				recordSafeGroundPose(groundProfile)
 
 				local maxBoostAlignment = math.rad(Config.carLandingBoostAlignDegrees)
+				local minBoostAirTime = math.max(getFiniteNumberConfig("carLandingBoostMinAirTime", 0.2), 0)
 				local pitchError = math.abs(visualPitch - targetPitch)
 				local rollError = math.abs((visualRoll + visualDriveRoll + visualDriftRoll) - targetRoll)
 				if Config.carLandingBoostImpulse > 0
+					and landedAirborneTime >= minBoostAirTime
 					and pitchError <= maxBoostAlignment
 					and rollError <= maxBoostAlignment
 				then

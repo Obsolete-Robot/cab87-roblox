@@ -61,6 +61,17 @@ export type VisibilitySettings = {
   showBuildingControlPoints: boolean;
 };
 
+export type BackgroundImageSettings = {
+  filename: string;
+  dataUrl: string;
+  position: {
+    x: number;
+    y: number;
+  };
+  scale: number;
+  opacity: number;
+};
+
 export type Edge = {
   id: string;
   source: string; // Node ID

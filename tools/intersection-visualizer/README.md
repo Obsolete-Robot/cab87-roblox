@@ -24,7 +24,9 @@ See [`../../docs/ROAD_MAKER_SYNC.md`](../../docs/ROAD_MAKER_SYNC.md) before chan
 
 Exports use the `cab87-road-network` JSON schema with `version: 2`. The payload includes
 `settings` for mesh-affecting editor options and the authored `nodes`, `edges`, and
-`buildings` arrays:
+`buildings` arrays. If a reference image is loaded in the Global tab, the exported
+JSON also includes a self-contained `backgroundImage` object with its filename,
+position, scale, opacity, and embedded image data:
 
 ```json
 {
@@ -52,7 +54,14 @@ Exports use the `cab87-road-network` JSON schema with `version: 2`. The payload 
       "color": "#64748b",
       "material": "Concrete"
     }
-  ]
+  ],
+  "backgroundImage": {
+    "filename": "reference-map.png",
+    "position": { "x": -512, "y": -384 },
+    "scale": 1,
+    "opacity": 0.65,
+    "dataUrl": "data:image/png;base64,..."
+  }
 }
 ```
 

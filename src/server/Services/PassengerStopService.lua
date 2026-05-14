@@ -425,7 +425,7 @@ function PassengerStopService.projectToSurface(raycastParams, position, fallback
 		local localOrigin = Vector3.new(position.X, position.Y + localAbove, position.Z)
 		local result = Workspace:Raycast(localOrigin, Vector3.new(0, -(localAbove + localBelow), 0), raycastParams)
 		if result then
-			return result.Position, true, result.Instance
+			return result.Position, true, result.Instance, result.Normal
 		end
 
 		local rayHeight = math.max(getConfigNumber("passengerSurfaceRaycastHeight", 140), 1)
@@ -433,11 +433,11 @@ function PassengerStopService.projectToSurface(raycastParams, position, fallback
 		local origin = Vector3.new(position.X, position.Y + rayHeight, position.Z)
 		result = Workspace:Raycast(origin, Vector3.new(0, -rayDepth, 0), raycastParams)
 		if result then
-			return result.Position, true, result.Instance
+			return result.Position, true, result.Instance, result.Normal
 		end
 	end
 
-	return Vector3.new(position.X, fallbackY or position.Y, position.Z), false, nil
+	return Vector3.new(position.X, fallbackY or position.Y, position.Z), false, nil, Vector3.new(0, 1, 0)
 end
 
 local function shuffle(values, rng)
@@ -499,7 +499,12 @@ function PassengerStopService.createPassengerStops(options)
 	for i = 1, math.min(#candidates, maxStops) do
 		local candidate = candidates[i]
 		includeBounds(candidateBounds, candidate)
-		local position, hitSurface, surface = PassengerStopService.projectToSurface(surfaceRaycastParams, candidate, candidate.Y)
+		local position, hitSurface, surface, normal = PassengerStopService.projectToSurface(surfaceRaycastParams, candidate, candidate.Y)
+		if typeof(normal) ~= "Vector3" or normal.Magnitude <= 0.001 then
+			normal = Vector3.new(0, 1, 0)
+		else
+			normal = normal.Unit
+		end
 		includeBounds(stopBounds, position)
 		if hitSurface then
 			projectionHits += 1
@@ -515,14 +520,17 @@ function PassengerStopService.createPassengerStops(options)
 				surface = surface,
 			})
 		end
-		local instance = PassengerVisuals.createStop(folder, i, position)
+		local instance = PassengerVisuals.createStop(folder, i, position, normal)
 		instance:SetAttribute("ProjectionHit", hitSurface)
 		instance:SetAttribute("ProjectionSurface", surface and surface:GetFullName() or "")
 		setVectorAttributes(instance, "Candidate", candidate)
 		setVectorAttributes(instance, "Projected", position)
+		setVectorAttributes(instance, "ProjectedNormal", normal)
 		table.insert(stops, {
 			id = i,
 			position = position,
+			normal = normal,
+			surface = surface,
 			instance = instance,
 		})
 	end
