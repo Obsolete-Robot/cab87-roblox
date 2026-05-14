@@ -1080,15 +1080,25 @@ export default function Sidebar({
                     <label className="block text-xs font-medium text-slate-400 mb-1">
                       Scale ({backgroundImage.scale.toFixed(2)}x)
                     </label>
-                    <input
-                      type="range"
-                      step="0.05"
-                      min="0.05"
-                      max={backgroundImageScaleSliderMax}
-                      value={backgroundImage.scale}
-                      onChange={(event) => updateBackgroundImageScale(event.target.value)}
-                      className="w-full"
-                    />
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="range"
+                        step="0.05"
+                        min="0.05"
+                        max={backgroundImageScaleSliderMax}
+                        value={backgroundImage.scale}
+                        onChange={(event) => updateBackgroundImageScale(event.target.value)}
+                        className="flex-grow min-w-0"
+                      />
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.001"
+                        value={backgroundImage.scale}
+                        onChange={(event) => updateBackgroundImageScale(event.target.value)}
+                        className="w-20 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                      />
+                    </div>
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-400 mb-1">
