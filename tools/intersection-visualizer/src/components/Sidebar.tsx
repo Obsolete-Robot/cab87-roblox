@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2, Upload } from 'lucide-react';
 import { Node, Edge, BuildingPolygon, BuildingFillSettings, VisibilitySettings, PolygonFill, BackgroundImageSettings } from '../lib/types';
 import { sanitizeBuildingFillSettings, sanitizeMeshResolution } from '../lib/constants';
@@ -123,6 +123,7 @@ export default function Sidebar({
   const selectedBuilding = buildings.find((building) => building.id === selectedBuildingId) || null;
   const selectedPolygonFill = polygonFills.find((fill) => fill.id === selectedPolygonFillId) || null;
   const backgroundImageScaleSliderMax = Math.max(5, Math.ceil((backgroundImage?.scale ?? 1) * 2));
+  const [backgroundImageScaleInput, setBackgroundImageScaleInput] = useState<string>("");
   const buildingFillSliderRanges = {
     minWidth: Math.max(300, buildingFillSettings.minWidth),
     maxWidth: Math.max(300, buildingFillSettings.maxWidth),
@@ -158,6 +159,16 @@ export default function Sidebar({
       scale: parsed,
     }) : prev);
   };
+  const commitBackgroundImageScaleInput = (value: string) => {
+    const parsed = parseFloat(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setBackgroundImageScaleInput(backgroundImage ? String(backgroundImage.scale) : "");
+      return;
+    }
+
+    updateBackgroundImageScale(String(parsed));
+    setBackgroundImageScaleInput(String(parsed));
+  };
   const updateBackgroundImageOpacity = (value: string) => {
     const parsed = parseFloat(value);
     if (!Number.isFinite(parsed)) return;
@@ -166,6 +177,10 @@ export default function Sidebar({
       opacity: Math.max(0, Math.min(1, parsed)),
     }) : prev);
   };
+
+  useEffect(() => {
+    setBackgroundImageScaleInput(backgroundImage ? String(backgroundImage.scale) : "");
+  }, [backgroundImage?.scale]);
 
   const applyGlobalScaleMap = () => {
     const scale = parseFloat(globalScaleMap);
@@ -1094,8 +1109,17 @@ export default function Sidebar({
                         type="number"
                         step="0.01"
                         min="0.001"
-                        value={backgroundImage.scale}
-                        onChange={(event) => updateBackgroundImageScale(event.target.value)}
+                        value={backgroundImageScaleInput}
+                        onChange={(event) => setBackgroundImageScaleInput(event.target.value)}
+                        onBlur={(event) => commitBackgroundImageScaleInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.currentTarget.blur();
+                          } else if (event.key === 'Escape') {
+                            setBackgroundImageScaleInput(String(backgroundImage.scale));
+                            event.currentTarget.blur();
+                          }
+                        }}
                         className="w-20 bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
                       />
                     </div>
