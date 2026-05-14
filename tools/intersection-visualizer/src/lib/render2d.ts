@@ -1,4 +1,4 @@
-import { Point, Node, Edge, BuildingPolygon, VisibilitySettings } from './types';
+import { Point, Node, Edge, BuildingPolygon, VisibilitySettings, BackgroundImageSettings } from './types';
 import { getExtendedEdgeControlPoints } from './network';
 import { buildNetworkMesh } from './meshing';
 import { getBuildingBaseZ, getBuildingCenter, getBuildingHeight } from './buildings';
@@ -29,7 +29,9 @@ export const drawNetwork2D = (
   selectedPoints: any[],
   selectedPolygonFillId: string | null,
   view?: { x: number; y: number; zoom: number },
-  snapGridSize: number = 10
+  snapGridSize: number = 10,
+  backgroundImage?: BackgroundImageSettings | null,
+  backgroundImageElement?: HTMLImageElement | null
 ) => {
   // Clear the canvas outside of the view transform or just fill the entire view area.
   // Wait, ctx is already transformed. To clear the whole canvas properly:
@@ -79,6 +81,29 @@ export const drawNetwork2D = (
       ctx.lineTo(maxX, y);
     }
     ctx.stroke();
+  }
+
+  if (backgroundImage && backgroundImageElement) {
+    const scale = Number.isFinite(backgroundImage.scale) && backgroundImage.scale > 0
+      ? backgroundImage.scale
+      : 1;
+    const opacity = Number.isFinite(backgroundImage.opacity)
+      ? Math.max(0, Math.min(1, backgroundImage.opacity))
+      : 1;
+    const width = backgroundImageElement.naturalWidth * scale;
+    const height = backgroundImageElement.naturalHeight * scale;
+
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(
+      backgroundImageElement,
+      backgroundImage.position.x,
+      backgroundImage.position.y,
+      width,
+      height
+    );
+    ctx.restore();
   }
 
   if (nodes.length === 0 && buildings.length === 0 && buildingDraft.length === 0) return;

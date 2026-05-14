@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2 } from 'lucide-react';
-import { Node, Edge, BuildingPolygon, BuildingFillSettings, VisibilitySettings, PolygonFill } from '../lib/types';
+import { X, ChevronDown, ChevronRight, Copy, ClipboardPaste, Trash2, Upload } from 'lucide-react';
+import { Node, Edge, BuildingPolygon, BuildingFillSettings, VisibilitySettings, PolygonFill, BackgroundImageSettings } from '../lib/types';
 import { sanitizeBuildingFillSettings, sanitizeMeshResolution } from '../lib/constants';
 import { getBuildingBaseZ } from '../lib/buildings';
 import { getEdgeClearance } from '../lib/junctions';
@@ -55,6 +55,9 @@ interface SidebarProps {
   setSelectedBuildingVertex: React.Dispatch<React.SetStateAction<{ buildingId: string; vertexIndex: number } | null>>;
   debugOptions: any;
   setDebugOptions: (v: any) => void;
+  backgroundImage: BackgroundImageSettings | null;
+  setBackgroundImage: React.Dispatch<React.SetStateAction<BackgroundImageSettings | null>>;
+  onBackgroundImageFileSelected: (file: File) => void;
 }
 
 export default function Sidebar({
@@ -102,6 +105,9 @@ export default function Sidebar({
   setSelectedBuildingVertex,
   debugOptions,
   setDebugOptions,
+  backgroundImage,
+  setBackgroundImage,
+  onBackgroundImageFileSelected,
 }: SidebarProps) {
   const [activeTab, setActiveTab] = useState<'local' | 'global' | 'debug'>('local');
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
@@ -116,6 +122,7 @@ export default function Sidebar({
   const [globalScaleSidewalks, setGlobalScaleSidewalks] = useState<string>("1.5");
   const selectedBuilding = buildings.find((building) => building.id === selectedBuildingId) || null;
   const selectedPolygonFill = polygonFills.find((fill) => fill.id === selectedPolygonFillId) || null;
+  const backgroundImageScaleSliderMax = Math.max(5, Math.ceil((backgroundImage?.scale ?? 1) * 2));
   const buildingFillSliderRanges = {
     minWidth: Math.max(300, buildingFillSettings.minWidth),
     maxWidth: Math.max(300, buildingFillSettings.maxWidth),
@@ -131,6 +138,33 @@ export default function Sidebar({
       ...prev,
       [key]: Number.isFinite(parsed) ? parsed : prev[key],
     }));
+  };
+  const updateBackgroundImagePosition = (axis: 'x' | 'y', value: string) => {
+    const parsed = parseFloat(value);
+    if (!Number.isFinite(parsed)) return;
+    setBackgroundImage(prev => prev ? ({
+      ...prev,
+      position: {
+        ...prev.position,
+        [axis]: parsed,
+      },
+    }) : prev);
+  };
+  const updateBackgroundImageScale = (value: string) => {
+    const parsed = parseFloat(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    setBackgroundImage(prev => prev ? ({
+      ...prev,
+      scale: parsed,
+    }) : prev);
+  };
+  const updateBackgroundImageOpacity = (value: string) => {
+    const parsed = parseFloat(value);
+    if (!Number.isFinite(parsed)) return;
+    setBackgroundImage(prev => prev ? ({
+      ...prev,
+      opacity: Math.max(0, Math.min(1, parsed)),
+    }) : prev);
   };
 
   const applyGlobalScaleMap = () => {
@@ -971,6 +1005,107 @@ export default function Sidebar({
                   <span>{label}</span>
                 </label>
               ))}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <div
+            className="flex items-center justify-between cursor-pointer mb-2"
+            onClick={() => toggleSection('background_image')}
+          >
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Background Image</h3>
+            {collapsedSections['background_image'] ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+          </div>
+          {!collapsedSections['background_image'] && (
+            <div className="space-y-3 bg-slate-800/20 p-3 rounded-lg border border-slate-800/50">
+              <div className="flex gap-2">
+                <label className="flex-1 min-w-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                  <Upload className="w-4 h-4 shrink-0" />
+                  <span className="truncate">{backgroundImage ? 'Replace Image' : 'Add Image'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) onBackgroundImageFileSelected(file);
+                      event.target.value = '';
+                    }}
+                  />
+                </label>
+                {backgroundImage && (
+                  <button
+                    type="button"
+                    onClick={() => setBackgroundImage(null)}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-red-600 text-white rounded text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Remove
+                  </button>
+                )}
+              </div>
+
+              {backgroundImage && (
+                <div className="space-y-3">
+                  <div
+                    className="text-xs text-slate-400 truncate bg-slate-900/50 border border-slate-800 rounded px-2 py-1.5"
+                    title={backgroundImage.filename}
+                  >
+                    {backgroundImage.filename}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Position X</label>
+                      <input
+                        type="number"
+                        step="1"
+                        value={backgroundImage.position.x}
+                        onChange={(event) => updateBackgroundImagePosition('x', event.target.value)}
+                        className="w-full bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Position Y</label>
+                      <input
+                        type="number"
+                        step="1"
+                        value={backgroundImage.position.y}
+                        onChange={(event) => updateBackgroundImagePosition('y', event.target.value)}
+                        className="w-full bg-slate-800 border bg-transparent text-white border-slate-700 rounded p-1 text-sm text-center"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">
+                      Scale ({backgroundImage.scale.toFixed(2)}x)
+                    </label>
+                    <input
+                      type="range"
+                      step="0.05"
+                      min="0.05"
+                      max={backgroundImageScaleSliderMax}
+                      value={backgroundImage.scale}
+                      onChange={(event) => updateBackgroundImageScale(event.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">
+                      Opacity ({Math.round(backgroundImage.opacity * 100)}%)
+                    </label>
+                    <input
+                      type="range"
+                      step="0.05"
+                      min="0"
+                      max="1"
+                      value={backgroundImage.opacity}
+                      onChange={(event) => updateBackgroundImageOpacity(event.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>

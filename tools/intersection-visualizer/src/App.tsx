@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Point, Node, Edge, PointSelection, BuildingPolygon, BuildingFillSettings, BuildingFillSource, VisibilitySettings } from './lib/types';
+import { Point, Node, Edge, PointSelection, BuildingPolygon, BuildingFillSettings, BuildingFillSource, VisibilitySettings, BackgroundImageSettings } from './lib/types';
 import { getExtendedEdgeControlPoints, sampleEdgeSpline, findClosedAreas } from './lib/network';
 import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
@@ -53,6 +53,37 @@ function parseImportedBuildingFillSource(value: any): BuildingFillSource | undef
     selectedNodes,
     selectedEdges,
     settings: sanitizeBuildingFillSettings(value.settings),
+  };
+}
+
+function parseFiniteNumber(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function sanitizeImportedBackgroundImage(value: any): BackgroundImageSettings | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const dataUrl = typeof value.dataUrl === 'string'
+    ? value.dataUrl
+    : typeof value.src === 'string'
+      ? value.src
+      : '';
+  if (!dataUrl) return null;
+
+  const positionValue = value.position && typeof value.position === 'object' ? value.position : value;
+  const scale = Math.max(0.001, parseFiniteNumber(value.scale, 1));
+  const opacity = Math.max(0, Math.min(1, parseFiniteNumber(value.opacity, 1)));
+
+  return {
+    filename: typeof value.filename === 'string' && value.filename ? value.filename : 'background-image',
+    dataUrl,
+    position: {
+      x: parseFiniteNumber(positionValue.x, 0),
+      y: parseFiniteNumber(positionValue.y, 0),
+    },
+    scale,
+    opacity,
   };
 }
 
@@ -235,6 +266,33 @@ export default function App() {
     polyFills: true,
     buildings: true,
   });
+  const [backgroundImage, setBackgroundImage] = useState<BackgroundImageSettings | null>(null);
+  const [backgroundImageElement, setBackgroundImageElement] = useState<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!backgroundImage?.dataUrl) {
+      setBackgroundImageElement(null);
+      return;
+    }
+
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (!cancelled) {
+        setBackgroundImageElement(image);
+      }
+    };
+    image.onerror = () => {
+      if (!cancelled) {
+        setBackgroundImageElement(null);
+      }
+    };
+    image.src = backgroundImage.dataUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backgroundImage?.dataUrl]);
 
   const handleMatchSelectedZToLast = () => {
     let targetZ: number | null = null;
@@ -456,7 +514,7 @@ export default function App() {
   }, [topologyKey, nodes, edges, deletedFaces]);
 
   const handleExport = () => {
-    const data = JSON.stringify({
+    const exportPayload = {
       schema: ROAD_NETWORK_SCHEMA,
       version: ROAD_NETWORK_VERSION,
       settings: {
@@ -470,7 +528,9 @@ export default function App() {
       polygonFills,
       buildings,
       deletedFaces,
-    }, null, 2);
+      ...(backgroundImage ? { backgroundImage } : {}),
+    };
+    const data = JSON.stringify(exportPayload, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -489,6 +549,42 @@ export default function App() {
     polygonFills,
     buildings
   );
+
+  const handleBackgroundImageFileSelected = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const dataUrl = evt.target?.result;
+      if (typeof dataUrl !== 'string') {
+        alert('Failed to load background image.');
+        return;
+      }
+
+      const viewCenter = {
+        x: (size.w / 2 - view.x) / view.zoom,
+        y: (size.h / 2 - view.y) / view.zoom,
+      };
+
+      const setLoadedBackground = (naturalWidth = 0, naturalHeight = 0) => {
+        setBackgroundImage(prev => ({
+          filename: file.name,
+          dataUrl,
+          position: prev?.position ?? {
+            x: viewCenter.x - naturalWidth / 2,
+            y: viewCenter.y - naturalHeight / 2,
+          },
+          scale: prev?.scale ?? 1,
+          opacity: prev?.opacity ?? 1,
+        }));
+      };
+
+      const image = new Image();
+      image.onload = () => setLoadedBackground(image.naturalWidth, image.naturalHeight);
+      image.onerror = () => setLoadedBackground();
+      image.src = dataUrl;
+    };
+    reader.onerror = () => alert('Failed to load background image.');
+    reader.readAsDataURL(file);
+  };
 
   useEffect(() => {
     setBuildings(prev => regenerateLinkedBuildingGroups({
@@ -634,6 +730,7 @@ export default function App() {
           } else {
             setBuildings([]);
           }
+          setBackgroundImage(sanitizeImportedBackgroundImage(data.backgroundImage ?? data.settings?.backgroundImage));
           setSelectedEdges([]);
           setSelectedNode(null);
           setSelectedPoints([]);
@@ -941,7 +1038,7 @@ export default function App() {
       chamferAngle, meshResolution, laneWidth, polygonFills,
       buildings, selectedBuildingId, selectedBuildingVertex, buildingDraft,
       softSelectionEnabled, softSelectionRadius, draggingPoint, selectedPoints,
-      selectedPolygonFillId, view, snapGridSize
+      selectedPolygonFillId, view, snapGridSize, backgroundImage, backgroundImageElement
     );
     ctx.restore();
 
@@ -960,7 +1057,7 @@ export default function App() {
       ctx.strokeRect(x, y, w, h);
       ctx.restore();
     }
-  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPoints, selectedPolygonFillId, selectedBuildingId, selectedBuildingVertex, isAddNodeMode, isMergeMode, showMesh, visibilitySettings, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills, buildings, buildingDraft, marqueeStart, marqueeEnd, snapGridSize]);
+  }, [size, nodes, edges, selectedEdges, selectedNodes, selectedNode, selectedPoints, selectedPolygonFillId, selectedBuildingId, selectedBuildingVertex, isAddNodeMode, isMergeMode, showMesh, visibilitySettings, view, chamferAngle, meshResolution, laneWidth, softSelectionEnabled, softSelectionRadius, draggingPoint, polygonFills, buildings, buildingDraft, marqueeStart, marqueeEnd, snapGridSize, backgroundImage, backgroundImageElement]);
 
   const getMousePos = (e: React.PointerEvent | React.MouseEvent | any) => {
     let pos;
@@ -2559,6 +2656,9 @@ export default function App() {
           setSelectedBuildingVertex={setSelectedBuildingVertex}
           debugOptions={debugOptions}
           setDebugOptions={setDebugOptions}
+          backgroundImage={backgroundImage}
+          setBackgroundImage={setBackgroundImage}
+          onBackgroundImageFileSelected={handleBackgroundImageFileSelected}
         />
       </div>
     </div>
