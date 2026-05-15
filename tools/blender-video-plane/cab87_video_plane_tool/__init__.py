@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Cab87 Video Plane Tool",
 	"author": "Cab87",
-	"version": (0, 5, 2),
+	"version": (0, 5, 6),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Video Plane",
 	"description": "Create aspect-ratio movie planes and Resolve/FCP XML cut grids.",
@@ -30,6 +30,8 @@ XML_FILTER = "*.xml;*.fcpxml"
 OPACITY_VALUE_NODE_NAME = "Cab87 Video Opacity"
 OPACITY_MIX_NODE_NAME = "Cab87 Video Opacity Mix"
 OPACITY_TRANSPARENT_NODE_NAME = "Cab87 Video Opacity Transparent"
+XML_AUDIO_STRIP_PREFIX = "Cab87XmlAudio"
+STANDALONE_AUDIO_EXTENSIONS = {".mp3", ".wav", ".wave"}
 
 
 @dataclass
@@ -55,6 +57,20 @@ class XmlVideoClip:
 
 
 @dataclass
+class XmlAudioClip:
+	clip_id: str
+	name: str
+	filepath: str
+	timeline_start: int
+	timeline_end: int
+	source_in: float
+	source_out: float
+	track_index: int
+	file_duration: int
+	linked_clip_ids: tuple[str, ...] = ()
+
+
+@dataclass
 class XmlSequence:
 	name: str
 	duration: int
@@ -62,6 +78,7 @@ class XmlSequence:
 	width: int
 	height: int
 	clips: list[XmlVideoClip]
+	audio_clips: list[XmlAudioClip]
 
 
 def update_video_plane_opacity(settings, context) -> None:
@@ -454,12 +471,20 @@ def import_xml_and_report(operator, context, settings: CAB87_VideoPlaneSettings,
 		return {"CANCELLED"}
 
 	created_count = len(result["clips"])
+	audio_count = len(result["audio_strips"])
 	missing_count = len(result["missing_media"])
-	if created_count == 0:
-		operator.report({"ERROR"}, "XML parsed, but no video planes were created. Check media paths.")
+	if created_count == 0 and audio_count == 0:
+		operator.report({"ERROR"}, "XML parsed, but no media was imported. Check media paths.")
 		return {"CANCELLED"}
 
-	message = f"Imported {created_count} XML video clips into {result['collection'].name}."
+	parts = []
+	if created_count > 0:
+		parts.append(f"{created_count} XML video clip{'s' if created_count != 1 else ''}")
+	if audio_count > 0:
+		parts.append(f"{audio_count} standalone audio strip{'s' if audio_count != 1 else ''}")
+	message = f"Imported {' and '.join(parts)}."
+	if result["collection"] is not None and created_count > 0:
+		message = message[:-1] + f" into {result['collection'].name}."
 	if result["camera"] is not None:
 		message = f"{message} Animated {result['camera'].name}."
 	if missing_count > 0:
@@ -476,66 +501,70 @@ def import_xml_video_grid(context, settings: CAB87_VideoPlaneSettings, filepath:
 		raise FileNotFoundError(xml_path)
 
 	sequence = parse_xmeml_sequence(xml_path, settings)
-	if not sequence.clips:
-		raise ValueError("No enabled video clipitems with media paths were found.")
+	if not sequence.clips and not sequence.audio_clips:
+		raise ValueError("No enabled video or standalone MP3/WAV audio clipitems with media paths were found.")
 
 	if settings.xml_clear_previous:
 		clear_previous_xml_import(context.scene)
 
-	root_collection = ensure_video_collection(context)
-	sequence_slug = slug(sequence.name) or "Sequence"
-	xml_collection = bpy.data.collections.new(unique_name(f"{XML_COLLECTION_PREFIX}_{sequence_slug}", bpy.data.collections))
-	root_collection.children.link(xml_collection)
-
-	columns = int(settings.xml_grid_columns)
-	if columns <= 0:
-		columns = max(1, math.ceil(math.sqrt(len(sequence.clips))))
-
-	grid_height = resolve_xml_grid_row_height(sequence, settings)
-
+	xml_collection = None
 	imported_clips = []
 	missing_media = []
-	for clip in sequence.clips:
-		media_path = resolve_xml_media_path(clip.filepath, settings.xml_media_root)
-		if not Path(bpy.path.abspath(media_path)).is_file():
-			missing_media.append(media_path)
-			continue
+	if sequence.clips:
+		root_collection = ensure_video_collection(context)
+		sequence_slug = slug(sequence.name) or "Sequence"
+		xml_collection = bpy.data.collections.new(unique_name(f"{XML_COLLECTION_PREFIX}_{sequence_slug}", bpy.data.collections))
+		root_collection.children.link(xml_collection)
 
-		timing = build_clip_timing(clip, settings.frame_start, settings.xml_handle_frames)
-		metadata = {
-			"xml_clip_id": clip.clip_id,
-			"xml_clip_name": clip.name,
-			"xml_track_index": clip.track_index,
-			"xml_timeline_start": clip.timeline_start,
-			"xml_timeline_end": clip.timeline_end,
-			"xml_source_in": clip.source_in,
-			"xml_source_out": clip.source_out,
-			"xml_source_start": timing["source_start"],
-			"xml_source_end": timing["source_end"],
-			"xml_handle_frames": timing["handle_frames"],
-			"xml_movie_frame_start": timing["movie_frame_start"],
-			"xml_movie_source_start": timing["movie_source_start"],
-			"xml_speed_multiplier": timing["speed_multiplier"],
-		}
-		result = create_video_plane(
-			context,
-			settings,
-			media_path,
-			collection=xml_collection,
-			position=Vector((0.0, 0.0, 0.0)),
-			rotation_euler=(math.radians(90.0), 0.0, 0.0),
-			fallback_dimensions=(clip.source_width, clip.source_height),
-			plane_height=grid_height,
-			timing=timing,
-			metadata=metadata,
-			select_object=False,
-		)
+		columns = int(settings.xml_grid_columns)
+		if columns <= 0:
+			columns = max(1, math.ceil(math.sqrt(len(sequence.clips))))
 
-		obj = result["object"]
-		obj.name = unique_name(f"Cab87XmlClip_{len(imported_clips) + 1:03d}_{slug(clip.name) or 'Clip'}", bpy.data.objects)
-		imported_clips.append({"clip": clip, "object": obj, "timing": timing, "plane_width": result["plane_width"]})
+		grid_height = resolve_xml_grid_row_height(sequence, settings)
 
-	position_imported_xml_clips(imported_clips, columns, grid_height, settings.xml_grid_gap)
+		for clip in sequence.clips:
+			media_path = resolve_xml_media_path(clip.filepath, settings.xml_media_root)
+			if not Path(bpy.path.abspath(media_path)).is_file():
+				missing_media.append(media_path)
+				continue
+
+			timing = build_clip_timing(clip, settings.frame_start, settings.xml_handle_frames)
+			metadata = {
+				"xml_clip_id": clip.clip_id,
+				"xml_clip_name": clip.name,
+				"xml_track_index": clip.track_index,
+				"xml_timeline_start": clip.timeline_start,
+				"xml_timeline_end": clip.timeline_end,
+				"xml_source_in": clip.source_in,
+				"xml_source_out": clip.source_out,
+				"xml_source_start": timing["source_start"],
+				"xml_source_end": timing["source_end"],
+				"xml_handle_frames": timing["handle_frames"],
+				"xml_movie_frame_start": timing["movie_frame_start"],
+				"xml_movie_source_start": timing["movie_source_start"],
+				"xml_speed_multiplier": timing["speed_multiplier"],
+			}
+			result = create_video_plane(
+				context,
+				settings,
+				media_path,
+				collection=xml_collection,
+				position=Vector((0.0, 0.0, 0.0)),
+				rotation_euler=(math.radians(90.0), 0.0, 0.0),
+				fallback_dimensions=(clip.source_width, clip.source_height),
+				plane_height=grid_height,
+				timing=timing,
+				metadata=metadata,
+				select_object=False,
+			)
+
+			obj = result["object"]
+			obj.name = unique_name(f"Cab87XmlClip_{len(imported_clips) + 1:03d}_{slug(clip.name) or 'Clip'}", bpy.data.objects)
+			imported_clips.append({"clip": clip, "object": obj, "timing": timing, "plane_width": result["plane_width"]})
+
+		position_imported_xml_clips(imported_clips, columns, grid_height, settings.xml_grid_gap)
+
+	imported_audio = import_xml_audio_clips(context, settings, sequence.audio_clips, missing_media)
 
 	if settings.sync_timeline and sequence.duration > 0:
 		context.scene.frame_start = settings.frame_start - settings.xml_handle_frames
@@ -557,6 +586,7 @@ def import_xml_video_grid(context, settings: CAB87_VideoPlaneSettings, filepath:
 		"sequence": sequence,
 		"collection": xml_collection,
 		"clips": imported_clips,
+		"audio_strips": imported_audio,
 		"missing_media": missing_media,
 		"camera": camera,
 	}
@@ -579,21 +609,46 @@ def parse_xmeml_sequence(filepath: str, settings: CAB87_VideoPlaneSettings) -> X
 	height = read_int(sequence_element.find("./media/video/format/samplecharacteristics"), "height", settings.fallback_height)
 
 	clips: list[XmlVideoClip] = []
+	audio_clips: list[XmlAudioClip] = []
+	video_clip_ids: set[str] = set()
 	video_element = sequence_element.find("./media/video")
 	if video_element is not None:
 		for track_index, track_element in enumerate(video_element.findall("track"), start=1):
 			for clip_element in track_element.findall("clipitem"):
+				clip_id = clip_element.get("id")
+				if clip_id:
+					video_clip_ids.add(clip_id)
 				if not read_bool(clip_element, "enabled", True):
 					continue
 				clip = parse_xml_video_clip(clip_element, file_lookup, track_index, width, height)
 				if clip is not None:
 					clips.append(clip)
 
-	clips.sort(key=lambda item: (item.timeline_start, item.track_index, item.clip_id))
-	if duration <= 0 and clips:
-		duration = max(clip.timeline_end for clip in clips)
+	audio_element = sequence_element.find("./media/audio")
+	if audio_element is not None:
+		for track_index, track_element in enumerate(audio_element.findall("track"), start=1):
+			for clip_element in track_element.findall("clipitem"):
+				if not read_bool(clip_element, "enabled", True):
+					continue
+				clip = parse_xml_audio_clip(clip_element, file_lookup, video_clip_ids, track_index)
+				if clip is not None:
+					audio_clips.append(clip)
 
-	return XmlSequence(name=name, duration=duration, timebase=timebase, width=width, height=height, clips=clips)
+	clips.sort(key=lambda item: (item.timeline_start, item.track_index, item.clip_id))
+	audio_clips = dedupe_linked_audio_clips(audio_clips)
+	audio_clips.sort(key=lambda item: (item.timeline_start, item.track_index, item.clip_id))
+	if duration <= 0 and (clips or audio_clips):
+		duration = max([clip.timeline_end for clip in clips] + [clip.timeline_end for clip in audio_clips])
+
+	return XmlSequence(
+		name=name,
+		duration=duration,
+		timebase=timebase,
+		width=width,
+		height=height,
+		clips=clips,
+		audio_clips=audio_clips,
+	)
 
 
 def build_xml_file_lookup(root) -> dict[str, dict]:
@@ -644,6 +699,98 @@ def parse_xml_video_clip(clip_element, file_lookup: dict[str, dict], track_index
 		track_index=track_index,
 		time_remap=parse_time_remap(clip_element),
 	)
+
+
+def parse_xml_audio_clip(
+	clip_element,
+	file_lookup: dict[str, dict],
+	video_clip_ids: set[str],
+	track_index: int,
+) -> XmlAudioClip | None:
+	start = read_int(clip_element, "start", -1)
+	end = read_int(clip_element, "end", -1)
+	if start < 0 or end <= start:
+		return None
+
+	file_element = clip_element.find("file")
+	if file_element is None:
+		return None
+
+	file_info = read_xml_file_info(file_element)
+	file_id = file_element.get("id")
+	if not file_info["path"] and file_id in file_lookup:
+		file_info = file_lookup[file_id]
+	if not file_info["path"]:
+		return None
+
+	filepath = pathurl_to_path(file_info["path"])
+	if not is_standalone_audio_path(filepath):
+		return None
+	if is_xml_audio_clip_linked_to_video(clip_element, video_clip_ids):
+		return None
+
+	name = read_text(clip_element, "name", file_info["name"] or "Audio")
+	source_in = read_float(clip_element, "in", 0.0)
+	source_out = read_float(clip_element, "out", source_in + (end - start))
+
+	return XmlAudioClip(
+		clip_id=clip_element.get("id", name),
+		name=name,
+		filepath=filepath,
+		timeline_start=start,
+		timeline_end=end,
+		source_in=source_in,
+		source_out=source_out,
+		track_index=track_index,
+		file_duration=int(file_info["duration"] or 0),
+		linked_clip_ids=read_xml_linked_clip_ids(clip_element),
+	)
+
+
+def is_standalone_audio_path(filepath: str) -> bool:
+	return Path(path_leaf(filepath)).suffix.lower() in STANDALONE_AUDIO_EXTENSIONS
+
+
+def is_xml_audio_clip_linked_to_video(clip_element, video_clip_ids: set[str]) -> bool:
+	for link_element in clip_element.findall("link"):
+		media_type = read_text(link_element, "mediatype", "").lower()
+		if media_type == "video":
+			return True
+		link_ref = read_text(link_element, "linkclipref", "")
+		if link_ref and link_ref in video_clip_ids:
+			return True
+	return False
+
+
+def read_xml_linked_clip_ids(clip_element) -> tuple[str, ...]:
+	linked_clip_ids = []
+	for link_element in clip_element.findall("link"):
+		link_ref = read_text(link_element, "linkclipref", "")
+		if link_ref:
+			linked_clip_ids.append(link_ref)
+	return tuple(linked_clip_ids)
+
+
+def dedupe_linked_audio_clips(audio_clips: list[XmlAudioClip]) -> list[XmlAudioClip]:
+	filtered = []
+	seen_linked_media = set()
+	for clip in audio_clips:
+		linked_ids = {clip.clip_id}
+		linked_ids.update(clip.linked_clip_ids)
+		if len(linked_ids) > 1:
+			key = (
+				tuple(sorted(linked_ids)),
+				clip.filepath.lower(),
+				clip.timeline_start,
+				clip.timeline_end,
+				round(clip.source_in, 3),
+				round(clip.source_out, 3),
+			)
+			if key in seen_linked_media:
+				continue
+			seen_linked_media.add(key)
+		filtered.append(clip)
+	return filtered
 
 
 def read_xml_file_info(file_element) -> dict:
@@ -864,6 +1011,140 @@ def position_imported_xml_clips(imported_clips: list[dict], columns: int, grid_h
 		x = (column - (columns - 1) * 0.5) * cell_width
 		z = ((rows - 1) * 0.5 - row) * cell_height
 		item["object"].location = Vector((x, 0.0, z))
+
+
+def import_xml_audio_clips(
+	context,
+	settings: CAB87_VideoPlaneSettings,
+	audio_clips: list[XmlAudioClip],
+	missing_media: list[str],
+) -> list[dict]:
+	if not audio_clips:
+		return []
+
+	sequence_editor = context.scene.sequence_editor_create()
+	base_channel = resolve_xml_audio_base_channel(sequence_editor)
+	imported_audio = []
+	for clip in audio_clips:
+		media_path = resolve_xml_media_path(clip.filepath, settings.xml_media_root)
+		absolute_path = bpy.path.abspath(media_path)
+		if not Path(absolute_path).is_file():
+			missing_media.append(media_path)
+			continue
+
+		timeline_frame_start = settings.frame_start + clip.timeline_start
+		strip_name = unique_sequence_name(
+			sequence_editor,
+			f"{XML_AUDIO_STRIP_PREFIX}_{len(imported_audio) + 1:03d}_{slug(clip.name) or 'Audio'}",
+		)
+		strip = create_xml_sound_strip(
+			sequence_editor,
+			strip_name,
+			absolute_path,
+			max(1, base_channel + clip.track_index - 1),
+			timeline_frame_start,
+		)
+		configure_xml_audio_strip_timing(strip, clip, timeline_frame_start)
+		assign_if_available(strip, "show_waveform", True)
+		write_xml_audio_strip_properties(strip, {
+			"xml_audio_clip_id": clip.clip_id,
+			"xml_audio_clip_name": clip.name,
+			"xml_audio_track_index": clip.track_index,
+			"xml_audio_timeline_start": clip.timeline_start,
+			"xml_audio_timeline_end": clip.timeline_end,
+			"xml_audio_source_in": clip.source_in,
+			"xml_audio_source_out": clip.source_out,
+			"xml_audio_path": absolute_path,
+		})
+		imported_audio.append({"clip": clip, "strip": strip})
+	return imported_audio
+
+
+def create_xml_sound_strip(sequence_editor, name: str, filepath: str, preferred_channel: int, frame_start: int):
+	strip_collection = resolve_sequence_strip_collection(sequence_editor)
+	if strip_collection is None:
+		raise AttributeError("Sequence editor does not expose a writable strip collection.")
+
+	last_error = None
+	for channel in range(preferred_channel, preferred_channel + 128):
+		try:
+			return new_sound_strip(strip_collection, name, filepath, channel, frame_start)
+		except RuntimeError as error:
+			last_error = error
+		except ValueError as error:
+			last_error = error
+	if last_error is not None:
+		raise last_error
+	raise RuntimeError(f"Could not create sound strip for {filepath}.")
+
+
+def new_sound_strip(sequences, name: str, filepath: str, channel: int, frame_start: int):
+	try:
+		return sequences.new_sound(name=name, filepath=filepath, channel=channel, frame_start=frame_start)
+	except TypeError:
+		return sequences.new_sound(name, filepath, channel, frame_start)
+
+
+def configure_xml_audio_strip_timing(strip, clip: XmlAudioClip, timeline_frame_start: int) -> None:
+	source_in = max(0, int(round(clip.source_in)))
+	duration = max(1, clip.timeline_end - clip.timeline_start)
+	source_end = source_in + duration
+	strip_duration = int(round(getattr(strip, "frame_duration", 0) or 0))
+	source_duration = max(strip_duration, int(round(clip.file_duration)), int(round(clip.source_out)), source_end)
+
+	strip.frame_start = int(timeline_frame_start) - source_in
+	assign_if_available(strip, "frame_offset_start", source_in)
+	if source_duration > source_end:
+		assign_if_available(strip, "frame_offset_end", source_duration - source_end)
+	assign_if_available(strip, "frame_final_duration", duration)
+
+	try:
+		final_start = int(round(strip.frame_final_start))
+	except AttributeError:
+		return
+	except TypeError:
+		return
+	if final_start != int(timeline_frame_start):
+		strip.frame_start += int(timeline_frame_start) - final_start
+
+
+def resolve_xml_audio_base_channel(sequence_editor) -> int:
+	channels = []
+	for strip in iter_sequence_strips(sequence_editor):
+		channel = int(getattr(strip, "channel", 0) or 0)
+		if channel > 0:
+			channels.append(channel)
+	if not channels:
+		return 1
+	return max(channels) + 1
+
+
+def unique_sequence_name(sequence_editor, base: str) -> str:
+	names = {getattr(strip, "name", "") for strip in iter_sequence_strips(sequence_editor)}
+	if base not in names:
+		return base
+	index = 2
+	while True:
+		candidate = f"{base}_{index:03d}"
+		if candidate not in names:
+			return candidate
+		index += 1
+
+
+def iter_sequence_strips(sequence_editor):
+	for property_name in ("strips_all", "sequences_all", "strips", "sequences"):
+		strip_collection = getattr(sequence_editor, property_name, None)
+		if strip_collection is not None:
+			return safe_iter_collection(strip_collection)
+	return ()
+
+
+def resolve_sequence_strip_collection(sequence_editor):
+	for property_name in ("strips", "sequences"):
+		strip_collection = getattr(sequence_editor, property_name, None)
+		if strip_collection is not None:
+			return strip_collection
+	return None
 
 
 def read_text(element, path: str, default: str = "") -> str:
@@ -1477,14 +1758,67 @@ def ensure_video_collection(context):
 def clear_previous_xml_import(scene=None) -> None:
 	for obj in list(bpy.data.objects):
 		if obj.get("cab87_xml_import"):
+			if is_xml_camera_setup_object(obj):
+				continue
 			bpy.data.objects.remove(obj, do_unlink=True)
-	for collection in list(bpy.data.collections):
-		if collection.name.startswith(XML_COLLECTION_PREFIX) and not collection.objects and not collection.children:
-			bpy.data.collections.remove(collection)
+	remove_empty_xml_import_collections()
 	if scene is not None:
+		remove_xml_audio_strips(scene)
 		for marker in list(scene.timeline_markers):
 			if marker.name.startswith("Cab87 XML "):
 				scene.timeline_markers.remove(marker)
+
+
+def remove_xml_audio_strips(scene) -> None:
+	sequence_editor = getattr(scene, "sequence_editor", None)
+	if sequence_editor is None:
+		return
+	strip_collection = resolve_sequence_strip_collection(sequence_editor)
+	if strip_collection is None:
+		return
+	for strip in list(iter_sequence_strips(sequence_editor)):
+		if not is_xml_audio_strip(strip):
+			continue
+		try:
+			strip_collection.remove(strip)
+		except RuntimeError:
+			continue
+		except ReferenceError:
+			continue
+
+
+def is_xml_audio_strip(strip) -> bool:
+	try:
+		if strip.get("cab87_xml_import") and strip.get("cab87_xml_audio_clip"):
+			return True
+	except AttributeError:
+		pass
+	except TypeError:
+		pass
+	except ReferenceError:
+		pass
+	return getattr(strip, "name", "").startswith(XML_AUDIO_STRIP_PREFIX)
+
+
+def is_xml_camera_setup_object(obj) -> bool:
+	try:
+		return bool(
+			obj.get("cab87_xml_import_camera")
+			or obj.get("cab87_xml_camera_pivot")
+			or obj.get("cab87_xml_camera_panner")
+		)
+	except AttributeError:
+		return False
+	except TypeError:
+		return False
+	except ReferenceError:
+		return False
+
+
+def remove_empty_xml_import_collections() -> None:
+	for collection in list(bpy.data.collections):
+		if collection.name.startswith(XML_COLLECTION_PREFIX) and not collection.objects and not collection.children:
+			bpy.data.collections.remove(collection)
 
 
 def add_xml_cut_markers(scene, imported_clips: list[dict]) -> None:
@@ -1497,12 +1831,12 @@ def add_xml_cut_markers(scene, imported_clips: list[dict]) -> None:
 
 def animate_xml_camera(context, settings: CAB87_VideoPlaneSettings, collection, imported_clips: list[dict]):
 	camera = bpy.data.objects.get(settings.xml_camera_name)
+	created_camera = False
 	if camera is None or camera.type != "CAMERA":
 		camera_data = bpy.data.cameras.new(unique_name(f"{settings.xml_camera_name}_Data", bpy.data.cameras))
 		camera = bpy.data.objects.new(settings.xml_camera_name, camera_data)
-		collection.objects.link(camera)
-	elif camera.name not in {obj.name for obj in collection.objects}:
-		collection.objects.link(camera)
+		created_camera = True
+	link_object_to_collection(camera, collection)
 
 	pivot_name = f"{settings.xml_camera_name} Pivot"
 	pivot = bpy.data.objects.get(pivot_name)
@@ -1510,19 +1844,17 @@ def animate_xml_camera(context, settings: CAB87_VideoPlaneSettings, collection, 
 		pivot = bpy.data.objects.new(unique_name(pivot_name, bpy.data.objects), None)
 		pivot.empty_display_type = "PLAIN_AXES"
 		pivot.empty_display_size = 0.75
-		collection.objects.link(pivot)
-	elif pivot.name not in {obj.name for obj in collection.objects}:
-		collection.objects.link(pivot)
+	link_object_to_collection(pivot, collection)
 
 	panner_name = f"{settings.xml_camera_name} Panner"
 	panner = bpy.data.objects.get(panner_name)
+	created_panner = False
 	if panner is None or panner.type != "EMPTY":
 		panner = bpy.data.objects.new(unique_name(panner_name, bpy.data.objects), None)
 		panner.empty_display_type = "ARROWS"
 		panner.empty_display_size = 0.5
-		collection.objects.link(panner)
-	elif panner.name not in {obj.name for obj in collection.objects}:
-		collection.objects.link(panner)
+		created_panner = True
+	link_object_to_collection(panner, collection)
 
 	camera["cab87_xml_import"] = True
 	camera["cab87_xml_import_camera"] = True
@@ -1534,17 +1866,16 @@ def animate_xml_camera(context, settings: CAB87_VideoPlaneSettings, collection, 
 	panner["cab87_xml_camera_panner"] = True
 	panner["cab87_xml_camera_pivot"] = pivot.name
 	camera.data.lens = settings.xml_camera_lens
-	panner.parent = pivot
-	panner.matrix_parent_inverse.identity()
-	panner.location = (0.0, 0.0, 0.0)
-	panner.rotation_euler = (0.0, 0.0, 0.0)
-	panner.scale = (1.0, 1.0, 1.0)
-	camera.parent = panner
-	camera.matrix_parent_inverse.identity()
-	camera.location = (0.0, -settings.xml_camera_distance, 0.0)
-	camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
-	camera.animation_data_clear()
-	panner.animation_data_clear()
+	set_object_parent(panner, pivot, preserve_transform=not created_panner)
+	if created_panner:
+		panner.location = (0.0, 0.0, 0.0)
+		panner.rotation_euler = (0.0, 0.0, 0.0)
+		panner.scale = (1.0, 1.0, 1.0)
+	set_object_parent(camera, panner, preserve_transform=not created_camera)
+	if created_camera:
+		camera.location = (0.0, -settings.xml_camera_distance, 0.0)
+		camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+	move_xml_camera_setup_to_collection(collection, (camera, pivot, panner))
 	pivot.animation_data_clear()
 
 	for item in imported_clips:
@@ -1556,6 +1887,54 @@ def animate_xml_camera(context, settings: CAB87_VideoPlaneSettings, collection, 
 	set_object_keyframe_interpolation(pivot, settings.xml_camera_interpolation)
 	context.scene.camera = camera
 	return camera
+
+
+def link_object_to_collection(obj, collection) -> None:
+	if collection is None:
+		return
+	if obj.name in {item.name for item in safe_iter_collection(collection.objects)}:
+		return
+	collection.objects.link(obj)
+
+
+def unlink_object_from_collection(obj, collection) -> None:
+	if collection is None:
+		return
+	if obj.name not in {item.name for item in safe_iter_collection(collection.objects)}:
+		return
+	try:
+		collection.objects.unlink(obj)
+	except RuntimeError:
+		return
+	except ReferenceError:
+		return
+
+
+def set_object_parent(obj, parent, preserve_transform: bool) -> None:
+	if obj.parent == parent:
+		return
+	matrix_world = None
+	if preserve_transform:
+		try:
+			matrix_world = obj.matrix_world.copy()
+		except AttributeError:
+			matrix_world = None
+	obj.parent = parent
+	if matrix_world is not None:
+		obj.matrix_world = matrix_world
+	elif hasattr(obj, "matrix_parent_inverse"):
+		obj.matrix_parent_inverse.identity()
+
+
+def move_xml_camera_setup_to_collection(target_collection, objects) -> None:
+	for obj in objects:
+		link_object_to_collection(obj, target_collection)
+	for collection in list(bpy.data.collections):
+		if collection == target_collection or not collection.name.startswith(XML_COLLECTION_PREFIX):
+			continue
+		for obj in objects:
+			unlink_object_from_collection(obj, collection)
+	remove_empty_xml_import_collections()
 
 
 def camera_pose_for_plane(obj, distance: float) -> tuple[Vector, object]:
@@ -1638,6 +2017,20 @@ def write_xml_clip_properties(obj, metadata: dict) -> None:
 	obj["cab87_xml_import"] = True
 	for key, value in metadata.items():
 		obj[f"cab87_{key}"] = value
+
+
+def write_xml_audio_strip_properties(strip, metadata: dict) -> None:
+	try:
+		strip["cab87_xml_import"] = True
+		strip["cab87_xml_audio_clip"] = True
+		for key, value in metadata.items():
+			strip[f"cab87_{key}"] = value
+	except AttributeError:
+		return
+	except TypeError:
+		return
+	except ReferenceError:
+		return
 
 
 def link_if_present(links, outputs, output_name: str, inputs, input_name: str) -> None:

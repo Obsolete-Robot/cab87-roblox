@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 
 id = "cab87_video_plane_tool"
 name = "Cab87 Video Plane Tool"
-version = "0.5.2"
+version = "0.5.6"
 tagline = "Create, arrange, and fade video planes"
 maintainer = "Cab87"
 type = "add-on"
