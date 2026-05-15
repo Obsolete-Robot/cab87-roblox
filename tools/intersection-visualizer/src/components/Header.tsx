@@ -1,10 +1,11 @@
 import React, { useRef, useState } from 'react';
-import { Menu, X, Layers, Upload, Download, Box, ChevronDown, FileArchive, FileJson } from 'lucide-react';
+import { Menu, X, Layers, Upload, Download, Box, ChevronDown, FileArchive, FileJson, FilePlus2 } from 'lucide-react';
 import type { RobloxRoadMeshExportMode } from '../lib/meshExport';
 
 interface HeaderProps {
   isSidebarOpen: boolean;
   setIsSidebarOpen: (v: boolean) => void;
+  handleNewProject: () => void;
   handleImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleExport: () => void;
   handleExportObj: () => void;
@@ -19,6 +20,7 @@ interface HeaderProps {
 export default function Header({
   isSidebarOpen,
   setIsSidebarOpen,
+  handleNewProject,
   handleImport,
   handleExport,
   handleExportObj,
@@ -55,6 +57,14 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-2 lg:gap-4">
+        <button
+          onClick={handleNewProject}
+          className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"
+          title="New road graph"
+        >
+          <FilePlus2 className="w-4 h-4" />
+          <span className="hidden xl:inline">New</span>
+        </button>
         <button
           onClick={() => fileInputRef.current?.click()}
           className="p-2 lg:px-3 lg:py-1.5 border rounded text-sm font-semibold flex items-center gap-2 transition-colors border-slate-700 hover:bg-slate-800 text-slate-300"

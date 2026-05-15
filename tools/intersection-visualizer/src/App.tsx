@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Point, Node, Edge, PointSelection, BuildingPolygon, BuildingFillSettings, BuildingFillSource, VisibilitySettings, BackgroundImageSettings } from './lib/types';
+import { Point, Node, Edge, PointSelection, BuildingPolygon, BuildingFillSettings, BuildingFillSource, VisibilitySettings, BackgroundImageSettings, PolygonFill } from './lib/types';
 import { getExtendedEdgeControlPoints, sampleEdgeSpline, findClosedAreas } from './lib/network';
 import { getDir, distToSegment } from './lib/math';
 import { splitBezier } from './lib/splines';
@@ -22,6 +22,47 @@ type DragState = {
   pointId?: number;
 };
 
+type DebugOptions = {
+  roads: boolean;
+  junctions: boolean;
+  sidewalks: boolean;
+  crossroads: boolean;
+  lines: boolean;
+  polyFills: boolean;
+  buildings: boolean;
+};
+
+type EditorView = {
+  x: number;
+  y: number;
+  zoom: number;
+};
+
+type LocalEditorState = {
+  nodes: Node[];
+  edges: Edge[];
+  polygonFills: PolygonFill[];
+  buildings: BuildingPolygon[];
+  deletedFaces: string[];
+  chamferAngle: number;
+  meshResolution: number;
+  laneWidth: number;
+  buildingFillSettings: BuildingFillSettings;
+  backgroundImage: BackgroundImageSettings | null;
+  view: EditorView;
+  visibilitySettings: VisibilitySettings;
+  showMesh: boolean;
+  is3DMode: boolean;
+  softSelectionEnabled: boolean;
+  softSelectionRadius: number;
+  snapToGrid: boolean;
+  snapGridSize: number;
+  debugOptions: DebugOptions;
+};
+
+const LOCAL_SAVE_STORAGE_KEY = 'cab87.intersectionVisualizer.localState.v1';
+const LOCAL_SAVE_DEBOUNCE_MS = 350;
+
 const DEFAULT_VISIBILITY_SETTINGS: VisibilitySettings = {
   showNodeHandles: true,
   showNodeControlPoints: true,
@@ -30,8 +71,55 @@ const DEFAULT_VISIBILITY_SETTINGS: VisibilitySettings = {
   showBuildingControlPoints: true,
 };
 
+const DEFAULT_VIEW: EditorView = { x: 0, y: 0, zoom: 1 };
+const DEFAULT_SNAP_GRID_SIZE = 10;
+
+const DEFAULT_DEBUG_OPTIONS: DebugOptions = {
+  roads: true,
+  junctions: true,
+  sidewalks: true,
+  crossroads: true,
+  lines: true,
+  polyFills: true,
+  buildings: true,
+};
+
+const DEFAULT_NODES: Node[] = [
+  { id: 'n1', point: { x: 400, y: 300 } },
+  { id: 'n2', point: { x: 600, y: 150 } },
+  { id: 'n3', point: { x: 200, y: 400 } },
+  { id: 'n4', point: { x: 300, y: 100 } },
+];
+
+const DEFAULT_EDGES: Edge[] = [
+  { id: 'e1', source: 'n1', target: 'n2', points: [{ x: 466, y: 250, linear: true }, { x: 533, y: 200, linear: true }], width: DEFAULTS.roadWidth, sidewalk: DEFAULTS.sidewalkWidth, color: '#ef4444' },
+  { id: 'e2', source: 'n1', target: 'n3', points: [{ x: 333, y: 333, linear: true }, { x: 266, y: 366, linear: true }], width: DEFAULTS.roadWidth, sidewalk: DEFAULTS.sidewalkWidth, color: '#10b981' },
+  { id: 'e3', source: 'n1', target: 'n4', points: [{ x: 366, y: 233, linear: true }, { x: 333, y: 166, linear: true }], width: 80, sidewalk: DEFAULTS.sidewalkWidth, color: '#3b82f6' },
+];
+
+function clonePlain<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function createBuildingFillGroupId() {
   return `fill_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getFaceKey(points: string[]) {
+  let minKey = points.join(',');
+  for (let i = 1; i < points.length; i++) {
+      const shifted = [...points.slice(i), ...points.slice(0, i)].join(',');
+      if (shifted < minKey) {
+          minKey = shifted;
+      }
+  }
+  return minKey;
+}
+
+function getTopologyKey(nextNodes: Node[], nextEdges: Edge[]) {
+  const nodeKey = nextNodes.map(n => n.id).sort().join('|');
+  const edgeKey = nextEdges.map(e => `${e.id}:${e.source}-${e.target || ''}`).sort().join('|');
+  return `${nodeKey}::${edgeKey}`;
 }
 
 function parseImportedBuildingFillSource(value: any): BuildingFillSource | undefined {
@@ -59,6 +147,223 @@ function parseImportedBuildingFillSource(value: any): BuildingFillSource | undef
 function parseFiniteNumber(value: unknown, fallback: number): number {
   const parsed = typeof value === 'number' ? value : parseFloat(String(value));
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function sanitizeEditorView(value: any): EditorView {
+  const source = value && typeof value === 'object' ? value : DEFAULT_VIEW;
+  return {
+    x: parseFiniteNumber(source.x, DEFAULT_VIEW.x),
+    y: parseFiniteNumber(source.y, DEFAULT_VIEW.y),
+    zoom: Math.max(0.01, parseFiniteNumber(source.zoom, DEFAULT_VIEW.zoom)),
+  };
+}
+
+function sanitizeVisibilitySettings(value: any): VisibilitySettings {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    showNodeHandles: sanitizeBoolean(source.showNodeHandles, DEFAULT_VISIBILITY_SETTINGS.showNodeHandles),
+    showNodeControlPoints: sanitizeBoolean(source.showNodeControlPoints, DEFAULT_VISIBILITY_SETTINGS.showNodeControlPoints),
+    showPolyFillHandles: sanitizeBoolean(source.showPolyFillHandles, DEFAULT_VISIBILITY_SETTINGS.showPolyFillHandles),
+    showBuildingHandles: sanitizeBoolean(source.showBuildingHandles, DEFAULT_VISIBILITY_SETTINGS.showBuildingHandles),
+    showBuildingControlPoints: sanitizeBoolean(source.showBuildingControlPoints, DEFAULT_VISIBILITY_SETTINGS.showBuildingControlPoints),
+  };
+}
+
+function sanitizeDebugOptions(value: any): DebugOptions {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    roads: sanitizeBoolean(source.roads, DEFAULT_DEBUG_OPTIONS.roads),
+    junctions: sanitizeBoolean(source.junctions, DEFAULT_DEBUG_OPTIONS.junctions),
+    sidewalks: sanitizeBoolean(source.sidewalks, DEFAULT_DEBUG_OPTIONS.sidewalks),
+    crossroads: sanitizeBoolean(source.crossroads, DEFAULT_DEBUG_OPTIONS.crossroads),
+    lines: sanitizeBoolean(source.lines, DEFAULT_DEBUG_OPTIONS.lines),
+    polyFills: sanitizeBoolean(source.polyFills, DEFAULT_DEBUG_OPTIONS.polyFills),
+    buildings: sanitizeBoolean(source.buildings, DEFAULT_DEBUG_OPTIONS.buildings),
+  };
+}
+
+function sanitizePolygonFills(value: any): PolygonFill[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((fill, index) => {
+      if (!fill || typeof fill !== 'object') return null;
+      const points = Array.isArray(fill.points)
+        ? fill.points.filter((pointId: unknown): pointId is string => typeof pointId === 'string')
+        : [];
+      if (points.length < 3) return null;
+      return {
+        id: typeof fill.id === 'string' && fill.id ? fill.id : `pf${index + 1}`,
+        points,
+        color: typeof fill.color === 'string' && fill.color ? fill.color : '#10b981',
+      };
+    })
+    .filter((fill): fill is PolygonFill => fill !== null);
+}
+
+function sanitizeImportedBuildings(value: any): BuildingPolygon[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((building: any, index: number) => ({
+      id: typeof building?.id === 'string' && building.id ? building.id : `b${index + 1}`,
+      name: typeof building?.name === 'string' ? building.name : undefined,
+      vertices: cleanBuildingVertices(Array.isArray(building?.vertices) ? building.vertices : []),
+      baseZ: typeof building?.baseZ === 'number' ? building.baseZ : DEFAULTS.buildingBaseZ,
+      height: Math.max(1, typeof building?.height === 'number' ? building.height : DEFAULTS.buildingHeight),
+      color: typeof building?.color === 'string' ? building.color : DEFAULTS.buildingColor,
+      material: typeof building?.material === 'string' ? building.material : DEFAULTS.buildingMaterial,
+      fillSource: parseImportedBuildingFillSource(building?.fillSource),
+    }))
+    .filter((building: BuildingPolygon) => building.vertices.length >= 3);
+}
+
+function createDefaultEditorState(): LocalEditorState {
+  return {
+    nodes: clonePlain(DEFAULT_NODES),
+    edges: clonePlain(DEFAULT_EDGES),
+    polygonFills: [],
+    buildings: [],
+    deletedFaces: [],
+    chamferAngle: DEFAULTS.chamferAngle,
+    meshResolution: DEFAULTS.meshResolution,
+    laneWidth: DEFAULTS.laneWidth,
+    buildingFillSettings: sanitizeBuildingFillSettings(),
+    backgroundImage: null,
+    view: { ...DEFAULT_VIEW },
+    visibilitySettings: { ...DEFAULT_VISIBILITY_SETTINGS },
+    showMesh: false,
+    is3DMode: false,
+    softSelectionEnabled: false,
+    softSelectionRadius: DEFAULTS.softSelectionRadius,
+    snapToGrid: false,
+    snapGridSize: DEFAULT_SNAP_GRID_SIZE,
+    debugOptions: { ...DEFAULT_DEBUG_OPTIONS },
+  };
+}
+
+function createEmptyEditorState(): LocalEditorState {
+  const state = createDefaultEditorState();
+  return {
+    ...state,
+    nodes: [],
+    edges: [],
+  };
+}
+
+function parseRoadNetworkState(data: any): LocalEditorState | null {
+  if (!data || typeof data !== 'object') return null;
+  if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) return null;
+
+  const defaults = createDefaultEditorState();
+  const settings = data.settings && typeof data.settings === 'object' ? data.settings : {};
+  const editor = data.editor && typeof data.editor === 'object' ? data.editor : {};
+  const importedMeshResolution = settings.meshResolution ?? settings.splineSegments;
+
+  return {
+    nodes: data.nodes,
+    edges: data.edges,
+    polygonFills: sanitizePolygonFills(data.polygonFills),
+    buildings: sanitizeImportedBuildings(data.buildings),
+    deletedFaces: Array.isArray(data.deletedFaces)
+      ? data.deletedFaces.filter((faceKey: unknown): faceKey is string => typeof faceKey === 'string')
+      : [],
+    chamferAngle: typeof settings.chamferAngleDeg === 'number' ? settings.chamferAngleDeg : defaults.chamferAngle,
+    meshResolution: importedMeshResolution != null ? sanitizeMeshResolution(importedMeshResolution) : defaults.meshResolution,
+    laneWidth: typeof settings.laneWidth === 'number' ? settings.laneWidth : defaults.laneWidth,
+    buildingFillSettings: sanitizeBuildingFillSettings(settings.buildingFill ?? {
+      minWidth: settings.buildingFillMinWidth,
+      maxWidth: settings.buildingFillMaxWidth,
+      minHeight: settings.buildingFillMinHeight,
+      maxHeight: settings.buildingFillMaxHeight,
+    }),
+    backgroundImage: sanitizeImportedBackgroundImage(data.backgroundImage ?? settings.backgroundImage),
+    view: sanitizeEditorView(editor.view ?? data.view),
+    visibilitySettings: sanitizeVisibilitySettings(editor.visibilitySettings ?? data.visibilitySettings),
+    showMesh: sanitizeBoolean(editor.showMesh ?? data.showMesh, defaults.showMesh),
+    is3DMode: sanitizeBoolean(editor.is3DMode ?? data.is3DMode, defaults.is3DMode),
+    softSelectionEnabled: sanitizeBoolean(editor.softSelectionEnabled ?? data.softSelectionEnabled, defaults.softSelectionEnabled),
+    softSelectionRadius: Math.max(10, parseFiniteNumber(editor.softSelectionRadius ?? data.softSelectionRadius, defaults.softSelectionRadius)),
+    snapToGrid: sanitizeBoolean(editor.snapToGrid ?? data.snapToGrid, defaults.snapToGrid),
+    snapGridSize: Math.max(1, Math.round(parseFiniteNumber(editor.snapGridSize ?? data.snapGridSize, defaults.snapGridSize))),
+    debugOptions: sanitizeDebugOptions(editor.debugOptions ?? data.debugOptions),
+  };
+}
+
+function createRoadNetworkPayloadFromState(state: LocalEditorState) {
+  return {
+    schema: ROAD_NETWORK_SCHEMA,
+    version: ROAD_NETWORK_VERSION,
+    settings: {
+      chamferAngleDeg: state.chamferAngle,
+      meshResolution: state.meshResolution,
+      laneWidth: state.laneWidth,
+      buildingFill: state.buildingFillSettings,
+    },
+    nodes: state.nodes,
+    edges: state.edges,
+    polygonFills: state.polygonFills,
+    buildings: state.buildings,
+    deletedFaces: state.deletedFaces,
+    ...(state.backgroundImage ? { backgroundImage: state.backgroundImage } : {}),
+  };
+}
+
+function createLocalSavePayloadFromState(state: LocalEditorState) {
+  return {
+    ...createRoadNetworkPayloadFromState(state),
+    savedAt: new Date().toISOString(),
+    editor: {
+      view: state.view,
+      visibilitySettings: state.visibilitySettings,
+      showMesh: state.showMesh,
+      is3DMode: state.is3DMode,
+      softSelectionEnabled: state.softSelectionEnabled,
+      softSelectionRadius: state.softSelectionRadius,
+      snapToGrid: state.snapToGrid,
+      snapGridSize: state.snapGridSize,
+      debugOptions: state.debugOptions,
+    },
+  };
+}
+
+function loadLocalEditorState(): LocalEditorState | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const rawState = window.localStorage.getItem(LOCAL_SAVE_STORAGE_KEY);
+    if (!rawState) return null;
+    const data = JSON.parse(rawState);
+    if (data.schema != null && data.schema !== ROAD_NETWORK_SCHEMA) return null;
+    return parseRoadNetworkState(data);
+  } catch (err) {
+    console.warn('Failed to load local intersection visualizer state.', err);
+    return null;
+  }
+}
+
+function saveLocalEditorState(data: unknown): boolean {
+  if (typeof window === 'undefined') return false;
+
+  try {
+    window.localStorage.setItem(LOCAL_SAVE_STORAGE_KEY, JSON.stringify(data));
+    return true;
+  } catch (err) {
+    console.warn('Failed to save local intersection visualizer state.', err);
+    return false;
+  }
+}
+
+function clearLocalEditorState() {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.removeItem(LOCAL_SAVE_STORAGE_KEY);
+  } catch (err) {
+    console.warn('Failed to clear local intersection visualizer state.', err);
+  }
 }
 
 function sanitizeImportedBackgroundImage(value: any): BackgroundImageSettings | null {
@@ -179,29 +484,26 @@ function regenerateLinkedBuildingGroups(params: {
 }
 
 export default function App() {
+  const initialEditorStateRef = useRef<LocalEditorState | null>(null);
+  if (initialEditorStateRef.current === null) {
+    initialEditorStateRef.current = loadLocalEditorState() ?? createDefaultEditorState();
+  }
+  const initialEditorState = initialEditorStateRef.current;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
 
-  const [nodes, setNodes] = useState<Node[]>([
-    { id: 'n1', point: { x: 400, y: 300 } },
-    { id: 'n2', point: { x: 600, y: 150 } },
-    { id: 'n3', point: { x: 200, y: 400 } },
-    { id: 'n4', point: { x: 300, y: 100 } },
-  ]);
+  const [nodes, setNodes] = useState<Node[]>(() => initialEditorState.nodes);
 
-  const [edges, setEdges] = useState<Edge[]>([
-    { id: 'e1', source: 'n1', target: 'n2', points: [{x: 466, y: 250, linear: true}, {x: 533, y: 200, linear: true}], width: DEFAULTS.roadWidth, sidewalk: DEFAULTS.sidewalkWidth, color: '#ef4444' },
-    { id: 'e2', source: 'n1', target: 'n3', points: [{x: 333, y: 333, linear: true}, {x: 266, y: 366, linear: true}], width: DEFAULTS.roadWidth, sidewalk: DEFAULTS.sidewalkWidth, color: '#10b981' },
-    { id: 'e3', source: 'n1', target: 'n4', points: [{x: 366, y: 233, linear: true}, {x: 333, y: 166, linear: true}], width: 80, sidewalk: DEFAULTS.sidewalkWidth, color: '#3b82f6' },
-  ]);
+  const [edges, setEdges] = useState<Edge[]>(() => initialEditorState.edges);
 
   const [selectedEdges, setSelectedEdges] = useState<string[]>([]);
   const lastDragPosRef = useRef<Point | null>(null);
   const startDragPosRef = useRef<Point | null>(null);
   const addedToSelectionRef = useRef<boolean>(false);
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
-  const [buildings, setBuildings] = useState<BuildingPolygon[]>([]);
+  const [buildings, setBuildings] = useState<BuildingPolygon[]>(() => initialEditorState.buildings);
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
   const [selectedBuildingVertex, setSelectedBuildingVertex] = useState<{ buildingId: string; vertexIndex: number } | null>(null);
   const [isBuildingMode, setIsBuildingMode] = useState(false);
@@ -240,33 +542,25 @@ export default function App() {
   }, [dragging, nodes, edges, buildings]);
 
   const [isMergeMode, setIsMergeMode] = useState(false);
-  const [showMesh, setShowMesh] = useState(false);
-  const [visibilitySettings, setVisibilitySettings] = useState<VisibilitySettings>(DEFAULT_VISIBILITY_SETTINGS);
-  const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
+  const [showMesh, setShowMesh] = useState(() => initialEditorState.showMesh);
+  const [visibilitySettings, setVisibilitySettings] = useState<VisibilitySettings>(() => initialEditorState.visibilitySettings);
+  const [view, setView] = useState(() => initialEditorState.view);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedPoints, setSelectedPoints] = useState<PointSelection[]>([]);
   const [selectedPolygonFillId, setSelectedPolygonFillId] = useState<string | null>(null);
-  const [chamferAngle, setChamferAngle] = useState(DEFAULTS.chamferAngle);
-  const [meshResolution, setMeshResolution] = useState(DEFAULTS.meshResolution);
-  const [laneWidth, setLaneWidth] = useState(DEFAULTS.laneWidth);
-  const [buildingFillSettings, setBuildingFillSettings] = useState<BuildingFillSettings>(() => sanitizeBuildingFillSettings());
-  const [is3DMode, setIs3DMode] = useState(false);
-  const [softSelectionEnabled, setSoftSelectionEnabled] = useState(false);
-  const [softSelectionRadius, setSoftSelectionRadius] = useState(DEFAULTS.softSelectionRadius);
+  const [chamferAngle, setChamferAngle] = useState(() => initialEditorState.chamferAngle);
+  const [meshResolution, setMeshResolution] = useState(() => initialEditorState.meshResolution);
+  const [laneWidth, setLaneWidth] = useState(() => initialEditorState.laneWidth);
+  const [buildingFillSettings, setBuildingFillSettings] = useState<BuildingFillSettings>(() => initialEditorState.buildingFillSettings);
+  const [is3DMode, setIs3DMode] = useState(() => initialEditorState.is3DMode);
+  const [softSelectionEnabled, setSoftSelectionEnabled] = useState(() => initialEditorState.softSelectionEnabled);
+  const [softSelectionRadius, setSoftSelectionRadius] = useState(() => initialEditorState.softSelectionRadius);
 
-  const [snapToGrid, setSnapToGrid] = useState(false);
-  const [snapGridSize, setSnapGridSize] = useState(10);
+  const [snapToGrid, setSnapToGrid] = useState(() => initialEditorState.snapToGrid);
+  const [snapGridSize, setSnapGridSize] = useState(() => initialEditorState.snapGridSize);
 
-  const [debugOptions, setDebugOptions] = useState({
-    roads: true,
-    junctions: true,
-    sidewalks: true,
-    crossroads: true,
-    lines: true,
-    polyFills: true,
-    buildings: true,
-  });
-  const [backgroundImage, setBackgroundImage] = useState<BackgroundImageSettings | null>(null);
+  const [debugOptions, setDebugOptions] = useState<DebugOptions>(() => initialEditorState.debugOptions);
+  const [backgroundImage, setBackgroundImage] = useState<BackgroundImageSettings | null>(() => initialEditorState.backgroundImage);
   const [backgroundImageElement, setBackgroundImageElement] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
@@ -354,8 +648,8 @@ export default function App() {
     }
   };
 
-  const [polygonFills, setPolygonFills] = useState<{ id: string; points: string[]; color: string }[]>([]);
-  const [deletedFaces, setDeletedFaces] = useState<string[]>([]);
+  const [polygonFills, setPolygonFills] = useState<PolygonFill[]>(() => initialEditorState.polygonFills);
+  const [deletedFaces, setDeletedFaces] = useState<string[]>(() => initialEditorState.deletedFaces);
 
   const clearBuildingSelection = () => {
     setSelectedBuildingId(null);
@@ -390,23 +684,6 @@ export default function App() {
     return true;
   };
 
-  const getFaceKey = (points: string[]) => {
-    let minKey = points.join(',');
-    for (let i = 1; i < points.length; i++) {
-        const shifted = [...points.slice(i), ...points.slice(0, i)].join(',');
-        if (shifted < minKey) {
-            minKey = shifted;
-        }
-    }
-    return minKey;
-  };
-
-  const getTopologyKey = (nextNodes: Node[], nextEdges: Edge[]) => {
-    const nodeKey = nextNodes.map(n => n.id).sort().join('|');
-    const edgeKey = nextEdges.map(e => `${e.id}:${e.source}-${e.target || ''}`).sort().join('|');
-    return `${nodeKey}::${edgeKey}`;
-  };
-
   const getNodePairKey = (a: string, b: string) => a < b ? `${a}:${b}` : `${b}:${a}`;
 
   const isFillBoundaryUnchanged = (points: string[], nextEdges: Edge[]) => {
@@ -436,8 +713,94 @@ export default function App() {
 
   const topologyKey = useMemo(() => getTopologyKey(nodes, edges), [nodes, edges]);
 
-  const prevTopologyKey = useRef<string | null>(null);
-  const prevFaceKeysRef = useRef<Set<string>>(new Set());
+  const prevTopologyKey = useRef<string | null>(getTopologyKey(nodes, edges));
+  const prevFaceKeysRef = useRef<Set<string>>(new Set(findClosedAreas(nodes, edges).map(getFaceKey)));
+  const localSaveStateRef = useRef<unknown>(null);
+
+  const applyEditorState = (state: LocalEditorState, options: { saveLocal?: boolean; clearLocal?: boolean } = {}) => {
+    prevTopologyKey.current = getTopologyKey(state.nodes, state.edges);
+    prevFaceKeysRef.current = new Set(findClosedAreas(state.nodes, state.edges).map(getFaceKey));
+
+    if (options.clearLocal) {
+      localSaveStateRef.current = null;
+      clearLocalEditorState();
+    } else if (options.saveLocal) {
+      const localSavePayload = createLocalSavePayloadFromState(state);
+      localSaveStateRef.current = localSavePayload;
+      saveLocalEditorState(localSavePayload);
+    }
+
+    setNodes(state.nodes);
+    setEdges(state.edges);
+    setPolygonFills(state.polygonFills);
+    setBuildings(state.buildings);
+    setDeletedFaces(state.deletedFaces);
+    setChamferAngle(state.chamferAngle);
+    setMeshResolution(state.meshResolution);
+    setLaneWidth(state.laneWidth);
+    setBuildingFillSettings(state.buildingFillSettings);
+    setBackgroundImage(state.backgroundImage);
+    setView(state.view);
+    setVisibilitySettings(state.visibilitySettings);
+    setShowMesh(state.showMesh);
+    setIs3DMode(state.is3DMode);
+    setSoftSelectionEnabled(state.softSelectionEnabled);
+    setSoftSelectionRadius(state.softSelectionRadius);
+    setSnapToGrid(state.snapToGrid);
+    setSnapGridSize(state.snapGridSize);
+    setDebugOptions(state.debugOptions);
+
+    setSelectedEdges([]);
+    setSelectedNode(null);
+    setSelectedPoints([]);
+    setSelectedPolygonFillId(null);
+    setSelectedBuildingId(null);
+    setSelectedBuildingVertex(null);
+    setBuildingDraft([]);
+    setIsAddNodeMode(false);
+    setIsBuildingMode(false);
+    setDragging(null);
+    setMarqueeStart(null);
+    setMarqueeEnd(null);
+    setIsMergeMode(false);
+    lastDragPosRef.current = null;
+    startDragPosRef.current = null;
+    addedToSelectionRef.current = false;
+  };
+
+  const getCurrentEditorState = (): LocalEditorState => ({
+    nodes,
+    edges,
+    polygonFills,
+    buildings,
+    deletedFaces,
+    chamferAngle,
+    meshResolution,
+    laneWidth,
+    buildingFillSettings,
+    backgroundImage,
+    view,
+    visibilitySettings,
+    showMesh,
+    is3DMode,
+    softSelectionEnabled,
+    softSelectionRadius,
+    snapToGrid,
+    snapGridSize,
+    debugOptions,
+  });
+
+  const buildRoadNetworkPayload = () => createRoadNetworkPayloadFromState(getCurrentEditorState());
+
+  const buildLocalSavePayload = () => createLocalSavePayloadFromState(getCurrentEditorState());
+
+  const handleNewProject = () => {
+    if (typeof window !== 'undefined' && !window.confirm('Create a new road graph? This clears the locally saved state.')) {
+      return;
+    }
+
+    applyEditorState(createEmptyEditorState(), { clearLocal: true });
+  };
 
   useEffect(() => {
     if (prevTopologyKey.current === topologyKey) return;
@@ -514,22 +877,7 @@ export default function App() {
   }, [topologyKey, nodes, edges, deletedFaces]);
 
   const handleExport = () => {
-    const exportPayload = {
-      schema: ROAD_NETWORK_SCHEMA,
-      version: ROAD_NETWORK_VERSION,
-      settings: {
-        chamferAngleDeg: chamferAngle,
-        meshResolution,
-        laneWidth,
-        buildingFill: buildingFillSettings,
-      },
-      nodes,
-      edges,
-      polygonFills,
-      buildings,
-      deletedFaces,
-      ...(backgroundImage ? { backgroundImage } : {}),
-    };
+    const exportPayload = buildRoadNetworkPayload();
     const data = JSON.stringify(exportPayload, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -679,68 +1027,9 @@ export default function App() {
           alert(`Unsupported road network schema: ${data.schema}`);
           return;
         }
-        if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
-          prevTopologyKey.current = getTopologyKey(data.nodes, data.edges);
-          prevFaceKeysRef.current = new Set(findClosedAreas(data.nodes, data.edges).map(getFaceKey));
-          setNodes(data.nodes);
-          setEdges(data.edges);
-          if (typeof data.settings?.chamferAngleDeg === 'number') {
-            setChamferAngle(data.settings.chamferAngleDeg);
-          } else {
-            setChamferAngle(DEFAULTS.chamferAngle);
-          }
-          const importedMeshResolution = data.settings?.meshResolution ?? data.settings?.splineSegments;
-          if (typeof importedMeshResolution === 'number') {
-            setMeshResolution(sanitizeMeshResolution(importedMeshResolution));
-          } else {
-            setMeshResolution(DEFAULTS.meshResolution);
-          }
-          if (typeof data.settings?.laneWidth === 'number') {
-            setLaneWidth(data.settings.laneWidth);
-          } else {
-            setLaneWidth(DEFAULTS.laneWidth);
-          }
-          setBuildingFillSettings(sanitizeBuildingFillSettings(data.settings?.buildingFill ?? {
-            minWidth: data.settings?.buildingFillMinWidth,
-            maxWidth: data.settings?.buildingFillMaxWidth,
-            minHeight: data.settings?.buildingFillMinHeight,
-            maxHeight: data.settings?.buildingFillMaxHeight,
-          }));
-          if (Array.isArray(data.polygonFills)) {
-            setPolygonFills(data.polygonFills);
-          } else {
-            setPolygonFills([]);
-          }
-          if (Array.isArray(data.deletedFaces)) {
-            setDeletedFaces(data.deletedFaces);
-          } else {
-            setDeletedFaces([]);
-          }
-          if (Array.isArray(data.buildings)) {
-            setBuildings(data.buildings.map((building: any, index: number) => ({
-              id: typeof building.id === 'string' && building.id ? building.id : `b${index + 1}`,
-              name: typeof building.name === 'string' ? building.name : undefined,
-              vertices: cleanBuildingVertices(Array.isArray(building.vertices) ? building.vertices : []),
-              baseZ: typeof building.baseZ === 'number' ? building.baseZ : DEFAULTS.buildingBaseZ,
-              height: Math.max(1, typeof building.height === 'number' ? building.height : DEFAULTS.buildingHeight),
-              color: typeof building.color === 'string' ? building.color : DEFAULTS.buildingColor,
-              material: typeof building.material === 'string' ? building.material : DEFAULTS.buildingMaterial,
-              fillSource: parseImportedBuildingFillSource(building.fillSource),
-            })).filter((building: BuildingPolygon) => building.vertices.length >= 3));
-          } else {
-            setBuildings([]);
-          }
-          setBackgroundImage(sanitizeImportedBackgroundImage(data.backgroundImage ?? data.settings?.backgroundImage));
-          setSelectedEdges([]);
-          setSelectedNode(null);
-          setSelectedPoints([]);
-          setSelectedBuildingId(null);
-          setSelectedBuildingVertex(null);
-          setBuildingDraft([]);
-          setIsAddNodeMode(false);
-          setIsBuildingMode(false);
-          setDragging(null);
-          setIsMergeMode(false);
+        const importedState = parseRoadNetworkState(data);
+        if (importedState) {
+          applyEditorState(importedState, { saveLocal: true });
         } else {
           alert('Invalid file format. Must contain nodes and edges arrays.');
         }
@@ -751,6 +1040,55 @@ export default function App() {
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const localSavePayload = buildLocalSavePayload();
+    localSaveStateRef.current = localSavePayload;
+
+    const timeoutId = window.setTimeout(() => {
+      saveLocalEditorState(localSavePayload);
+    }, LOCAL_SAVE_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    nodes,
+    edges,
+    polygonFills,
+    buildings,
+    deletedFaces,
+    chamferAngle,
+    meshResolution,
+    laneWidth,
+    buildingFillSettings,
+    backgroundImage,
+    view,
+    visibilitySettings,
+    showMesh,
+    is3DMode,
+    softSelectionEnabled,
+    softSelectionRadius,
+    snapToGrid,
+    snapGridSize,
+    debugOptions,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const flushLocalSave = () => {
+      if (localSaveStateRef.current) {
+        saveLocalEditorState(localSaveStateRef.current);
+      }
+    };
+
+    window.addEventListener('beforeunload', flushLocalSave);
+    return () => {
+      flushLocalSave();
+      window.removeEventListener('beforeunload', flushLocalSave);
+    };
+  }, []);
 
   const pointersRef = useRef<Map<number, Point>>(new Map());
   const lastPanMidpointRef = useRef<Point | null>(null);
@@ -2508,6 +2846,7 @@ export default function App() {
       <Header
         isSidebarOpen={isSidebarOpen}
         setIsSidebarOpen={setIsSidebarOpen}
+        handleNewProject={handleNewProject}
         handleImport={handleImport}
         handleExport={handleExport}
         handleExportObj={handleExportObj}
