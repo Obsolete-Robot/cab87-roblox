@@ -1,6 +1,6 @@
 # Cab87 Beat Maker
 
-Blender add-on that analyzes a drum audio stem, detects major bass drum/kick beats, and keyframes camera FOV pulses on those beat frames.
+Blender add-on that analyzes a drum audio stem, detects major bass drum/kick beats, and keyframes camera FOV or single-axis position pulses on those beat frames.
 
 ## Install
 
@@ -18,18 +18,23 @@ The panel appears in `3D Viewport > Sidebar > Cab87 > Beat Maker`.
 3. Click `Choose Drum Stem`.
 4. Pick the target camera, or leave it empty to use the active scene camera.
 5. Set:
+   - `Animate FOV`: keyframe camera FOV pulses.
    - `Default FOV`: the normal camera FOV.
    - `Beat FOV`: the FOV on each detected beat frame.
-   - `Frames To Beat`: how many frames before each beat should key `Default FOV`.
-   - `Settle Frames`: how many frames after each beat should return to `Default FOV`.
-6. Click `Animate Camera FOV`.
+   - `Animate Position`: keyframe one camera location axis with the same beat pulse timing.
+   - `Position Axis`: the camera location axis to move.
+   - `Default Pos`: the normal location value on that axis.
+   - `Beat Pos`: the location value on that axis at each detected beat frame.
+   - `Frames To Beat`: how many frames before each beat should key the default value.
+   - `Settle Frames`: how many frames after each beat should return to the default value.
+6. Click `Animate Beat Camera`.
 
 For every detected major beat, the add-on creates this keyframe shape:
 
 ```text
-beat frame - Frames To Beat: Default FOV
-beat frame:                  Beat FOV
-beat frame + Settle Frames:  Default FOV
+beat frame - Frames To Beat: Default FOV / Default Pos
+beat frame:                  Beat FOV / Beat Pos
+beat frame + Settle Frames:  Default FOV / Default Pos
 ```
 
 ## Audio Formats
@@ -56,4 +61,4 @@ python3 -m py_compile tools/beat-maker/cab87_beat_maker/__init__.py tools/beat-m
 python3 -m unittest discover -s tools/beat-maker/tests
 ```
 
-If Blender is available, install the add-on, choose a short drum stem, and verify that the camera data has `angle` keyframes on the detected beat frames.
+If Blender is available, install the add-on, choose a short drum stem, and verify that the camera data has `angle` keyframes and, when `Animate Position` is enabled, that the camera object has selected-axis `location` keyframes on the detected beat frames.

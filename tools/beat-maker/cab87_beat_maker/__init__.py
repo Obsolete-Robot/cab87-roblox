@@ -1,10 +1,10 @@
 bl_info = {
 	"name": "Cab87 Beat Maker",
 	"author": "Cab87",
-	"version": (0, 1, 0),
+	"version": (0, 2, 1),
 	"blender": (3, 6, 0),
 	"location": "View3D > Sidebar > Cab87 > Beat Maker",
-	"description": "Detect major kick beats from a drum stem and animate camera FOV pulses.",
+	"description": "Detect major kick beats from a drum stem and animate camera beat pulses.",
 	"category": "Animation",
 }
 
@@ -27,6 +27,12 @@ ADDON_VERSION = ".".join(str(part) for part in bl_info["version"])
 AUDIO_FILTER = "*.wav;*.aif;*.aiff;*.aifc;*.mp3;*.flac;*.ogg;*.m4a"
 BEAT_STRIP_PREFIX = "BeatMaker_DrumStem"
 MARKER_PREFIX_DEFAULT = "Kick"
+POSITION_AXIS_ITEMS = (
+	("X", "X", "Animate the camera X location on each beat."),
+	("Y", "Y", "Animate the camera Y location on each beat."),
+	("Z", "Z", "Animate the camera Z location on each beat."),
+)
+POSITION_AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
 
 
 def camera_object_poll(_self, obj: Object) -> bool:
@@ -46,6 +52,11 @@ class CAB87_BeatMakerSettings(PropertyGroup):
 		poll=camera_object_poll,
 	)
 
+	animate_fov: BoolProperty(
+		name="Animate FOV",
+		description="Keyframe camera FOV pulses on detected major beat frames.",
+		default=True,
+	)
 	default_fov: FloatProperty(
 		name="Default FOV",
 		description="Camera FOV before and after each beat pulse.",
@@ -99,9 +110,39 @@ class CAB87_BeatMakerSettings(PropertyGroup):
 		description="Remove existing FOV keyframes from the target camera before adding beat pulses.",
 		default=True,
 	)
+	animate_position: BoolProperty(
+		name="Animate Position",
+		description="Keyframe one camera location axis on detected major beat frames.",
+		default=False,
+	)
+	position_axis: EnumProperty(
+		name="Position Axis",
+		description="Camera location axis to pulse on each detected major beat.",
+		items=POSITION_AXIS_ITEMS,
+		default="Z",
+	)
+	default_position: FloatProperty(
+		name="Default Pos",
+		description="Camera location value on the selected axis before and after each beat pulse.",
+		subtype="DISTANCE",
+		unit="LENGTH",
+		default=0.0,
+	)
+	beat_position: FloatProperty(
+		name="Beat Pos",
+		description="Camera location value on the selected axis at each detected major beat frame.",
+		subtype="DISTANCE",
+		unit="LENGTH",
+		default=0.5,
+	)
+	clear_existing_position: BoolProperty(
+		name="Replace Position Animation",
+		description="Remove existing location keyframes on the selected axis before adding beat pulses.",
+		default=True,
+	)
 	sync_frame_range: BoolProperty(
 		name="Extend Scene End",
-		description="Extend the scene end frame to include the final FOV settle key.",
+		description="Extend the scene end frame to include the final beat settle key.",
 		default=True,
 	)
 
@@ -216,8 +257,8 @@ class CAB87_OT_pick_beat_audio(Operator, ImportHelper):
 
 class CAB87_OT_animate_beat_fov(Operator):
 	bl_idname = "cab87.animate_beat_fov"
-	bl_label = "Animate Camera FOV"
-	bl_description = "Detect major bass drum beats and keyframe the camera FOV pulse on every beat."
+	bl_label = "Animate Beat Camera"
+	bl_description = "Detect major bass drum beats and keyframe enabled camera beat pulses."
 	bl_options = {"REGISTER", "UNDO"}
 
 	def execute(self, context):
@@ -225,30 +266,35 @@ class CAB87_OT_animate_beat_fov(Operator):
 		if not settings.audio_path:
 			self.report({"ERROR"}, "Choose a drum stem first.")
 			return {"CANCELLED"}
+		if not settings.animate_fov and not settings.animate_position:
+			self.report({"ERROR"}, "Enable FOV or Position animation first.")
+			return {"CANCELLED"}
 
 		try:
-			result = build_beat_fov_animation(context, settings)
+			result = build_beat_animation(context, settings)
 		except Exception as error:
 			self.report({"ERROR"}, f"Beat Maker failed: {error}")
 			return {"CANCELLED"}
 
+		channels = ", ".join(result["animated_channels"])
 		self.report(
 			{"INFO"},
-			f"Animated {result['camera_name']} FOV on {result['beat_count']} major beats from {Path(result['audio_path']).name}.",
+			f"Animated {result['camera_name']} {channels} on {result['beat_count']} major beats from {Path(result['audio_path']).name}.",
 		)
 		return {"FINISHED"}
 
 
 class CAB87_OT_clear_beat_fov(Operator):
 	bl_idname = "cab87.clear_beat_fov"
-	bl_label = "Clear Beat FOV"
-	bl_description = "Remove Beat Maker FOV animation, audio strips, and markers from the current scene."
+	bl_label = "Clear Beat Animation"
+	bl_description = "Remove Beat Maker FOV animation, selected-axis position animation, audio strips, and markers from the current scene."
 	bl_options = {"REGISTER", "UNDO"}
 
 	def execute(self, context):
 		settings = context.scene.cab87_beat_maker_settings
 		camera = resolve_camera(context, settings)
 		remove_fov_animation(camera.data)
+		remove_location_axis_animation(camera, get_position_axis_index(settings))
 		if settings.replace_audio_strip:
 			remove_beat_audio_strips(context.scene)
 		if settings.replace_markers:
@@ -277,13 +323,27 @@ class CAB87_PT_beat_maker_panel(Panel):
 
 		box = layout.box()
 		box.label(text="FOV Pulse")
-		box.prop(settings, "default_fov")
-		box.prop(settings, "beat_fov")
+		box.prop(settings, "animate_fov")
+		if settings.animate_fov:
+			box.prop(settings, "default_fov")
+			box.prop(settings, "beat_fov")
+			box.prop(settings, "clear_existing_fov")
+
+		box = layout.box()
+		box.label(text="Position Pulse")
+		box.prop(settings, "animate_position")
+		if settings.animate_position:
+			box.prop(settings, "position_axis")
+			box.prop(settings, "default_position")
+			box.prop(settings, "beat_position")
+			box.prop(settings, "clear_existing_position")
+
+		box = layout.box()
+		box.label(text="Pulse Timing")
 		box.prop(settings, "frames_to_beat")
 		box.prop(settings, "settle_frames")
 		box.prop(settings, "start_frame")
 		box.prop(settings, "interpolation")
-		box.prop(settings, "clear_existing_fov")
 		box.prop(settings, "sync_frame_range")
 
 		box = layout.box()
@@ -315,7 +375,7 @@ class CAB87_PT_beat_maker_panel(Panel):
 			box.prop(settings, "ffmpeg_path")
 
 
-def build_beat_fov_animation(context, settings: CAB87_BeatMakerSettings) -> dict[str, object]:
+def build_beat_animation(context, settings: CAB87_BeatMakerSettings) -> dict[str, object]:
 	audio_path = bpy.path.abspath(settings.audio_path)
 	if not Path(audio_path).is_file():
 		raise FileNotFoundError(audio_path)
@@ -346,9 +406,20 @@ def build_beat_fov_animation(context, settings: CAB87_BeatMakerSettings) -> dict
 		raise RuntimeError("No major bass drum beats were detected. Try lowering Sensitivity or Major Beat Percentile.")
 
 	beat_frames = [seconds_to_frame(context.scene, settings.start_frame, hit.time_seconds) for hit in hits]
-	if settings.clear_existing_fov:
+	animated_channels: list[str] = []
+
+	if settings.animate_fov and settings.clear_existing_fov:
 		remove_fov_animation(camera.data)
-	animate_camera_fov(camera.data, beat_frames, settings)
+	if settings.animate_fov:
+		animate_camera_fov(camera.data, beat_frames, settings)
+		animated_channels.append("FOV")
+
+	if settings.animate_position:
+		position_axis_index = get_position_axis_index(settings)
+		if settings.clear_existing_position:
+			remove_location_axis_animation(camera, position_axis_index)
+		animate_camera_position_axis(camera, beat_frames, settings, position_axis_index)
+		animated_channels.append(f"{settings.position_axis} position")
 
 	if settings.create_markers:
 		if settings.replace_markers:
@@ -375,7 +446,12 @@ def build_beat_fov_animation(context, settings: CAB87_BeatMakerSettings) -> dict
 		"beat_count": len(beat_frames),
 		"first_frame": min(beat_frames),
 		"last_frame": last_frame,
+		"animated_channels": animated_channels,
 	}
+
+
+def build_beat_fov_animation(context, settings: CAB87_BeatMakerSettings) -> dict[str, object]:
+	return build_beat_animation(context, settings)
 
 
 def prepare_analysis_audio(audio_path: str, settings: CAB87_BeatMakerSettings) -> tuple[str, str | None]:
@@ -439,6 +515,37 @@ def animate_camera_fov(camera_data, beat_frames: list[int], settings: CAB87_Beat
 		camera_data.angle = default_fov
 
 
+def animate_camera_position_axis(
+	camera: Object,
+	beat_frames: list[int],
+	settings: CAB87_BeatMakerSettings,
+	axis_index: int,
+) -> None:
+	default_position = settings.default_position
+	beat_position = settings.beat_position
+	start_frame = settings.start_frame
+	keyframes: dict[int, tuple[int, float]] = {}
+
+	def set_key(frame: int, value: float, priority: int) -> None:
+		frame = max(start_frame, int(frame))
+		existing = keyframes.get(frame)
+		if existing is None or priority >= existing[0]:
+			keyframes[frame] = (priority, value)
+
+	for beat_frame in beat_frames:
+		set_key(beat_frame - settings.frames_to_beat, default_position, 0)
+		set_key(beat_frame, beat_position, 2)
+		set_key(beat_frame + settings.settle_frames, default_position, 1)
+
+	for frame in sorted(keyframes):
+		camera.location[axis_index] = keyframes[frame][1]
+		camera.keyframe_insert(data_path="location", frame=frame, index=axis_index)
+
+	set_fcurve_interpolation(camera, "location", settings.interpolation, axis_index)
+	if beat_frames:
+		camera.location[axis_index] = default_position
+
+
 def resolve_camera(context, settings: CAB87_BeatMakerSettings):
 	if settings.camera_object is not None and settings.camera_object.type == "CAMERA":
 		return settings.camera_object
@@ -461,11 +568,26 @@ def remove_fov_animation(camera_data) -> None:
 			action.fcurves.remove(fcurve)
 
 
-def set_fcurve_interpolation(owner, data_path: str, interpolation: str) -> None:
+def remove_location_axis_animation(camera: Object, axis_index: int) -> None:
+	if camera.animation_data is None or camera.animation_data.action is None:
+		return
+	action = camera.animation_data.action
+	for fcurve in list(action.fcurves):
+		if fcurve.data_path == "location" and fcurve.array_index == axis_index:
+			action.fcurves.remove(fcurve)
+
+
+def get_position_axis_index(settings: CAB87_BeatMakerSettings) -> int:
+	return POSITION_AXIS_INDEX.get(settings.position_axis, 2)
+
+
+def set_fcurve_interpolation(owner, data_path: str, interpolation: str, array_index: int | None = None) -> None:
 	if owner.animation_data is None or owner.animation_data.action is None:
 		return
 	for fcurve in owner.animation_data.action.fcurves:
 		if fcurve.data_path != data_path:
+			continue
+		if array_index is not None and fcurve.array_index != array_index:
 			continue
 		for keyframe in fcurve.keyframe_points:
 			try:
